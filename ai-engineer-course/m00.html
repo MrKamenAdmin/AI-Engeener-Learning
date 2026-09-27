@@ -1,0 +1,852 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>0 · Что Go-разработчик уже умеет</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  .map-node { cursor: pointer; }
+  .map-node:focus { outline: none; }
+  .map-node:focus-visible rect { stroke: var(--accent); stroke-width: 2.5; }
+  .cb-btns { display: flex; flex-wrap: wrap; gap: 8px; }
+  .skill-grid td:first-child { white-space: nowrap; }
+</style>
+</head>
+<body data-module="m00">
+<main class="content">
+  <div class="module-hero">
+    <div class="eyebrow">Модуль 0 · вводный</div>
+    <h1>Что Go-разработчик уже умеет и как это переносится</h1>
+    <p class="lead">Процентов шестьдесят работы прикладного AI engineer — это обычный бэкенд: конкурентность, ретраи, лимиты, наблюдаемость, хранилища, тесты. Разберём, что из вашего Go-опыта переносится один в один, что меняет смысл (тесты превращаются в evals, логи — в учёт токенов) и что придётся учить с нуля.</p>
+    <div class="meta-row"><span class="chip">≈ 4 часа</span><span class="chip">Go + немного Python</span><span class="chip">3 визуализации</span><span class="chip">актуально на сентябрь 2026</span></div>
+  </div>
+
+  <h2 id="diff">Чем AI engineering отличается от бэкенда</h2>
+  <p>Прикладной AI engineer строит продукты поверх готовых LLM (large language model — большая языковая модель, которую вызывают по API). Модель вы не обучаете. Вы проектируете систему вокруг неё: как собрать контекст, как вызвать модель, как проверить ответ, как это масштабировать и во сколько это обойдётся. Инфраструктурная часть знакома. Новое — четыре свойства «зависимости», которой в обычном бэкенде не бывает.</p>
+
+  <div class="grid">
+    <div class="card"><h4>1. Вероятностный вывод</h4><p>Один и тот же запрос даёт разные ответы. «Правильно» бывает не бинарным: ответ может быть частично верным, верным по сути, но в неверном формате, или верным, но слишком длинным. Уверенный неправильный ответ (галлюцинация) выглядит так же, как правильный.</p></div>
+    <div class="card"><h4>2. Стоимость за токен</h4><p>Token — единица текста для модели, в среднем 3–4 символа английского текста; русский обычно дороже на символ. Вы платите за каждый входной и выходной токен, и выход в 5 раз дороже входа. Стоимость — функция промпта и поведения модели, а не только числа запросов.</p></div>
+    <div class="card"><h4>3. Латентность в секундах</h4><p>Не 20 мс, а 1–60 секунд. TTFT (time to first token, время до первого токена) обычно порядка сотен миллисекунд — пары секунд, дальше модель генерирует десятки–сотни токенов в секунду. Поэтому стриминг — не опция, а UX-требование.</p></div>
+    <div class="card"><h4>4. Качество — метрика</h4><p>Нельзя написать <code>assert resp == expected</code>. Качество измеряется на наборе примеров (eval set) как доля успешных ответов с доверительным интервалом и сравнивается между версиями промпта или модели.</p></div>
+  </div>
+
+  <p>Отсюда главное отличие в мышлении. В обычном сервисе ошибка — исключение, и вы её ловите. В LLM-системе «ошибка» — это часть распределения: при 95% качества каждый двадцатый ответ плохой по определению. Архитектура должна это переживать: валидировать выход, давать пользователю поправить, откатываться на человека, мерить долю плохих ответов в проде.</p>
+
+  <table>
+    <tr><th>Измерение</th><th>Обычный бэкенд</th><th>LLM-система</th></tr>
+    <tr><td>Детерминизм</td><td>Один вход → один выход</td><td>Один вход → распределение выходов</td></tr>
+    <tr><td>Латентность p50</td><td>1–50 мс</td><td>1–20 с (с reasoning — до минут)</td></tr>
+    <tr><td>Стоимость запроса</td><td>Доли цента на CPU</td><td>От 0.01 до 1 $ и выше, сильно зависит от длины контекста</td></tr>
+    <tr><td>Ошибки</td><td>Исключения, коды</td><td>Коды (429, 529, 5xx) плюс «тихо плохой ответ» с 200 OK</td></tr>
+    <tr><td>Тестирование</td><td>Unit/integration, assert</td><td>Evals: набор примеров, метрики, статистика</td></tr>
+    <tr><td>Изменение поведения</td><td>Деплой кода</td><td>Правка промпта, смена модели, обновление модели провайдером</td></tr>
+    <tr><td>Узкое место</td><td>CPU, БД, сеть</td><td>Rate limit провайдера (запросы и токены в минуту), бюджет</td></tr>
+  </table>
+
+  <div class="callout tip"><span class="title">Цифры, чтобы почувствовать масштаб (на момент написания, сентябрь 2026)</span>
+    <p>Сервис делает 1 млн запросов в день, в каждом 2 000 входных и 500 выходных токенов. На Claude Opus 5 ($5 / $25 за 1M токенов): вход 2·10⁹ × 5 / 10⁶ = $10 000, выход 5·10⁸ × 25 / 10⁶ = $12 500, итого ≈ <b>$22 500 в день</b>. На Claude Haiku 4.5 ($1 / $5) — ≈ $4 500. Если 1 500 из 2 000 входных токенов — стабильный префикс и он попадает в prompt cache (чтение ≈ 0.1× цены входа), входная часть на Opus падает с $10 000 до ≈ $4 000. Выбор модели и кэширование — это решения на сотни тысяч долларов в год, и принимает их инженер, а не финансист.</p>
+  </div>
+
+  <h2 id="map">Карта переноса навыков</h2>
+  <p>Ниже — сопоставление того, что вы уже делаете в Go-сервисах, с практиками AI engineering. Кликните на навык слева, чтобы увидеть, во что он превращается, или на практику справа, чтобы увидеть, из чего она растёт. Связи «многие ко многим»: например, <code>context</code> участвует и в параллельных вызовах, и в стриминге.</p>
+
+  <div class="viz" id="viz-map">
+    <p class="viz-title">Навык Go → практика AI engineering</p>
+    <p class="viz-sub">Клик или Enter по узлу. Цвет связи: зелёный — переносится почти без изменений, жёлтый — идея та же, смысл меняется, красный — только каркас, содержание новое.</p>
+    <svg id="map-svg" viewBox="0 0 560 490" role="img" aria-label="Карта соответствий навыков Go и практик AI engineering"></svg>
+    <div class="legend"><span><i style="background:var(--ok)"></i>переносится</span><span><i style="background:var(--warn)"></i>меняет смысл</span><span><i style="background:var(--bad)"></i>учить заново</span></div>
+    <div class="readout" id="map-readout">Выберите узел.</div>
+  </div>
+
+  <h2 id="concurrency">Конкурентность → параллельные вызовы</h2>
+  <p>Самый прямой перенос. LLM-вызов — это I/O на секунды, CPU почти не занят. Горутины идеальны: 200 одновременных вызовов стоят несколько мегабайт памяти. Типичные задачи:</p>
+  <ul>
+    <li><b>Fan-out/fan-in.</b> Суммаризировать 500 документов, классифицировать 10 000 тикетов, прогнать eval-набор. Каждый элемент независим, результат собирается в срез по индексу.</li>
+    <li><b>Parallelization-паттерн из статьи Anthropic «Building effective agents».</b> Sectioning: разные аспекты одной задачи (проверка на безопасность и основной ответ) параллельно. Voting: один и тот же вопрос N раз, берём большинство — дешёвый способ поднять надёжность классификации.</li>
+    <li><b>Параллельные tool calls.</b> Модель может вернуть несколько блоков <code>tool_use</code> в одном ответе. Их выполняют конкурентно и возвращают все <code>tool_result</code> одним user-сообщением.</li>
+    <li><b>Hedging.</b> Если запрос не ответил за p95, запустить второй и взять тот, что придёт первым. Работает против тяжёлых хвостов латентности, но удваивает стоимость хвоста.</li>
+  </ul>
+
+  <p>Что меняется по сравнению с обычным fan-out на HTTP-сервисы:</p>
+  <ul>
+    <li><b>Лимит конкурентности задаёт не ваш CPU, а rate limit провайдера.</b> У Anthropic три лимита на организацию и модель: RPM (запросы в минуту), ITPM (входные токены в минуту) и OTPM (выходные токены в минуту). Выбить ITPM проще, чем RPM: 50 параллельных запросов по 30K токенов контекста — это 1.5M входных токенов за несколько секунд.</li>
+    <li><b>Длинные хвосты латентности.</b> Время ответа пропорционально длине вывода, а длину вывода вы контролируете лишь частично. При fan-out из N вызовов общее время определяет самый медленный — классический «tail at scale».</li>
+    <li><b>Частичный успех часто лучше полного провала.</b> errgroup по умолчанию отменяет всё при первой ошибке. Для батча из 500 документов это неправильно: лучше собрать 497 результатов и 3 ошибки, чем потерять уже оплаченные 497 ответов.</li>
+  </ul>
+
+  <div class="viz" id="viz-fanout">
+    <p class="viz-title">Fan-out: последовательно vs параллельно с лимитом</p>
+    <p class="viz-sub">Длительности вызовов случайны (логнормальное распределение вокруг средней латентности, фиксированный seed). Двигайте N, латентность, разброс и лимит конкурентности K, затем нажмите «Запустить».</p>
+    <div class="controls">
+      <label>N вызовов <input type="range" id="fo-n" min="1" max="30" step="1" value="12"> <output></output></label>
+      <label>средняя латентность <input type="range" id="fo-lat" min="0.5" max="10" step="0.5" value="4"> <output></output></label>
+      <label>разброс <input type="range" id="fo-sd" min="0" max="1" step="0.05" value="0.5"> <output></output></label>
+      <label>лимит K <input type="range" id="fo-k" min="1" max="30" step="1" value="4"> <output></output></label>
+      <button class="btn primary" id="fo-run" type="button">▶ Запустить</button>
+    </div>
+    <svg id="fo-svg" viewBox="0 0 640 330" role="img" aria-label="Таймлайн последовательных и параллельных вызовов"></svg>
+    <div class="readout" id="fo-readout"></div>
+  </div>
+
+  <p>Что видно на модели. При K ≥ N общее время равно максимальной длительности, а не сумме: 12 вызовов по 4 с укладываются примерно в 6–8 с вместо ~48. Увеличение разброса бьёт именно по параллельному варианту: он ждёт самый медленный вызов. При K &lt; N время примерно ⌈N/K⌉ × средняя латентность, и выгода от K растёт почти линейно до упора в rate limit провайдера. В проде K подбирают так, чтобы <code>K × (токены на запрос) × (запросов в минуту на один слот)</code> укладывалось в ITPM с запасом.</p>
+
+  <h3>Код: errgroup + semaphore + context</h3>
+  <p>Классическая схема: общий дедлайн на операцию, отдельный таймаут на вызов, ограничение одновременных вызовов, запись результата по индексу (без мьютекса, каждая горутина пишет в свой элемент).</p>
+
+  <div class="tabs">
+    <div class="tab-panel" data-tab="Go"><pre><code class="lang-go">package fanout
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/anthropics/anthropic-sdk-go"
+	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/semaphore"
+)
+
+type Result struct {
+	Text          string
+	InputTokens   int64
+	OutputTokens  int64
+}
+
+// Summarize делает len(docs) вызовов, не более maxInFlight одновременно.
+// Fail-fast: первая ошибка отменяет остальные вызовы через ctx.
+func Summarize(ctx context.Context, client *anthropic.Client, docs []string, maxInFlight int64) ([]Result, error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute) // бюджет на всю операцию
+	defer cancel()
+
+	sem := semaphore.NewWeighted(maxInFlight)
+	g, ctx := errgroup.WithContext(ctx)
+	results := make([]Result, len(docs)) // каждая горутина пишет только в свой индекс
+	var acquireErr error
+
+	for i, doc := range docs {
+		// Acquire блокирует цикл, а не плодит тысячи ждущих горутин.
+		if err := sem.Acquire(ctx, 1); err != nil {
+			acquireErr = err // ctx отменён: таймаут или чья-то ошибка
+			break
+		}
+		g.Go(func() error {
+			defer sem.Release(1)
+			callCtx, cancel := context.WithTimeout(ctx, 45*time.Second) // таймаут одного вызова
+			defer cancel()
+
+			resp, err := client.Messages.New(callCtx, anthropic.MessageNewParams{
+				Model:     "claude-opus-5",
+				MaxTokens: 1024,
+				Messages: []anthropic.MessageParam{
+					anthropic.NewUserMessage(anthropic.NewTextBlock("Суммаризируй в 3 пунктах:\n\n" + doc)),
+				},
+			})
+			if err != nil {
+				return fmt.Errorf("doc %d: %w", i, err)
+			}
+			var text string
+			for _, b := range resp.Content {
+				if t, ok := b.AsAny().(anthropic.TextBlock); ok {
+					text += t.Text
+				}
+			}
+			results[i] = Result{Text: text, InputTokens: resp.Usage.InputTokens, OutputTokens: resp.Usage.OutputTokens}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	if acquireErr != nil {
+		return nil, fmt.Errorf("fan-out aborted: %w", acquireErr)
+	}
+	return results, nil
+}
+</code></pre></div>
+    <div class="tab-panel" data-tab="Python"><pre><code class="lang-python">import asyncio
+import anthropic
+
+client = anthropic.AsyncAnthropic()  # ключ из ANTHROPIC_API_KEY
+
+async def summarize(docs: list[str], max_in_flight: int = 8) -&gt; list[str]:
+    sem = asyncio.Semaphore(max_in_flight)
+    results: list[str] = [""] * len(docs)
+
+    async def one(i: int, doc: str) -&gt; None:
+        async with sem:  # аналог sem.Acquire/Release
+            async with asyncio.timeout(45):  # таймаут одного вызова
+                resp = await client.messages.create(
+                    model="claude-opus-5",
+                    max_tokens=1024,
+                    messages=[{"role": "user", "content": f"Суммаризируй в 3 пунктах:\n\n{doc}"}],
+                )
+        results[i] = "".join(b.text for b in resp.content if b.type == "text")
+
+    # TaskGroup ≈ errgroup.WithContext: первая ошибка отменяет остальные задачи
+    async with asyncio.timeout(120):
+        async with asyncio.TaskGroup() as tg:
+            for i, d in enumerate(docs):
+                tg.create_task(one(i, d))
+    return results
+</code></pre></div>
+  </div>
+
+  <div class="callout go"><span class="title">Нюансы, которые спросят на ревью</span>
+    <ul>
+      <li>Если лимит только по числу вызовов, проще <code>g.SetLimit(n)</code> у errgroup: <code>g.Go</code> сам заблокируется. Weighted-семафор нужен, когда вес вызова разный — например, резервировать «слоты» пропорционально ожидаемым токенам.</li>
+      <li>Fail-fast подходит для ответа пользователю (без одной части ответ бессмысленен). Для батчей и evals нужна семантика «собрать всё»: горутина возвращает <code>nil</code>, а ошибку кладёт в <code>results[i].Err</code>.</li>
+      <li>Внешний таймаут в 2 минуты при 500 документах и K=8 гарантированно сработает. Бюджет считают как ⌈N/K⌉ × p95 латентности или уходят в Batch API (−50% к цене, асинхронно, до 24 ч).</li>
+      <li>SDK Anthropic по умолчанию сам ретраит 2 раза (408/409/429/5xx). Если сверху свой ретрай — либо отключите встроенный (<code>option.WithMaxRetries(0)</code>), либо помните, что попыток будет перемножено.</li>
+    </ul>
+  </div>
+
+  <h2 id="streaming">Стриминг и отмена через context</h2>
+  <p>Ответ в 800 токенов генерируется 10–20 секунд. Без стриминга пользователь смотрит на спиннер всё это время, со стримингом видит первые слова через TTFT. Провайдеры отдают поток через SSE (Server-Sent Events: HTTP-ответ <code>text/event-stream</code>, события вида <code>event: …\ndata: {json}\n\n</code>). У Anthropic последовательность такая: <code>message_start</code> → для каждого блока <code>content_block_start</code>, серия <code>content_block_delta</code> (<code>text_delta</code>, <code>input_json_delta</code> для аргументов инструментов, <code>thinking_delta</code>), <code>content_block_stop</code> → <code>message_delta</code> (stop_reason и итоговый usage) → <code>message_stop</code>. Между ними бывают <code>ping</code>, а посреди стрима может прийти <code>error</code> (например, <code>overloaded_error</code>) — уже после 200 OK.</p>
+
+  <p>Для Go-разработчика тут всё знакомо: <code>bufio.Scanner</code> по телу ответа, канал событий наружу, <code>http.Flusher</code> на своей стороне, чтобы проксировать поток в браузер. Ключевая вещь — <b>отмена</b>. Пользователь закрыл вкладку → <code>r.Context()</code> вашего хендлера отменён → вы должны закрыть исходящий запрос к провайдеру, иначе модель продолжит генерировать токены, за которые вы заплатите. Если передавать <code>r.Context()</code> в SDK, это происходит само.</p>
+
+  <pre><code class="lang-go">// Проксирование стрима в браузер и замер TTFT. ctx = r.Context() хендлера:
+// клиент ушёл → ctx отменён → SDK закрывает соединение с провайдером.
+func streamAnswer(ctx context.Context, w http.ResponseWriter, client *anthropic.Client, q string) error {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		return errors.New("streaming unsupported")
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+
+	start := time.Now()
+	var ttft time.Duration
+	stream := client.Messages.NewStreaming(ctx, anthropic.MessageNewParams{
+		Model:     "claude-opus-5",
+		MaxTokens: 2048,
+		Messages:  []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(q))},
+	})
+	msg := anthropic.Message{}
+	for stream.Next() {
+		ev := stream.Current()
+		if err := msg.Accumulate(ev); err != nil {
+			return err
+		}
+		if d, ok := ev.AsAny().(anthropic.ContentBlockDeltaEvent); ok {
+			if t, ok := d.Delta.AsAny().(anthropic.TextDelta); ok {
+				if ttft == 0 {
+					ttft = time.Since(start)
+				}
+				b, _ := json.Marshal(t.Text)
+				fmt.Fprintf(w, "data: %s\n\n", b)
+				flusher.Flush()
+			}
+		}
+	}
+	if err := stream.Err(); err != nil {
+		return err // включая ошибку, пришедшую посреди стрима
+	}
+	slog.InfoContext(ctx, "llm_call", "ttft_ms", ttft.Milliseconds(),
+		"total_ms", time.Since(start).Milliseconds(),
+		"in", msg.Usage.InputTokens, "out", msg.Usage.OutputTokens, "stop", msg.StopReason)
+	return nil
+}</code></pre>
+
+  <div class="callout warn"><span class="title">Режимы отказа стриминга</span>
+    <ul>
+      <li><b>Ретрай после частичного ответа.</b> Пользователь уже видел половину текста. Перезапуск даст другой текст. Варианты: показать ошибку и кнопку «повторить», либо продолжить генерацию, передав уже полученный текст в контекст (дороже, и шов бывает заметен).</li>
+      <li><b>Буферизующие прокси.</b> Nginx, некоторые ingress и CDN буферизуют ответ, и стрим приходит одним куском. Лечится <code>X-Accel-Buffering: no</code> и настройкой прокси.</li>
+      <li><b>Idle timeout балансировщика.</b> Длинный reasoning может молчать десятки секунд (провайдер шлёт <code>ping</code>, но ваш прокси между сервисом и браузером — нет). Шлите свои keep-alive комментарии <code>: ping\n\n</code>.</li>
+      <li><b>stop_reason: max_tokens.</b> Ответ обрезан. Для JSON это невалидный документ. Логируйте stop_reason всегда.</li>
+    </ul>
+  </div>
+
+  <h2 id="reliability">Ретраи и rate limit</h2>
+  <p>Вызов LLM API падает заметно чаще, чем ваш внутренний сервис. Что ретраить, а что нет:</p>
+  <table>
+    <tr><th>Код</th><th>Что значит</th><th>Что делать</th></tr>
+    <tr><td>400</td><td>Невалидный запрос: лишний параметр, слишком длинный контекст, неподдерживаемое поле для модели</td><td>Не ретраить. Это баг или неучтённая длина входа</td></tr>
+    <tr><td>401 / 403</td><td>Ключ, права</td><td>Не ретраить, алертить</td></tr>
+    <tr><td>408, 409</td><td>Таймаут, конфликт</td><td>Ретрай с backoff</td></tr>
+    <tr><td>429</td><td>Rate limit (RPM, ITPM или OTPM)</td><td>Ретрай, уважая заголовок <code>retry-after</code>; снизить конкурентность</td></tr>
+    <tr><td>500, 502, 503, 504</td><td>Ошибка провайдера</td><td>Ретрай с backoff, при серии — circuit breaker и fallback</td></tr>
+    <tr><td>529</td><td>Anthropic: <code>overloaded_error</code>, перегрузка на стороне API</td><td>Ретрай с backoff; при длительной — fallback на другую модель или регион</td></tr>
+  </table>
+
+  <p>Ретрай в LLM-мире дороже, чем кажется. Если запрос упал на середине стрима, вы уже заплатили за выданные токены. Если ретраите запрос со 100K токенов контекста, каждая попытка — это 100K входных токенов в ITPM. Агрессивные ретраи при 429 сами поддерживают перегрузку: это retry storm. Поэтому backoff экспоненциальный и обязательно с jitter — случайной добавкой, которая «размазывает» повторы клиентов во времени.</p>
+
+  <h3>Код: ретрай с экспоненциальным backoff + jitter</h3>
+  <p>Вариант «full jitter» из классической статьи AWS: пауза равномерно случайна в интервале (0, min(cap, base·2<sup>attempt</sup>)]. Если провайдер прислал <code>retry-after</code>, ждём не меньше него.</p>
+
+  <pre><code class="lang-go">package retry
+
+import (
+	"context"
+	"errors"
+	"math/rand/v2"
+	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/anthropics/anthropic-sdk-go"
+)
+
+// Do вызывает fn до attempts раз. Встроенные ретраи SDK стоит отключить:
+// anthropic.NewClient(option.WithMaxRetries(0)), иначе попытки перемножатся.
+func Do[T any](ctx context.Context, attempts int, base, maxDelay time.Duration, fn func(context.Context) (T, error)) (T, error) {
+	var zero T
+	var err error
+	for a := 0; a &lt; attempts; a++ {
+		var v T
+		if v, err = fn(ctx); err == nil {
+			return v, nil
+		}
+		retryable, retryAfter := classify(err)
+		if !retryable || a == attempts-1 {
+			break
+		}
+		delay := fullJitter(a, base, maxDelay)
+		if retryAfter &gt; delay {
+			delay = retryAfter // сервер знает лучше, когда освободится лимит
+		}
+		t := time.NewTimer(delay)
+		select {
+		case &lt;-ctx.Done():
+			t.Stop()
+			return zero, errors.Join(err, ctx.Err())
+		case &lt;-t.C:
+		}
+	}
+	return zero, err
+}
+
+func fullJitter(attempt int, base, maxDelay time.Duration) time.Duration {
+	d := base &lt;&lt; attempt
+	if d &lt;= 0 || d &gt; maxDelay { // &lt;= 0 — защита от переполнения сдвига
+		d = maxDelay
+	}
+	return time.Duration(rand.Int64N(int64(d))) + time.Millisecond
+}
+
+func classify(err error) (retryable bool, retryAfter time.Duration) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false, 0 // вызывающий сдался — не спорим с ним
+	}
+	var apierr *anthropic.Error
+	if !errors.As(err, &amp;apierr) {
+		return true, 0 // сетевая ошибка: соединение сброшено, DNS и т.п.
+	}
+	switch apierr.StatusCode {
+	case http.StatusRequestTimeout, http.StatusConflict, http.StatusTooManyRequests,
+		500, 502, 503, 504, 529:
+		return true, parseRetryAfter(apierr.Response)
+	}
+	return false, 0 // 400/401/403/404/413 — повтор не поможет
+}
+
+func parseRetryAfter(resp *http.Response) time.Duration {
+	if resp == nil {
+		return 0
+	}
+	if s, err := strconv.Atoi(resp.Header.Get("retry-after")); err == nil &amp;&amp; s &gt; 0 {
+		return time.Duration(s) * time.Second
+	}
+	return 0
+}</code></pre>
+
+  <h3>Rate limit на своей стороне: token bucket</h3>
+  <p>Ждать 429 от провайдера — реактивная стратегия. Проактивная — не превышать лимит самому. Token bucket (ведро токенов) — то, что вы знаете по <code>golang.org/x/time/rate</code>: ведро ёмкостью <i>burst</i> пополняется со скоростью <i>r</i> в секунду, каждый запрос забирает из него «жетоны». Новое здесь одно: <b>жетоны — это LLM-токены</b>, а не запросы. Лимитер на запросы защищает RPM, но не ITPM; один запрос с 150K контекста съест лимит, как сотня маленьких.</p>
+
+  <pre><code class="lang-go">// Два ведра: на запросы и на входные токены. Значения — из вашего tier'а в консоли провайдера.
+reqLim := rate.NewLimiter(rate.Limit(4000.0/60), 50)           // 4000 RPM
+tokLim := rate.NewLimiter(rate.Limit(2_000_000.0/60), 200_000) // 2M ITPM, burst 200K
+
+func acquire(ctx context.Context, estInputTokens int) error {
+	if err := reqLim.Wait(ctx); err != nil {
+		return err
+	}
+	// WaitN вернёт ошибку, если n &gt; burst: огромный запрос надо резать или слать в Batch API.
+	return tokLim.WaitN(ctx, estInputTokens)
+}</code></pre>
+
+  <div class="callout go"><span class="title">Где это живёт в архитектуре</span>
+    <p>В одном процессе <code>x/time/rate</code> достаточно. Когда реплик 20, лимит провайдера общий, а лимитеры локальные — вы превысите его в 20 раз. Решения: распределённый лимитер в Redis (скрипт на Lua, sliding window или GCRA), либо отдельный <b>LLM-gateway</b> — единая точка выхода к провайдерам с лимитами, ретраями, кэшем, учётом стоимости по командам и fallback. Это один из стандартных вопросов на AI system design (см. модуль 10). Оценку входных токенов до вызова берут из эндпоинта подсчёта токенов провайдера или грубо: символы / 3.5 с запасом.</p>
+  </div>
+
+  <h2 id="breaker">Circuit breaker и fallback</h2>
+  <p>Circuit breaker — тот же паттерн, что вы ставите перед нестабильным сервисом (<code>sony/gobreaker</code> и аналоги). В LLM-мире у него две задачи: не долбить перегруженного провайдера (529 сериями по несколько минут — реальность) и быстро переключиться на fallback. Fallback-цепочка типична: основная модель → более дешёвая модель того же провайдера → другой провайдер → деградированный ответ («сервис перегружен, попробуйте позже» или ответ без LLM).</p>
+
+  <div class="viz" id="viz-cb">
+    <p class="viz-title">Состояния circuit breaker</p>
+    <p class="viz-sub">Отправляйте «запросы» кнопками. В состоянии open запросы отклоняются сразу, не доходя до провайдера. Через cooldown (здесь 5 с) breaker переходит в half-open и пропускает один пробный запрос.</p>
+    <div class="controls">
+      <div class="cb-btns">
+        <button class="btn" id="cb-fail" type="button" style="border-color:var(--bad)">Запрос → ошибка (529)</button>
+        <button class="btn" id="cb-ok" type="button" style="border-color:var(--ok)">Запрос → успех</button>
+        <button class="btn" id="cb-reset" type="button">Сброс</button>
+      </div>
+      <label>порог ошибок <input type="range" id="cb-th" min="1" max="6" step="1" value="3"> <output></output></label>
+    </div>
+    <svg id="cb-svg" viewBox="0 0 640 270" role="img" aria-label="Диаграмма состояний circuit breaker"></svg>
+    <div class="readout" id="cb-log"></div>
+  </div>
+
+  <p>Настройки, которые в LLM-контексте отличаются от привычных:</p>
+  <ul>
+    <li><b>Считать нужно правильные ошибки.</b> 400 из-за вашего бага не должна открывать breaker. 429 — спорно: это не отказ провайдера, а ваш лимит; правильнее снизить конкурентность, а не отрубать всё. Открывать стоит на 5xx/529 и таймауты.</li>
+    <li><b>Порог по доле, а не подряд.</b> При 200 RPS «5 ошибок подряд» случается от шума. Используйте долю ошибок в скользящем окне с минимальным числом запросов.</li>
+    <li><b>Таймаут вызова</b> — важный сигнал. Если p99 обычно 20 с, а сейчас запросы висят по 90 с, провайдер деградирует, хоть и отвечает 200.</li>
+    <li><b>Отдельный breaker на модель и регион.</b> Перегрузка одной модели не значит, что недоступна другая.</li>
+    <li><b>Fallback меняет качество.</b> Промпт, отлаженный под одну модель, на другой может дать другой формат. Fallback-модель должна проходить те же evals, иначе вы узнаете о проблеме в момент инцидента.</li>
+  </ul>
+
+  <h2 id="observability">Observability → токены, стоимость, TTFT</h2>
+  <p>Логи, метрики, трейсы остаются. Меняется набор сигналов. Классический RED (rate, errors, duration) нужен, но недостаточен: запрос может вернуть 200 за 3 секунды и быть бесполезным. Минимальный набор атрибутов на каждый LLM-вызов:</p>
+  <table>
+    <tr><th>Сигнал</th><th>Зачем</th><th>Откуда</th></tr>
+    <tr><td>model, версия промпта</td><td>Сравнение качества и стоимости до/после изменений</td><td>Ваш код; версию промпта храните как хеш или тег</td></tr>
+    <tr><td>input / output tokens</td><td>Стоимость, прогноз упора в ITPM/OTPM</td><td><code>usage</code> в ответе</td></tr>
+    <tr><td>cache read / write tokens</td><td>Работает ли prompt caching; одна правка system prompt может обнулить hit rate</td><td><code>usage.cache_read_input_tokens</code>, <code>cache_creation_input_tokens</code></td></tr>
+    <tr><td>cost, $</td><td>Бюджеты по фичам и клиентам, аномалии</td><td>Вычисляется из токенов и прайса</td></tr>
+    <tr><td>TTFT, total latency, output tokens/s</td><td>UX стриминга; TTFT растёт с длиной контекста</td><td>Замер в клиенте</td></tr>
+    <tr><td>stop_reason</td><td><code>max_tokens</code> = обрезанный ответ, <code>refusal</code> = отказ модели</td><td>Ответ / <code>message_delta</code></td></tr>
+    <tr><td>число итераций, tool calls</td><td>Агенты: зацикливание, взрыв стоимости</td><td>Ваш агентный цикл</td></tr>
+    <tr><td>оценка качества</td><td>Онлайн-evals, фидбек пользователя (лайк/дизлайк), доля ответов, прошедших валидацию</td><td>Отдельный пайплайн</td></tr>
+  </table>
+  <p>Для трейсов есть стандарт: OpenTelemetry GenAI semantic conventions — атрибуты <code>gen_ai.request.model</code>, <code>gen_ai.usage.input_tokens</code>, <code>gen_ai.usage.output_tokens</code>, <code>gen_ai.response.finish_reasons</code> и т.д. В агентах трейс особенно ценен: span на каждый шаг модели и каждый tool call показывает, где ушли 40 секунд и 200K токенов.</p>
+
+  <div class="callout warn"><span class="title">Что ломается</span>
+    <ul>
+      <li><b>Логирование промптов и ответов целиком.</b> Это ПДн пользователей, секреты из документов, мегабайты на запрос. Нужны политики: семплирование, редактирование, отдельное хранилище с ограниченным доступом и TTL.</li>
+      <li><b>Средняя стоимость врёт.</b> Распределение с тяжёлым хвостом: 1% агентных сессий может давать 30% счёта. Смотрите p99 стоимости на сессию и алертите на аномалии.</li>
+      <li><b>Высокая кардинальность.</b> user_id и prompt_hash в лейблах Prometheus убьют его так же, как в любом другом сервисе. Детализация — в трейсы и логи, в метрики — агрегаты.</li>
+    </ul>
+  </div>
+
+  <h2 id="storage">БД, очереди, кэши → векторные БД и семантический кэш</h2>
+  <p>Ваш опыт с PostgreSQL, индексами и Redis напрямую нужен в RAG (retrieval-augmented generation — поиск релевантных документов и подстановка их в контекст модели). Новые сущности:</p>
+  <ul>
+    <li><b>Embedding</b> — вектор из сотен–тысяч чисел, который модель-эмбеддер ставит в соответствие тексту так, что близкие по смыслу тексты близки по косинусному расстоянию. Это «ключ» для поиска по смыслу.</li>
+    <li><b>Векторный индекс</b> — приближённый поиск ближайших соседей (ANN), чаще всего HNSW. Для Go-разработчика самое естественное — <code>pgvector</code> в том же Postgres: транзакции, JOIN с метаданными, привычные бэкапы. Отдельные векторные БД (Qdrant, Weaviate, Milvus и др.) имеют смысл на десятках-сотнях миллионов векторов или при специфичных требованиях. Подробно — модуль 4.</li>
+    <li><b>Гибридный поиск.</b> Векторный поиск плохо находит точные идентификаторы, коды ошибок, артикулы. Его комбинируют с полнотекстовым (BM25 / <code>tsvector</code>) — тоже знакомая территория.</li>
+  </ul>
+
+  <p>Кэширование раздваивается:</p>
+  <table>
+    <tr><th>Вид кэша</th><th>Ключ</th><th>Что экономит</th><th>Риск</th></tr>
+    <tr><td>Точный (exact) кэш ответа</td><td>Хеш модели + промпта + параметров</td><td>100% вызова</td><td>Низкий hit rate: пользователи формулируют по-разному</td></tr>
+    <tr><td>Семантический кэш</td><td>Embedding запроса, порог близости</td><td>100% вызова при похожем вопросе</td><td>«Похожий» вопрос с другим смыслом («как отменить заказ» vs «как не отменять заказ») получает чужой ответ. Порог подбирается на evals</td></tr>
+    <tr><td>Prompt caching провайдера</td><td>Совпадение префикса байт: tools → system → messages</td><td>≈90% стоимости закэшированной части входа и часть TTFT</td><td>Любое изменение префикса (timestamp в system prompt, порядок tools) инвалидирует всё после него</td></tr>
+  </table>
+
+  <p>Очереди тоже переносятся: длинные задачи (суммаризация документа на 300 страниц, агент, который работает 10 минут) не должны жить в HTTP-запросе. Паттерн «задача в очередь → воркер → статус и результат в БД → уведомление» ровно тот же. Отличие — идемпотентность дороже: повторная обработка сообщения не просто нагружает базу, а стоит денег и может дать другой результат. Храните результат по ключу задачи и проверяйте его перед вызовом модели. Для офлайн-нагрузок у провайдеров есть Batch API: у Anthropic −50% к цене, результаты до 24 часов, порядок произвольный, сопоставление по <code>custom_id</code>.</p>
+
+  <h2 id="evals">Тесты → evals</h2>
+  <p>Самое большое смысловое изменение. Table-driven тесты — отличная интуиция для evals: таблица входов и ожиданий. Но проверка меняется с «равно» на «насколько хорошо», а результат — с «зелёный/красный» на число с погрешностью.</p>
+
+  <table>
+    <tr><th></th><th>Unit-тест</th><th>Eval</th></tr>
+    <tr><td>Вход</td><td>Фиксированный</td><td>Набор реалистичных примеров (golden dataset), часто из прод-логов</td></tr>
+    <tr><td>Проверка</td><td><code>assert got == want</code></td><td>Код (JSON валиден, есть поле, число в диапазоне), LLM-as-a-judge по рубрике, человек</td></tr>
+    <tr><td>Результат</td><td>pass/fail</td><td>Доля успешных, средний балл, с доверительным интервалом</td></tr>
+    <tr><td>Флейки</td><td>Баг, чинить</td><td>Норма. Прогоняют несколько раз или на большом наборе</td></tr>
+    <tr><td>Когда падает</td><td>После изменения кода</td><td>После изменения промпта, модели, retrieval, или провайдер обновил модель</td></tr>
+    <tr><td>Стоимость прогона</td><td>Бесплатно</td><td>Деньги и минуты; 500 примеров × judge = реальный счёт</td></tr>
+  </table>
+
+  <p>Статистика здесь не для красоты. 50 примеров, 45 прошли — 90%, но 95% доверительный интервал (Уилсона) примерно 79–96%. Если новая версия промпта дала 47 из 50, это не доказательство улучшения, это шум. Для различения 90% и 93% нужны сотни примеров. Для сравнения двух версий на одном наборе используют парные тесты (McNemar) — смотрят только примеры, где версии разошлись.</p>
+
+  <pre><code class="lang-go">//go:build evals
+
+// Запуск: go test -tags evals -run TestClassifierEval ./... (не в каждом CI, это стоит денег)
+func TestClassifierEval(t *testing.T) {
+	cases := loadGolden(t, "testdata/tickets_golden.jsonl") // 300 размеченных тикетов
+	var pass atomic.Int64
+	g, ctx := errgroup.WithContext(context.Background())
+	g.SetLimit(8)
+	for _, c := range cases {
+		g.Go(func() error {
+			got, err := Classify(ctx, client, c.Text)
+			if err != nil {
+				return err // инфраструктурная ошибка — это не «модель ошиблась»
+			}
+			if got.Category == c.Want {
+				pass.Add(1)
+			}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	n := float64(len(cases))
+	rate := float64(pass.Load()) / n
+	lo := wilsonLower(rate, n, 1.96)
+	t.Logf("accuracy=%.3f (95%% CI lower=%.3f, n=%.0f)", rate, lo, n)
+	if lo &lt; 0.85 { // порог по нижней границе, а не по точечной оценке
+		t.Errorf("accuracy lower bound %.3f &lt; 0.85", lo)
+	}
+}</code></pre>
+  <p>В проде так делают редко на Go целиком: разметка, анализ и графики удобнее в Python (pandas, Jupyter, модуль 9), а evals — отдельная дисциплина (модуль 6). Но прогонщик в CI, который шлёт сотни запросов с лимитами и ретраями, — это как раз ваша сильная сторона.</p>
+
+  <h2 id="skills">Что учить с нуля</h2>
+  <p>Переносится инфраструктура. Новое — всё, что про поведение модели и оценку качества:</p>
+  <table class="skill-grid">
+    <tr><th>Навык</th><th>Почему новое</th><th>Модуль</th></tr>
+    <tr><td>Как работает LLM</td><td>Токенизация, контекстное окно, сэмплинг, почему модель галлюцинирует и почему длинный контекст не бесплатен. Без этого не объяснить ни стоимость, ни отказы</td><td>1</td></tr>
+    <tr><td>Особенности API</td><td>Content blocks, stop reasons, tool use, structured outputs, prompt caching, thinking с параметром effort. Знание конкретного API — то, что отличает «пробовал» от «делал»</td><td>2</td></tr>
+    <tr><td>Prompt engineering</td><td>Это не магия, а спецификация для недетерминированного исполнителя. Версионирование, регрессия, prompt injection</td><td>3</td></tr>
+    <tr><td>Retrieval</td><td>Чанкинг, эмбеддинги, reranking, метрики поиска (recall@k, MRR)</td><td>4</td></tr>
+    <tr><td>Агенты</td><td>Цикл «модель → инструмент → модель», когда агент не нужен, MCP</td><td>5</td></tr>
+    <tr><td>Evals</td><td>Датасеты, LLM-as-a-judge и его калибровка, статистика</td><td>6</td></tr>
+    <tr><td>Основы ML</td><td>Precision/recall, переобучение, когда fine-tuning оправдан (редко)</td><td>8</td></tr>
+    <tr><td>Python-экосистема</td><td>Evals, анализ данных, эксперименты живут там</td><td>9</td></tr>
+  </table>
+
+  <div class="callout"><span class="title">Позиционирование на рынке</span>
+    <p>Сильная сторона Go-бэкендера на собеседовании на AI engineer — «я знаю, как это выдержит прод»: лимиты, ретраи, стоимость, наблюдаемость, безопасность. Слабое место, которое проверят, — понимание модели и evals. Типичная ошибка кандидатов с бэкенд-опытом: говорить о LLM как о детерминированном сервисе и не иметь ответа на «как вы узнаете, что стало лучше?». Курс построен так, чтобы закрыть именно это.</p>
+  </div>
+
+  <h2 id="practice">Практика</h2>
+  <div class="task">
+    <h3>Задание 1: надёжный fan-out-клиент</h3>
+    <p>Напишите на Go пакет <code>llmbatch</code>: функция принимает срез промптов и возвращает срез результатов в том же порядке, где у каждого элемента есть текст, usage и ошибка. Используйте errgroup с лимитом, общий дедлайн, таймаут на вызов, свой ретрай с full jitter и <code>retry-after</code> (встроенный ретрай SDK отключите), token bucket по входным токенам.</p>
+    <p><b>Критерии готовности:</b></p>
+    <label class="check"><input type="checkbox" data-save="m00-t1"> Ошибка одного элемента не отменяет остальные; порядок результатов совпадает с порядком входа</label>
+    <label class="check"><input type="checkbox" data-save="m00-t2"> Юнит-тест на ретрай с фейковым клиентом: 429 с <code>retry-after: 2</code> → пауза ≥ 2 с; 400 не ретраится; отмена ctx прерывает ожидание</label>
+    <label class="check"><input type="checkbox" data-save="m00-t3"> На 50 реальных вызовах (Haiku 4.5, чтобы было дёшево) залогированы TTFT/latency, input/output tokens и итоговая стоимость в $</label>
+  </div>
+  <div class="task">
+    <h3>Задание 2: breaker и fallback</h3>
+    <p>Оберните клиент в circuit breaker (свой или <code>sony/gobreaker</code>) с fallback с основной модели на более дешёвую. Считайте ошибками только 5xx/529/таймауты.</p>
+    <label class="check"><input type="checkbox" data-save="m00-t4"> Тест с фейковым транспортом (<code>http.RoundTripper</code>), который отдаёт 529: после порога вызовы идут на fallback без обращения к основной модели; через cooldown пробный запрос возвращает breaker в closed</label>
+    <label class="check"><input type="checkbox" data-save="m00-t5"> 400 и 429 не открывают breaker</label>
+    <label class="check"><input type="checkbox" data-save="m00-t6"> В логах каждого вызова есть, какая модель ответила и почему (primary / fallback / breaker open)</label>
+  </div>
+
+  <h2 id="selfcheck">Самопроверка</h2>
+  <details class="q"><summary>Почему при fan-out из N параллельных LLM-вызовов общее время не равно средней латентности?</summary><div class="a"><p>Общее время равно максимуму из N длительностей (при K ≥ N). Латентность LLM сильно зависит от длины вывода и имеет тяжёлый хвост, поэтому максимум из N растёт с N: чем больше вызовов, тем вероятнее, что один из них попадёт в p99. Лечится ограничением max_tokens, hedging-запросами, или UX, который показывает частичные результаты по мере готовности.</p></div></details>
+  <details class="q"><summary>Какие лимиты есть у Anthropic API и почему лимитер на запросы в секунду недостаточен?</summary><div class="a"><p>RPM, ITPM и OTPM на модель. Лимитер на запросы защищает только RPM; запросы с длинным контекстом исчерпывают ITPM при небольшом RPS. Нужен token bucket, где «жетоны» — оценка входных токенов, и учёт выходных токенов через max_tokens.</p></div></details>
+  <details class="q"><summary>Зачем jitter в backoff, если экспонента уже разносит попытки?</summary><div class="a"><p>Без jitter все клиенты, получившие 429 одновременно, повторят попытку тоже одновременно: через 1, 2, 4 секунды. Волны повторов синхронизированы и снова упираются в лимит. Jitter размазывает их по интервалу. Full jitter даёт наименьшую суммарную нагрузку при конкуренции.</p></div></details>
+  <details class="q"><summary>Какие коды ошибок не надо ретраить и почему 429 не стоит считать отказом для circuit breaker?</summary><div class="a"><p>Не ретраить 400, 401, 403, 404, 413: повтор даст то же самое. 429 означает, что вы превысили свой лимит, провайдер при этом здоров; открывать breaker — значит отрезать трафик, который прошёл бы через секунду. Правильная реакция — снизить конкурентность и уважать retry-after.</p></div></details>
+  <details class="q"><summary>Что произойдёт, если пользователь закрыл вкладку во время стриминга, а вы не передали r.Context() в вызов SDK?</summary><div class="a"><p>Запрос к провайдеру продолжит выполняться до конца генерации: вы заплатите за все выходные токены, которые никто не увидит, и займёте слот конкурентности и лимит OTPM. Передача контекста хендлера закрывает соединение, и генерация на стороне провайдера прекращается.</p></div></details>
+  <details class="q"><summary>Почему семантический кэш опаснее обычного?</summary><div class="a"><p>Он возвращает ответ на «похожий» вопрос. Эмбеддинги плохо различают отрицания, числа, имена сущностей: «как отменить подписку» и «как не отменять подписку автоматически» близки по вектору. Пользователь получит чужой ответ. Порог близости подбирают по evals, кэш ограничивают по тенанту и типу запросов, часто кэшируют только FAQ-подобные вопросы.</p></div></details>
+  <details class="q"><summary>Eval показал 88% на старом промпте и 92% на новом, по 50 примеров. Катить?</summary><div class="a"><p>Этого недостаточно для вывода. Доверительные интервалы при n=50 шириной около ±8–9 п.п. и пересекаются. Нужно больше примеров, парное сравнение на одних и тех же примерах (смотреть, где версии разошлись), несколько прогонов из-за недетерминизма, и проверка по срезам: общий рост может скрывать падение в важной категории.</p></div></details>
+  <details class="q"><summary>Что обязательно логировать на каждый LLM-вызов?</summary><div class="a"><p>Модель, версию промпта, input/output/cache токены, стоимость, TTFT и общую латентность, stop_reason, ошибку и число попыток, для агентов — число итераций и tool calls, trace id. Промпты и ответы — только с учётом политики ПДн: семплирование, редактирование, TTL.</p></div></details>
+
+  <h2 id="interview">Вопросы с собеседований</h2>
+  <details class="q interview"><summary>Вам нужно обработать 2 млн документов LLM за ночь. Как спроектируете?</summary><div class="a">
+    <p>Сначала считаю: средняя длина документа в токенах × 2 млн = входные токены, плюс ожидаемый выход. Это даёт стоимость и сравнение с лимитами ITPM/OTPM. Если задача офлайн и срок — «к утру», первый кандидат — Batch API: −50% к цене, лимиты отдельные, результаты до 24 ч, сопоставление по <code>custom_id</code>. Если нужно быстрее или batch не подходит, делаю пайплайн: очередь задач, воркеры с ограничением конкурентности, распределённый token bucket по ITPM, ретраи с jitter, идемпотентность по ключу документа (результат в БД, повторная обработка пропускается), чекпоинты для рестарта.</p>
+    <p>Отдельно: выбор модели по evals на выборке из 200–500 документов (часто Haiku-класс хватает, и это ×5 дешевле), prompt caching для общей инструкции, max_tokens с запасом и мониторинг stop_reason=max_tokens. Метрики: throughput, доля ошибок, стоимость на документ, ETA. Первая итерация — на 1% данных, чтобы найти сюрпризы до того, как потрачен весь бюджет.</p>
+  </div></details>
+  <details class="q interview"><summary>Чем ретраи LLM-вызовов отличаются от ретраев обычного HTTP?</summary><div class="a">
+    <p>Три отличия. Стоимость: каждая попытка оплачивается по токенам, а упавший на середине стрим уже стоил денег. Недетерминизм: повтор даст другой ответ, поэтому ретрай после частично показанного пользователю ответа — UX-проблема. Лимиты: ретраи с длинным контекстом съедают ITPM и усугубляют 429, поэтому нужен экспоненциальный backoff с full jitter, уважение retry-after, общий бюджет ретраев (например, не больше 10% от трафика) и отключение встроенных ретраев SDK, если сверху свой слой. Плюс «тихие» ошибки — 200 OK с невалидным JSON или обрезанный по max_tokens ответ; их иногда тоже ретраят, но это уже логика валидации, не транспорта.</p>
+  </div></details>
+  <details class="q interview"><summary>Как вы измеряете и оптимизируете латентность LLM-фичи?</summary><div class="a">
+    <p>Разделяю на TTFT и скорость генерации. TTFT зависит от длины входа (prefill), загрузки провайдера, reasoning перед ответом; помогают prompt caching, сокращение контекста, более быстрая модель, меньший effort. Время генерации ≈ выходные токены / скорость; помогают более короткие ответы (инструкция, max_tokens, структурированный формат), более быстрая модель. Архитектурно — стриминг, параллелизация независимых шагов, спекулятивные запросы, кэш. Замеряю p50/p95/p99 отдельно по TTFT и total, в разрезе модели и длины входа. На собесе важно сказать, что снижение латентности почти всегда покупается качеством или деньгами, и это решение проверяется evals.</p>
+  </div></details>
+  <details class="q interview"><summary>Как бы вы тестировали фичу на LLM, если ответы недетерминированы?</summary><div class="a">
+    <p>Слоями. Детерминированный код вокруг модели (парсинг, валидация, tool-хендлеры, ретраи) — обычные unit-тесты с фейковым клиентом. Контракт формата — structured outputs и проверка схемы, это можно сделать строгим. Качество — eval-набор из реальных примеров с метриками по срезам: code-based проверки где возможно, LLM-as-a-judge с рубрикой и калибровкой на ручной разметке где нет. Сравнение версий — на одном наборе, парно, с доверительными интервалами, порог по нижней границе. В CI — быстрый smoke-набор на каждый PR, полный — на изменения промптов и моделей и по расписанию (провайдер может обновить модель). В проде — онлайн-сигналы: фидбек, доля провалов валидации, выборочная ручная проверка.</p>
+  </div></details>
+  <details class="q interview"><summary>Провайдер лёг на 20 минут. Что видит пользователь вашего продукта?</summary><div class="a">
+    <p>Хороший ответ описывает деградацию, а не «всё упадёт». Circuit breaker по доле 5xx/529/таймаутов на модель открывается за секунды, дальше fallback-цепочка: другая модель того же провайдера (часто перегрузка затрагивает одну модель), другой провайдер или регион через gateway, затем деградированный режим: кэшированные ответы, не-LLM путь (поиск без генерации), честное сообщение и очередь на асинхронную обработку. Обязательно: fallback-модели прогнаны через те же evals, промпты адаптированы, есть алерт и дашборд. Стоит упомянуть, что мультипровайдерность стоит дорого в поддержке: разные форматы tool use, разное поведение, двойной набор evals. Для многих продуктов достаточно двух моделей одного провайдера плюс деградированного режима.</p>
+  </div></details>
+  <details class="q interview"><summary>Чем AI engineer отличается от ML engineer и от бэкендера, который вызывает API?</summary><div class="a">
+    <p>ML engineer обучает и обслуживает модели: данные, обучение, инференс-инфраструктура. AI engineer строит продукт поверх готовых моделей: контекст, промпты, retrieval, агенты, evals, стоимость, надёжность. От бэкендера, который «дёргает API», отличается ответственностью за качество: умеет измерить, что система работает, найти, почему плохо, и улучшить итеративно, с цифрами. Правильный акцент на собесе: «моя работа — качество × стоимость × латентность под ограничения продукта».</p>
+  </div></details>
+  <details class="q interview"><summary>Нужен ли очередь/воркер для LLM-фичи или хватит синхронного HTTP?</summary><div class="a">
+    <p>Зависит от длительности и интерактивности. Чат с ответом за 5–20 с — синхронно со стримингом. Задачи дольше минуты (агент, большой документ, генерация отчёта) — асинхронно: очередь, воркеры, статус в БД, уведомление или polling, потому что HTTP-таймауты балансировщиков, деплои и разрывы сети убьют длинный запрос. Бонус асинхронности — сглаживание пиков под rate limit и возможность Batch API. Цена — сложность UX и идемпотентность, которая в LLM-мире важнее: повтор стоит денег и даёт другой результат.</p>
+  </div></details>
+
+  <h2 id="links">Источники</h2>
+  <ul>
+    <li><a href="https://www.anthropic.com/engineering/building-effective-agents" target="_blank" rel="noopener">Anthropic — Building effective agents</a> (паттерны, включая parallelization)</li>
+    <li><a href="https://docs.anthropic.com/en/api/rate-limits" target="_blank" rel="noopener">Anthropic API — Rate limits</a> (RPM / ITPM / OTPM, retry-after)</li>
+    <li><a href="https://docs.anthropic.com/en/api/errors" target="_blank" rel="noopener">Anthropic API — Errors</a> (коды, overloaded_error 529)</li>
+    <li><a href="https://docs.anthropic.com/en/api/messages-streaming" target="_blank" rel="noopener">Anthropic API — Streaming Messages</a> (типы SSE-событий)</li>
+    <li><a href="https://github.com/anthropics/anthropic-sdk-go" target="_blank" rel="noopener">anthropic-sdk-go</a> — официальный Go SDK</li>
+    <li><a href="https://pkg.go.dev/golang.org/x/sync/errgroup" target="_blank" rel="noopener">errgroup</a>, <a href="https://pkg.go.dev/golang.org/x/sync/semaphore" target="_blank" rel="noopener">semaphore</a>, <a href="https://pkg.go.dev/golang.org/x/time/rate" target="_blank" rel="noopener">x/time/rate</a></li>
+    <li><a href="https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/" target="_blank" rel="noopener">AWS Architecture Blog — Exponential Backoff And Jitter</a></li>
+    <li><a href="https://martinfowler.com/bliki/CircuitBreaker.html" target="_blank" rel="noopener">Martin Fowler — CircuitBreaker</a>; <a href="https://github.com/sony/gobreaker" target="_blank" rel="noopener">sony/gobreaker</a></li>
+    <li><a href="https://sre.google/sre-book/handling-overload/" target="_blank" rel="noopener">Google SRE Book — Handling Overload</a> (retry budgets)</li>
+    <li><a href="https://research.google/pubs/the-tail-at-scale/" target="_blank" rel="noopener">Dean, Barroso — The Tail at Scale</a> (hedged requests)</li>
+    <li><a href="https://opentelemetry.io/docs/specs/semconv/gen-ai/" target="_blank" rel="noopener">OpenTelemetry — Semantic conventions for GenAI</a></li>
+    <li><a href="https://hamel.dev/blog/posts/evals/" target="_blank" rel="noopener">Hamel Husain — Your AI Product Needs Evals</a></li>
+    <li><a href="https://github.com/pgvector/pgvector" target="_blank" rel="noopener">pgvector</a></li>
+  </ul>
+</main>
+<script src="assets/course.js"></script>
+<script>
+// ---------- Карта переноса ----------
+(function () {
+  const svg = document.getElementById('map-svg');
+  const out = document.getElementById('map-readout');
+  const L = [
+    ['go', 'goroutines, errgroup'], ['ctx', 'context, таймауты'], ['retry', 'ретраи, backoff'],
+    ['rate', 'rate limiting'], ['cb', 'circuit breaker'], ['obs', 'логи, метрики, трейсы'],
+    ['sql', 'SQL, индексы'], ['redis', 'Redis, кэш'], ['queue', 'очереди, воркеры'],
+    ['test', 'table-driven тесты'], ['api', 'контракты API, схемы'], ['pprof', 'профилирование']
+  ];
+  const R = [
+    ['par', 'параллельные вызовы LLM'], ['stream', 'стриминг SSE'], ['r429', 'ретраи 429 / 529'],
+    ['tpm', 'лимиты по токенам'], ['fb', 'fallback моделей'], ['llmobs', 'токены, стоимость, TTFT'],
+    ['vec', 'векторный поиск, RAG'], ['cache', 'семантич. и prompt cache'], ['batch', 'Batch API, пайплайны'],
+    ['evals', 'evals'], ['so', 'structured outputs, tools'], ['cost', 'оптимизация стоимости']
+  ];
+  // [слева, справа, тип: ok|warn|bad, пояснение]
+  const E = [
+    ['go', 'par', 'ok', 'errgroup + лимит конкурентности — ровно тот же код. Новое: лимит задаёт rate limit провайдера (RPM/ITPM/OTPM), а не CPU; частичный успех часто важнее fail-fast; хвост латентности определяет общее время.'],
+    ['go', 'so', 'ok', 'Параллельные tool_use в одном ответе модели выполняются конкурентно, все tool_result возвращаются одним user-сообщением — это fan-out/fan-in внутри агентного цикла.'],
+    ['ctx', 'stream', 'ok', 'Отмена r.Context() при закрытии вкладки должна закрыть соединение с провайдером — иначе вы платите за токены, которые никто не прочтёт.'],
+    ['ctx', 'par', 'ok', 'Общий дедлайн на операцию + таймаут на вызов. Бюджет считается как ⌈N/K⌉ × p95, и p95 здесь — секунды.'],
+    ['retry', 'r429', 'warn', 'Backoff + jitter те же. Меняется цена попытки: каждая оплачивается токенами, упавший стрим уже стоил денег, повтор даст другой ответ. Уважайте retry-after, отключайте встроенные ретраи SDK, если есть свои.'],
+    ['rate', 'tpm', 'warn', 'Token bucket тот же, но «жетоны» — LLM-токены: запрос со 150K контекста съедает ITPM, как сотня маленьких. Лимит общий на организацию → нужен распределённый лимитер или LLM-gateway.'],
+    ['cb', 'fb', 'warn', 'Паттерн тот же, но fallback меняет качество: другая модель по-другому следует промпту. Fallback-модель обязана проходить те же evals. 429 — не повод открывать breaker.'],
+    ['obs', 'llmobs', 'warn', 'RED-метрики остаются, но 200 OK за 3 с может быть бесполезным ответом. Добавляются токены (включая cache read/write), стоимость, TTFT, stop_reason, версия промпта, оценки качества. Стандарт — OTel GenAI semantic conventions.'],
+    ['obs', 'evals', 'warn', 'Онлайн-evals — это наблюдаемость качества: фидбек пользователей, доля провалов валидации, выборочная оценка judge-моделью в проде.'],
+    ['sql', 'vec', 'ok', 'pgvector в том же Postgres: HNSW-индекс, JOIN с метаданными, фильтры по тенанту, транзакции. Гибридный поиск = векторный + полнотекстовый (tsvector/BM25). Новое — только эмбеддинги и метрики retrieval.'],
+    ['redis', 'cache', 'warn', 'Точный кэш — как обычно. Семантический кэш ищет по близости эмбеддингов и может вернуть ответ на вопрос с другим смыслом. Prompt caching провайдера — совпадение префикса байт: timestamp в system prompt обнуляет hit rate.'],
+    ['queue', 'batch', 'ok', 'Очередь → воркеры → статус в БД — тот же паттерн для длинных задач и агентов. Batch API провайдера: −50% к цене, до 24 ч, произвольный порядок, матчинг по custom_id. Идемпотентность дороже: повтор стоит денег.'],
+    ['test', 'evals', 'bad', 'Таблица примеров — да, assert — нет. Результат — доля успехов с доверительным интервалом, сравнение версий парное, проверка кодом, LLM-as-a-judge или человеком. Флейки — норма, а не баг. Это главное, что надо учить.'],
+    ['api', 'so', 'warn', 'JSON Schema для structured outputs и input_schema инструментов — это контракт API, но исполнитель вероятностный: схему нужно валидировать, описания полей — это часть промпта.'],
+    ['pprof', 'cost', 'warn', 'Где сгорают деньги — как где сгорает CPU: профилируйте токены по шагам (system prompt, история, RAG-контекст, reasoning, вывод). Рычаги: модель поменьше, кэширование, обрезка истории, effort, Batch API.'],
+    ['pprof', 'llmobs', 'ok', 'Трейс агентной сессии с span на каждый шаг модели и tool call — flame graph для денег и времени.']
+  ];
+  const W = 560, bw = 200, bh = 30, gap = 8, top = 30, lx = 8, rx = W - 8 - bw;
+  const y = i => top + i * (bh + gap);
+  const col = { ok: 'var(--ok)', warn: 'var(--warn)', bad: 'var(--bad)' };
+  const lines = [], nodes = {};
+  let sel = null;
+
+  const lg = Course.svg('g', {}, svg);
+  E.forEach(e => {
+    const i = L.findIndex(n => n[0] === e[0]), j = R.findIndex(n => n[0] === e[1]);
+    const x1 = lx + bw, y1 = y(i) + bh / 2, x2 = rx, y2 = y(j) + bh / 2;
+    const p = Course.svg('path', { d: `M${x1},${y1} C${x1 + 60},${y1} ${x2 - 60},${y2} ${x2},${y2}`, fill: 'none', stroke: 'var(--border)', 'stroke-width': 1.5 }, lg);
+    lines.push({ e, p });
+  });
+  function node(side, [id, label], i) {
+    const x = side === 'L' ? lx : rx;
+    const g = Course.svg('g', { class: 'map-node', tabindex: 0, role: 'button', 'aria-label': label }, svg);
+    const r = Course.svg('rect', { x, y: y(i), width: bw, height: bh, rx: 7, fill: 'var(--bg-soft)', stroke: 'var(--border)' }, g);
+    const t = Course.svg('text', { x: x + bw / 2, y: y(i) + bh / 2 + 5, 'text-anchor': 'middle', 'font-size': 13.5 }, g);
+    t.textContent = label;
+    const act = () => pick(side, id);
+    g.addEventListener('click', act);
+    g.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); act(); } });
+    nodes[side + id] = { r, t };
+  }
+  L.forEach((n, i) => node('L', n, i));
+  R.forEach((n, i) => node('R', n, i));
+  const hl = Course.svg('text', { x: lx, y: 18, 'font-size': 12, fill: 'var(--muted)' }, svg); hl.textContent = 'Навык Go';
+  const hr = Course.svg('text', { x: rx + bw, y: 18, 'font-size': 12, fill: 'var(--muted)', 'text-anchor': 'end' }, svg); hr.textContent = 'Практика AI engineering';
+
+  function pick(side, id) {
+    sel = sel && sel[0] === side && sel[1] === id ? null : [side, id];
+    const act = new Set();
+    let txt = [];
+    lines.forEach(({ e, p }) => {
+      const on = sel && ((sel[0] === 'L' && e[0] === sel[1]) || (sel[0] === 'R' && e[1] === sel[1]));
+      p.setAttribute('stroke', on ? col[e[2]] : 'var(--border)');
+      p.setAttribute('stroke-width', on ? 3 : 1.5);
+      p.setAttribute('opacity', sel && !on ? 0.35 : 1);
+      if (on) {
+        act.add('L' + e[0]); act.add('R' + e[1]);
+        const a = L.find(n => n[0] === e[0])[1], b = R.find(n => n[0] === e[1])[1];
+        txt.push(`${a} → ${b}\n  ${e[3]}`);
+      }
+    });
+    for (const k in nodes) {
+      const on = act.has(k), me = sel && k === sel[0] + sel[1];
+      nodes[k].r.setAttribute('fill', me ? 'var(--accent-soft)' : on ? 'var(--card)' : 'var(--bg-soft)');
+      nodes[k].r.setAttribute('stroke', me ? 'var(--accent)' : on ? 'var(--text)' : 'var(--border)');
+      nodes[k].r.setAttribute('opacity', sel && !on ? 0.5 : 1);
+      nodes[k].t.setAttribute('opacity', sel && !on ? 0.5 : 1);
+    }
+    out.textContent = sel ? txt.join('\n\n') : 'Выберите узел.';
+  }
+  pick('L', 'test');
+})();
+
+// ---------- Fan-out таймлайн ----------
+(function () {
+  const svg = document.getElementById('fo-svg');
+  const out = document.getElementById('fo-readout');
+  const inN = document.getElementById('fo-n'), inL = document.getElementById('fo-lat'),
+        inS = document.getElementById('fo-sd'), inK = document.getElementById('fo-k');
+  let N = 12, LAT = 4, SD = 0.5, K = 4, raf = 0, t0 = 0, playT = null;
+  // Фиксированные нормальные величины: одинаковые при перерисовке
+  const Z = (() => { let s = 42; const r = () => (s = (s * 16807) % 2147483647) / 2147483647; const a = []; for (let i = 0; i < 30; i++) a.push(Math.sqrt(-2 * Math.log(r())) * Math.cos(2 * Math.PI * r())); return a; })();
+  function durations() { return Array.from({ length: N }, (_, i) => LAT * Math.exp(SD * Z[i] - SD * SD / 2)); }
+  function schedule(d) {
+    const slots = Array(Math.min(K, N)).fill(0);
+    return d.map(x => { let m = 0; slots.forEach((v, i) => { if (v < slots[m]) m = i; }); const s = slots[m]; slots[m] = s + x; return { lane: m, s, e: s + x }; });
+  }
+  function draw(t) {
+    svg.innerHTML = '';
+    const d = durations(), seqTotal = d.reduce((a, b) => a + b, 0), par = schedule(d), parTotal = Math.max(...par.map(p => p.e));
+    const X0 = 12, X1 = 628, sc = (X1 - X0) / seqTotal, cur = t == null ? Infinity : t;
+    const T = (x, y, s, attrs) => { const e = Course.svg('text', Object.assign({ x, y, 'font-size': 12.5 }, attrs || {}), svg); e.textContent = s; return e; };
+    // ось
+    const step = seqTotal > 150 ? 30 : seqTotal > 60 ? 10 : seqTotal > 20 ? 5 : seqTotal > 8 ? 2 : 1;
+    for (let v = 0; v <= seqTotal + 1e-9; v += step) {
+      const x = X0 + v * sc;
+      Course.svg('line', { x1: x, x2: x, y1: 20, y2: 300, stroke: 'var(--border)', 'stroke-dasharray': '2 4' }, svg);
+      T(x, 316, v + 'с', { 'text-anchor': 'middle', 'font-size': 11, fill: 'var(--muted)' });
+    }
+    // последовательно
+    T(X0, 16, `Последовательно: ${seqTotal.toFixed(1)} с`, { 'font-weight': 600 });
+    let acc = 0;
+    d.forEach((x, i) => {
+      const s = acc; acc += x;
+      Course.svg('rect', { x: X0 + s * sc, y: 24, width: Math.max(1, x * sc - 1), height: 22, rx: 3, fill: 'var(--bg-soft)', stroke: 'var(--border)' }, svg);
+      const f = Math.max(0, Math.min(x, cur - s));
+      if (f > 0) Course.svg('rect', { x: X0 + s * sc, y: 24, width: Math.max(0.5, f * sc - 1), height: 22, rx: 3, fill: i % 2 ? 'var(--violet)' : 'var(--accent)', opacity: 0.85 }, svg);
+    });
+    // параллельно
+    const lanes = Math.min(K, N), areaTop = 84, areaH = 200, lh = Math.min(22, areaH / lanes);
+    T(X0, 74, `errgroup + semaphore(K=${K}): ${parTotal.toFixed(1)} с`, { 'font-weight': 600 });
+    par.forEach((p, i) => {
+      const yy = areaTop + p.lane * lh;
+      Course.svg('rect', { x: X0 + p.s * sc, y: yy, width: Math.max(1, (p.e - p.s) * sc - 1), height: Math.max(1.5, lh - 2), rx: 2, fill: 'var(--bg-soft)', stroke: 'var(--border)' }, svg);
+      const f = Math.max(0, Math.min(p.e - p.s, cur - p.s));
+      if (f > 0) Course.svg('rect', { x: X0 + p.s * sc, y: yy, width: Math.max(0.5, f * sc - 1), height: Math.max(1.5, lh - 2), rx: 2, fill: p.e === parTotal ? 'var(--bad)' : 'var(--ok)', opacity: 0.85 }, svg);
+    });
+    // финиш параллельного
+    const fx = X0 + parTotal * sc;
+    Course.svg('line', { x1: fx, x2: fx, y1: 66, y2: areaTop + lanes * lh + 4, stroke: 'var(--bad)', 'stroke-width': 1.5 }, svg);
+    if (t != null && t < seqTotal) {
+      const px = X0 + t * sc;
+      Course.svg('line', { x1: px, x2: px, y1: 20, y2: 300, stroke: 'var(--text)', 'stroke-width': 1.5 }, svg);
+    }
+    const ideal = Math.ceil(N / K) * LAT;
+    out.textContent =
+      `Σ последовательно: ${seqTotal.toFixed(1)} с   параллельно (K=${K}): ${parTotal.toFixed(1)} с   ускорение ×${(seqTotal / parTotal).toFixed(1)}\n` +
+      `Оценка ⌈N/K⌉ × средняя = ${ideal.toFixed(1)} с; самый медленный вызов: ${Math.max(...d).toFixed(1)} с; красным — вызов, завершившийся последним\n` +
+      (K >= N ? 'K ≥ N: общее время = самый медленный вызов. Дальше увеличивать K бесполезно — помогает только срезать хвост (max_tokens, hedging).'
+              : `K < N: вызовы ждут слот. Рост K почти линейно ускоряет, пока не упрётесь в rate limit провайдера (RPM/ITPM).`);
+  }
+  function stop() { cancelAnimationFrame(raf); raf = 0; playT = null; }
+  function play() {
+    stop();
+    const d = durations(), total = d.reduce((a, b) => a + b, 0), dur = 5000;
+    t0 = performance.now();
+    const tick = now => {
+      playT = Math.min(1, (now - t0) / dur) * total;
+      draw(playT);
+      if (playT < total) raf = requestAnimationFrame(tick); else { raf = 0; playT = null; draw(null); }
+    };
+    raf = requestAnimationFrame(tick);
+  }
+  const re = () => { stop(); draw(null); };
+  Course.bindRange(inN, v => v, v => { N = v; re(); });
+  Course.bindRange(inL, v => v.toFixed(1) + ' с', v => { LAT = v; re(); });
+  Course.bindRange(inS, v => Math.round(v * 100) + '%', v => { SD = v; re(); });
+  Course.bindRange(inK, v => v, v => { K = v; re(); });
+  document.getElementById('fo-run').addEventListener('click', play);
+})();
+
+// ---------- Circuit breaker ----------
+(function () {
+  const svg = document.getElementById('cb-svg'), log = document.getElementById('cb-log');
+  const COOLDOWN = 5000;
+  let state = 'closed', fails = 0, TH = 3, openedAt = 0, timer = 0, events = [];
+  const S = {
+    closed: { x: 110, y: 150, label: 'CLOSED', sub: 'запросы идут', c: 'var(--ok)', soft: 'var(--ok-soft)' },
+    open: { x: 530, y: 150, label: 'OPEN', sub: 'отказ сразу', c: 'var(--bad)', soft: 'var(--bad-soft)' },
+    half: { x: 320, y: 55, label: 'HALF-OPEN', sub: '1 пробный', c: 'var(--warn)', soft: 'var(--warn-soft)' }
+  };
+  const defs = Course.svg('defs', {}, svg);
+  const mk = Course.svg('marker', { id: 'cb-arr', viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' }, defs);
+  Course.svg('path', { d: 'M0,0 L10,5 L0,10 z', fill: 'var(--muted)' }, mk);
+  const R = 52;
+  function arrow(a, b, bend, label, lx, ly, id) {
+    const A = S[a], B = S[b];
+    const ang = Math.atan2(B.y - A.y, B.x - A.x);
+    const x1 = A.x + R * Math.cos(ang + bend), y1 = A.y + R * Math.sin(ang + bend);
+    const x2 = B.x - R * Math.cos(ang - bend), y2 = B.y - R * Math.sin(ang - bend);
+    const mx = (x1 + x2) / 2 - Math.sin(ang) * bend * 160, my = (y1 + y2) / 2 + Math.cos(ang) * bend * 160;
+    const p = Course.svg('path', { d: `M${x1},${y1} Q${mx},${my} ${x2},${y2}`, fill: 'none', stroke: 'var(--muted)', 'stroke-width': 1.6, 'marker-end': 'url(#cb-arr)', 'data-id': id }, svg);
+    const t = Course.svg('text', { x: lx, y: ly, 'font-size': 12, 'text-anchor': 'middle', fill: 'var(--muted)' }, svg);
+    t.textContent = label;
+    return p;
+  }
+  const arrows = {
+    trip: arrow('closed', 'open', 0.35, '', 320, 0, 'trip'),
+    cool: arrow('open', 'half', 0.25, 'прошёл cooldown', 505, 70, 'cool'),
+    ok: arrow('half', 'closed', 0.25, 'пробный успешен', 135, 70, 'ok'),
+    back: arrow('half', 'open', 0.25, 'пробный упал', 392, 152, 'back')
+  };
+  const tripLabel = Course.svg('text', { x: 320, y: 238, 'font-size': 12, 'text-anchor': 'middle', fill: 'var(--muted)' }, svg);
+  const circles = {};
+  for (const k in S) {
+    const s = S[k];
+    const c = Course.svg('circle', { cx: s.x, cy: s.y, r: R, fill: 'var(--bg-soft)', stroke: 'var(--border)', 'stroke-width': 2 }, svg);
+    const t1 = Course.svg('text', { x: s.x, y: s.y - 2, 'text-anchor': 'middle', 'font-size': 14, 'font-weight': 700 }, svg); t1.textContent = s.label;
+    const t2 = Course.svg('text', { x: s.x, y: s.y + 16, 'text-anchor': 'middle', 'font-size': 11.5, fill: 'var(--muted)' }, svg); t2.textContent = s.sub;
+    circles[k] = c;
+  }
+  const failText = Course.svg('text', { x: 110, y: 222, 'text-anchor': 'middle', 'font-size': 12.5 }, svg);
+  const coolBg = Course.svg('rect', { x: 480, y: 214, width: 100, height: 8, rx: 4, fill: 'var(--bg-soft)', stroke: 'var(--border)' }, svg);
+  const coolBar = Course.svg('rect', { x: 480, y: 214, width: 0, height: 8, rx: 4, fill: 'var(--bad)' }, svg);
+  const coolTxt = Course.svg('text', { x: 530, y: 240, 'text-anchor': 'middle', 'font-size': 11.5, fill: 'var(--muted)' }, svg);
+  let flash = null;
+
+  function note(s) { const d = new Date(); events.unshift(`${d.toLocaleTimeString()}  ${s}`); events = events.slice(0, 6); }
+  function paint() {
+    for (const k in S) {
+      const on = k === state;
+      circles[k].setAttribute('fill', on ? S[k].soft : 'var(--bg-soft)');
+      circles[k].setAttribute('stroke', on ? S[k].c : 'var(--border)');
+      circles[k].setAttribute('stroke-width', on ? 3.5 : 2);
+    }
+    for (const k in arrows) {
+      const on = k === flash;
+      arrows[k].setAttribute('stroke', on ? 'var(--accent)' : 'var(--muted)');
+      arrows[k].setAttribute('stroke-width', on ? 3 : 1.6);
+    }
+    tripLabel.textContent = `${TH} ошибок подряд`;
+    failText.textContent = state === 'closed' ? `ошибок подряд: ${fails} / ${TH}` : '';
+    const vis = state === 'open';
+    coolBg.setAttribute('opacity', vis ? 1 : 0); coolBar.setAttribute('opacity', vis ? 1 : 0);
+    if (vis) {
+      const left = Math.max(0, COOLDOWN - (performance.now() - openedAt));
+      coolBar.setAttribute('width', 100 * (1 - left / COOLDOWN));
+      coolTxt.textContent = `cooldown: ${(left / 1000).toFixed(1)} с`;
+    } else coolTxt.textContent = '';
+    log.textContent = `Состояние: ${state.toUpperCase()}\n` + events.join('\n');
+  }
+  function go(to, via) { state = to; flash = via; if (to === 'open') { openedAt = performance.now(); tickCool(); } if (to === 'closed') fails = 0; }
+  function tickCool() {
+    cancelAnimationFrame(timer);
+    const f = () => {
+      if (state !== 'open') return;
+      if (performance.now() - openedAt >= COOLDOWN) { go('half', 'cool'); note('cooldown истёк → HALF-OPEN: следующий запрос будет пробным'); paint(); return; }
+      paint(); timer = requestAnimationFrame(f);
+    };
+    timer = requestAnimationFrame(f);
+  }
+  function request(ok) {
+    flash = null;
+    if (state === 'open') { note('запрос отклонён сразу (breaker open) → fallback-модель / деградированный ответ'); paint(); return; }
+    if (state === 'half') {
+      if (ok) { go('closed', 'ok'); note('пробный запрос успешен → CLOSED'); }
+      else { go('open', 'back'); note('пробный запрос упал (529) → снова OPEN, cooldown заново'); }
+      paint(); return;
+    }
+    if (ok) { if (fails) note(`успех: счётчик ошибок сброшен (было ${fails})`); else note('успех'); fails = 0; }
+    else {
+      fails++;
+      note(`ошибка 529 (${fails}/${TH})`);
+      if (fails >= TH) { go('open', 'trip'); note(`порог достигнут → OPEN на ${COOLDOWN / 1000} с`); }
+    }
+    paint();
+  }
+  document.getElementById('cb-fail').addEventListener('click', () => request(false));
+  document.getElementById('cb-ok').addEventListener('click', () => request(true));
+  document.getElementById('cb-reset').addEventListener('click', () => { cancelAnimationFrame(timer); state = 'closed'; fails = 0; flash = null; events = []; note('сброс'); paint(); });
+  Course.bindRange(document.getElementById('cb-th'), v => v, v => { TH = v; if (state === 'closed' && fails >= TH) fails = TH - 1; paint(); });
+  note('старт: CLOSED');
+  paint();
+})();
+</script>
+</body>
+</html>

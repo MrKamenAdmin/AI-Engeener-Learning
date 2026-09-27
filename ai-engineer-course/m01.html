@@ -1,0 +1,1370 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>1 · Как работают LLM</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+.bpe-out { font: 14px/2.1 var(--mono); background: var(--bg-soft); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin-top: 8px; min-height: 3em; overflow-wrap: anywhere; }
+.bpe-out span { border-radius: 3px; padding: 2px 1px; margin-right: 2px; white-space: pre-wrap; box-shadow: inset 0 -2px 0 var(--border); }
+.bpe-out span.t0 { background: var(--accent-soft); } .bpe-out span.t1 { background: var(--ok-soft); }
+.bpe-out span.t2 { background: var(--warn-soft); } .bpe-out span.t3 { background: var(--violet-soft); }
+.bpe-out span.t4 { background: var(--teal-soft); } .bpe-out span.t5 { background: var(--bad-soft); }
+.bpe-out span.byte { outline: 1px dashed var(--bad); color: var(--bad); }
+.bpe-out i { color: var(--muted); font-style: normal; }
+.merge-list { font: 12.5px/1.8 var(--mono); color: var(--muted); max-height: 180px; overflow: auto; }
+.merge-list code { margin: 0 4px 0 0; }
+.btn-group { display: flex; flex-wrap: wrap; gap: 6px; }
+.btn.sel { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.stage-panel { border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; background: var(--bg-soft); margin-top: 10px; font-size: 14.5px; }
+.stage-panel h4 { margin: 0 0 .4em; }
+.stage-panel .ex { font: 13px/1.5 var(--mono); background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; white-space: pre-wrap; }
+.kpi { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 10px 0; }
+.kpi div { background: var(--bg-soft); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; }
+.kpi b { display: block; font: 600 1.25rem var(--mono); color: var(--accent); }
+.kpi span { font-size: 12.5px; color: var(--muted); }
+.viz svg .clickable { cursor: pointer; }
+.formula { font: 14px var(--mono); background: var(--bg-soft); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; overflow-x: auto; }
+</style>
+</head>
+<body data-module="m01">
+<main class="content">
+  <div class="module-hero">
+    <div class="eyebrow">Модуль 1</div>
+    <h1>Как работают LLM</h1>
+    <p class="lead">Модуль про внутреннее устройство LLM в том объёме, который нужен инженеру продукта. Разберём токены и BPE, attention, сэмплинг, эмбеддинги, этапы обучения, KV-cache и квантизацию, а в конце посчитаем, сколько стоит длинный контекст и reasoning. Этого хватит, чтобы объяснять счёт за API, латентность и галлюцинации цифрами, без ссылок на «магию».</p>
+    <div class="meta-row"><span class="chip">≈ 10 часов</span><span class="chip">Go + Python</span><span class="chip">7 интерактивных визуализаций</span><span class="chip">цены на сентябрь 2026</span></div>
+  </div>
+
+  <div class="callout go"><span class="title">Как читать этот модуль Go-разработчику</span>
+    <p>Относитесь к LLM как к чистой функции <code>f(tokens []int) []float32</code>. Она принимает последовательность целых чисел и возвращает вектор логитов, по одному на каждый токен словаря. Всё остальное (чат, tool use, «рассуждения») собрано поверх этой функции циклом <code>for</code> и сэмплером. От понимания этой функции и цикла зависят стоимость, латентность и режимы отказов вашего продукта.</p>
+  </div>
+
+  <!-- ===================================================== -->
+  <h2 id="tokens">Токены и BPE</h2>
+  <p>Модель не работает с символами или словами, она работает с <b>token</b>'ами, то есть с целыми числами из словаря фиксированного размера. У современных моделей словарь обычно насчитывает от 32K до 256K элементов: у Llama 3 около 128K, у <code>o200k_base</code> (OpenAI) около 200K. Токен может быть целым словом (<code>" the"</code>, вместе с ведущим пробелом), частью слова (<code>"изац"</code>), отдельным байтом или куском отступа в коде.</p>
+  <p>В токенах измеряется почти всё, за что вы отвечаете в проде. Цена API считается за миллион входных и выходных токенов. Контекстное окно задаётся в токенах. Rate limits выражаются в токенах в минуту (ITPM/OTPM), а латентность генерации в токенах в секунду. Если вы оцениваете бюджет в символах или словах, ошибка на русском тексте будет в разы.</p>
+
+  <h3>Как строится BPE</h3>
+  <p><b>Byte Pair Encoding</b> (Sennrich et al., 2015, для LLM его адаптировали на уровне байтов в GPT-2) обучается один раз на большом корпусе:</p>
+  <ol>
+    <li>Текст нарезается <i>претокенизатором</i> на куски примерно по словам: регулярка отделяет пробел+слово, числа, пунктуацию. Слияния никогда не пересекают эти границы.</li>
+    <li>Каждый кусок превращается в последовательность <b>байтов</b> UTF-8. Базовый словарь состоит из 256 байтов, поэтому любой текст закодируется и «неизвестного токена» не бывает.</li>
+    <li>Алгоритм считает частоты всех соседних пар и самую частую пару (например, <code>t</code> + <code>h</code>) объявляет новым токеном <code>th</code>. Правило слияния записывается в таблицу с рангом.</li>
+    <li>Шаг 3 повторяется, пока словарь не дорастёт до целевого размера, то есть десятки и сотни тысяч раз.</li>
+  </ol>
+  <p>Кодирование нового текста повторяет те же слияния в порядке ранга. Отсюда два следствия. Токенизация детерминирована, но зависит от контекста: <code>"мир"</code> и <code>" мир"</code> дают разные токены. И она отражает <b>статистику обучающего корпуса</b>: частые в корпусе строки получают короткие коды.</p>
+
+  <div class="viz" id="viz-bpe">
+    <p class="viz-title">Песочница BPE</p>
+    <p class="viz-sub">Учебный BPE. Он обучается прямо в браузере на встроенном корпусе примерно из 5 КБ текста (≈ 65% английского, 20% русского, 15% Go-кода). <b>Это не токенизатор Claude или GPT</b>: у настоящих словарь в сотни раз больше, а корпус в миллиарды раз. Механика при этом та же. Двигайте ползунок слияний и смотрите, как текст «склеивается». Есть два режима базовых единиц. В режиме <b>байтов UTF-8</b> (как у GPT-2/4 и o200k) кириллическая буква изначально стоит 2 токена, а токены могут резать букву пополам: такие показаны шестнадцатеричными байтами в красной пунктирной рамке. В режиме <b>символов с byte fallback</b> (как SentencePiece в Llama 2) незнакомые символы, например эмодзи, распадаются на байты <code>&lt;0xF0&gt;…</code>.</p>
+    <textarea id="bpe-in" rows="4" aria-label="Текст для токенизации">The model reads tokens, not words. Модель читает токены, а не слова.
+func main() { fmt.Println(12345 + 67890) }</textarea>
+    <div class="controls">
+      <label>база <select id="bpe-mode" style="width:auto"><option value="chars">символы + byte fallback</option><option value="bytes">байты UTF-8</option></select></label>
+      <label>слияний <input type="range" id="bpe-k" min="0" max="400" step="1" value="400"> <output></output></label>
+      <span class="btn-group">
+        <button class="btn" type="button" data-sample="en">Английский</button>
+        <button class="btn" type="button" data-sample="ru">Русский</button>
+        <button class="btn" type="button" data-sample="code">Go-код</button>
+        <button class="btn" type="button" data-sample="num">Числа</button>
+        <button class="btn" type="button" data-sample="emoji">Эмодзи</button>
+      </span>
+    </div>
+    <div class="bpe-out" id="bpe-out" aria-live="polite"></div>
+    <div class="kpi" id="bpe-kpi"></div>
+    <svg id="bpe-cmp" viewBox="0 0 640 120" role="img" aria-label="Сравнение числа токенов для английской и русской фразы"></svg>
+    <details><summary class="muted" style="cursor:pointer;font-size:14px">Показать первые выученные слияния (таблица рангов)</summary><div class="merge-list" id="bpe-merges"></div></details>
+  </div>
+
+  <h3>Почему русский текст дороже</h3>
+  <ul>
+    <li><b>Корпус.</b> В обучающих данных токенизатора английского на порядки больше, поэтому английские слова целиком попадают в словарь, а русские режутся на 2–4 куска. В песочнице это видно на полном количестве слияний: <code>" the"</code> и <code>" model"</code> стали одним токеном, а русские слова остаются по кусочкам.</li>
+    <li><b>UTF-8.</b> Кириллическая буква занимает 2 байта, латинская 1. Пока пара байтов не слилась, одна буква стоит двух токенов. Поставьте ползунок на 0 и сравните счётчики.</li>
+    <li><b>Морфология.</b> Шесть падежей и богатое словообразование дают больше уникальных словоформ, а значит, меньше повторов, на которых учится BPE.</li>
+  </ul>
+  <div class="callout tip"><span class="title">Цифры</span>
+    <p>Для английского у больших токенизаторов работает правило «≈ 4 символа или ≈ 0.75 слова на токен». Одинаковый по смыслу русский текст обычно занимает <b>в 1.3–3 раза больше токенов</b> в зависимости от токенизатора: у новых словарей на 200K+ разрыв меньше, у старых больше. Это прямой множитель к цене, к латентности (больше токенов на выходе, значит дольше генерация) и к расходу контекста. Не берите коэффициент из статей, а измерьте на 100 реальных документах своего домена через <code>count_tokens</code>.</p>
+  </div>
+
+  <h3>Числа, код и прочие сюрпризы</h3>
+  <ul>
+    <li><b>Числа.</b> Многие токенизаторы режут цифры на группы до 3 (<code>12345</code> → <code>123</code>|<code>45</code>). Модель «видит» не разряды, а произвольные куски, поэтому арифметика на длинных числах и сравнение <code>9.11</code> и <code>9.9</code> исторически давались плохо. Вывод для инженера: считайте в коде (tool use), а не в модели.</li>
+    <li><b>Буквы внутри токена.</b> Вопрос «сколько букв r в strawberry» трудный, потому что слово для модели занимает 1–3 токена, и отдельные буквы в нём не видны. Задачи на уровне символов (реверс строки, подсчёт, регулярки) ненадёжны без инструментов.</li>
+    <li><b>Код.</b> Отступы, <code>\n\t\t</code> и частые идентификаторы обычно имеют свои токены, но минифицированный код, base64, UUID и хэши токенизируются очень плохо: почти символ на токен. Логи с UUID и JSON с длинными ключами съедают бюджет контекста быстрее, чем кажется.</li>
+    <li><b>Граница токенов в промпте.</b> Висящий пробел в конце промпта или разрыв слова даёт модели «неестественную» последовательность, которой почти не было в обучении. Отсюда странные продолжения.</li>
+    <li><b>Смена токенизатора.</b> У каждого семейства моделей свой словарь, а у новых поколений он может меняться. Бюджеты, рассчитанные для одной модели, не переносятся на другую без пересчёта.</li>
+  </ul>
+  <div class="callout warn"><span class="title">Режим отказа: оценка токенов «на глаз»</span>
+    <p>Типичный баг в проде выглядит так: бюджет контекста считается как <code>len(text)/4</code>, для русских документов он оказывается занижен в 2 раза, запрос превышает окно, и API возвращает 400. Ещё хуже вариант с <code>max_tokens</code>, рассчитанным на английский: русский JSON обрезается посередине с <code>stop_reason: "max_tokens"</code>. Считайте токены реальным счётчиком и держите запас в 10–20%.</p>
+  </div>
+
+  <h3>Код: как считать токены на самом деле</h3>
+  <p>Токенизатор Claude не опубликован, поэтому локально, как с <code>tiktoken</code>, посчитать нельзя. Для этого есть бесплатный (но с rate limit) эндпоинт <code>POST /v1/messages/count_tokens</code>. Он принимает те же <code>model</code>, <code>system</code>, <code>messages</code>, <code>tools</code>, что и Messages API, и возвращает <code>input_tokens</code>. Документация называет результат оценкой: фактический <code>usage.input_tokens</code> может немного отличаться, потому что провайдер добавляет служебные токены. <code>tiktoken</code> ниже приведён для иллюстрации BPE на открытом словаре OpenAI. Для бюджетов Claude он <b>не подходит</b>.</p>
+  <div class="tabs">
+    <div class="tab-panel" data-tab="Go: count_tokens"><pre><code class="lang-go">// Подсчёт токенов через API. Сырой net/http, чтобы видеть эндпоинт;
+// в проде берите SDK: client.Messages.CountTokens(ctx, anthropic.MessageCountTokensParams{...}).
+package tokens
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"time"
+)
+
+type msg struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type countReq struct {
+	Model    string `json:"model"`
+	System   string `json:"system,omitempty"`
+	Messages []msg  `json:"messages"`
+}
+
+var httpClient = &amp;http.Client{Timeout: 10 * time.Second}
+
+// Count возвращает число входных токенов для запроса к модели.
+func Count(ctx context.Context, model, system, user string) (int, error) {
+	body, err := json.Marshal(countReq{Model: model, System: system,
+		Messages: []msg{{Role: "user", Content: user}}})
+	if err != nil {
+		return 0, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		"https://api.anthropic.com/v1/messages/count_tokens", bytes.NewReader(body))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("x-api-key", os.Getenv("ANTHROPIC_API_KEY"))
+	req.Header.Set("anthropic-version", "2023-06-01")
+	req.Header.Set("content-type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("count_tokens: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1&lt;&lt;20))
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("count_tokens: status %d: %s", resp.StatusCode, raw)
+	}
+	var out struct {
+		InputTokens int `json:"input_tokens"`
+	}
+	if err := json.Unmarshal(raw, &amp;out); err != nil {
+		return 0, fmt.Errorf("count_tokens: decode: %w", err)
+	}
+	return out.InputTokens, nil
+}
+
+// Пример: сравнить EN и RU. Считайте разницу с пустым сообщением,
+// чтобы вычесть служебные токены шаблона.
+//   en, _ := Count(ctx, "claude-opus-5", "", "The model reads tokens, not words.")
+//   ru, _ := Count(ctx, "claude-opus-5", "", "Модель читает токены, а не слова.")
+</code></pre></div>
+    <div class="tab-panel" data-tab="Python: tiktoken"><pre><code class="lang-python"># pip install tiktoken
+# Иллюстрация BPE на открытом словаре OpenAI (o200k_base).
+# У Claude СВОЙ токенизатор: для бюджетов используйте
+# client.messages.count_tokens(model=..., messages=[...]).input_tokens
+import tiktoken
+
+enc = tiktoken.get_encoding("o200k_base")
+
+samples = {
+    "en": "The model reads tokens, not words.",
+    "ru": "Модель читает токены, а не слова.",
+    "num": "12345678 + 9.11 vs 9.9",
+    "uuid": "3f2b9c1e-7a4d-4e8b-9f10-2c6d8e4a1b7f",
+}
+
+for name, text in samples.items():
+    ids = enc.encode(text)
+    pieces = [enc.decode_single_token_bytes(t) for t in ids]
+    # bytes, потому что токен может оказаться половинкой UTF-8 символа
+    shown = [p.decode("utf-8", errors="replace") for p in pieces]
+    print(f"{name:5} chars={len(text):3} tokens={len(ids):3} "
+          f"chars/token={len(text) / len(ids):.2f}")
+    print("      ", " | ".join(shown))
+</code></pre></div>
+  </div>
+
+  <!-- ===================================================== -->
+  <h2 id="generation">Генерация и сэмплинг</h2>
+  <h3>Next-token prediction и авторегрессия</h3>
+  <p>Модель обучена одной задаче: по префиксу из токенов выдать распределение вероятностей следующего токена. Её выход — вектор <b>логитов</b> (logits) длиной в размер словаря, то есть ненормированных оценок, которые softmax превращает в вероятности. Генерация устроена как цикл:</p>
+  <pre><code class="lang-go">tokens := tokenize(prompt)
+for len(out) &lt; maxTokens {
+	logits := model(tokens)          // один forward pass
+	next := sample(logits, params)   // temperature / top_k / top_p
+	if next == eos || hitsStop(out, next) {
+		break
+	}
+	tokens = append(tokens, next)     // авторегрессия: выход становится входом
+	out = append(out, next)
+}</code></pre>
+  <p>Из этого цикла следует несколько фактов, которые важны в проде:</p>
+  <ul>
+    <li><b>Выходные токены последовательны.</b> 1000 токенов ответа требуют 1000 шагов цикла, и распараллелить их нельзя. Поэтому output в 4–5 раз дороже input и определяет большую часть латентности. Самая дешёвая оптимизация — просить короткий ответ.</li>
+    <li><b>Модель не может «вернуться».</b> Если на шаге 5 выбран неудачный токен, все следующие шаги будут его оправдывать. Отсюда снежный ком галлюцинаций и польза от того, чтобы модель сначала подумала или процитировала источник, а потом отвечала.</li>
+    <li><b>Модель не знает, «правду» ли она пишет.</b> Она оптимизирована на правдоподобное продолжение. Правдивость появляется как побочный эффект обучения, а не как гарантия.</li>
+    <li><b>Стриминг бесплатен.</b> Токены всё равно появляются по одному, и SSE просто отдаёт их клиенту сразу (модуль 2).</li>
+  </ul>
+
+  <h3>Параметры сэмплинга</h3>
+  <table>
+    <tr><th>Параметр</th><th>Что делает</th><th>Когда трогать</th></tr>
+    <tr><td><code>temperature</code></td><td>Делит логиты на T перед softmax. T&lt;1 делает распределение острее, T&gt;1 площе, T→0 даёт greedy (всегда argmax).</td><td>Около 0 для извлечения и классификации, 0.7–1 для текстов и брейншторма.</td></tr>
+    <tr><td><code>top_k</code></td><td>Оставляет k самых вероятных токенов, остальные обнуляет.</td><td>Грубая страховка от «хвоста» мусорных токенов.</td></tr>
+    <tr><td><code>top_p</code> (nucleus)</td><td>Оставляет минимальный набор токенов, чья суммарная вероятность ≥ p. Размер набора адаптивный: когда модель уверена, остаётся 1–2 токена, когда нет, их десятки.</td><td>Обычно 0.9–0.95. Меняйте <i>либо</i> temperature, <i>либо</i> top_p, а не оба сразу.</td></tr>
+    <tr><td><code>max_tokens</code></td><td>Жёсткий потолок длины ответа. На качество не влияет, только обрезает.</td><td>Всегда. Проверяйте <code>stop_reason == "max_tokens"</code>: это обрезанный, возможно невалидный JSON.</td></tr>
+    <tr><td><code>stop_sequences</code></td><td>Останавливают генерацию, как только появилась строка. <code>stop_reason: "stop_sequence"</code>.</td><td>Разделители в шаблонах, экономия выходных токенов.</td></tr>
+  </table>
+  <p>Порядок применения в большинстве движков (HF transformers, vLLM): логиты → деление на temperature → top_k → top_p → перенормировка → случайный выбор. Есть ещё <code>min_p</code>, <code>frequency_penalty</code> и <code>presence_penalty</code>, но это уже зависит от провайдера.</p>
+
+  <div class="viz" id="viz-sampling">
+    <p class="viz-title">Temperature, top_k и top_p на распределении следующего токена</p>
+    <p class="viz-sub">Контекст: «Я пью кофе с…». Серые полосы показывают распределение после temperature, цветные — итоговые вероятности после отсечений и перенормировки. Отсечённые кандидаты затемнены, справа указано, чем они отрезаны. Нажмите «Сэмплировать 100 раз»: фиолетовые засечки покажут, сколько раз выпал каждый токен.</p>
+    <div class="controls">
+      <label>temperature <input type="range" id="smp-t" min="0" max="2" step="0.05" value="1"> <output></output></label>
+      <label>top_k <input type="range" id="smp-k" min="1" max="10" step="1" value="10"> <output></output></label>
+      <label>top_p <input type="range" id="smp-p" min="0.05" max="1" step="0.01" value="1"> <output></output></label>
+    </div>
+    <div class="controls">
+      <button class="btn primary" type="button" id="smp-go">Сэмплировать 100 раз</button>
+      <button class="btn" type="button" id="smp-reset">Сбросить параметры</button>
+      <span class="legend"><span><i style="background:var(--border)"></i>после temperature</span><span><i style="background:var(--accent)"></i>итоговая вероятность</span><span><i style="background:var(--violet)"></i>выпало из 100</span></span>
+    </div>
+    <svg id="smp-svg" viewBox="0 0 640 300" role="img" aria-label="Распределение вероятностей следующего токена"></svg>
+    <div class="readout" id="smp-readout"></div>
+  </div>
+
+  <p><b>Энтропия</b> <code>H = −Σ p·log₂p</code> измеряет, сколько бит неопределённости в выборе. При H≈0 модель уверена (greedy и сэмплинг совпадают), при высокой H ответы сильно разнятся от запуска к запуску. Низкая энтропия в среднем по ответу — полезный сигнал уверенности, если провайдер отдаёт logprobs.</p>
+
+  <div class="callout danger"><span class="title">Важно: на новейших Claude сэмплинг-параметров нет</span>
+    <p>На момент написания (сентябрь 2026) у новейших моделей Anthropic (Opus 4.7 и новее, Sonnet 5, Fable) параметры <code>temperature</code>, <code>top_p</code> и <code>top_k</code> <b>удалены</b>: запрос с ними возвращает 400. Глубиной и «старательностью» ответа управляют через <code>output_config: {effort: "low" | "medium" | "high" | "xhigh" | "max"}</code> (раздел <a href="#reasoning">про reasoning</a>). У других провайдеров и у open-source моделей в vLLM и Ollama temperature, top_p и top_k по-прежнему работают, и механику выше нужно понимать. При миграции со старых моделей удалите эти поля из запросов, а для «детерминированного» формата используйте structured outputs.</p>
+  </div>
+  <div class="callout warn"><span class="title">Режим отказа: «temperature 0, значит детерминированно»</span>
+    <p>Даже при greedy-декодировании ответы API могут различаться между вызовами. Сервер батчит ваш запрос с чужими, порядок операций с плавающей точкой на GPU меняется, и при почти равных логитах argmax переключается. Тесты вида «ответ должен совпасть байт в байт» нестабильны. Проверяйте семантику: парсинг, схему, eval-метрики (модуль 6).</p>
+  </div>
+
+  <!-- ===================================================== -->
+  <h2 id="attention">Трансформер и attention</h2>
+  <p>Decoder-only трансформер (архитектура GPT, Claude, Llama) — это стек из N одинаковых блоков: от 32 у 8B-моделей до примерно 80–120 у больших. Каждый блок делает две вещи с residual-соединениями и нормализацией:</p>
+  <ol>
+    <li><b>Self-attention</b>: каждый токен собирает информацию с других позиций контекста;</li>
+    <li><b>MLP (feed-forward)</b>: обрабатывает каждую позицию независимо. Здесь сосредоточена большая часть параметров и, по всей видимости, «знаний».</li>
+  </ol>
+  <p>На входе токены превращаются в векторы (embedding lookup, размерность d_model около 4K–16K), к ним добавляется информация о позиции (сейчас обычно RoPE). На выходе последний вектор умножается на матрицу словаря и даёт логиты.</p>
+
+  <h3>Q, K, V на интуиции</h3>
+  <p>Для каждого токена attention вычисляет три вектора линейными проекциями его текущего представления:</p>
+  <ul>
+    <li><b>Query</b> — «что я ищу» (например, местоимение «она» ищет существительное женского рода);</li>
+    <li><b>Key</b> — «что я могу предложить» (у «Кошка» есть признаки «существительное, ж. р., одушевлённое»);</li>
+    <li><b>Value</b> — «что я отдам, если меня выберут».</li>
+  </ul>
+  <div class="formula">Attention(Q, K, V) = softmax( Q·Kᵀ / √d<sub>k</sub> + mask ) · V</div>
+  <p>Скалярное произведение Q·K даёт «похожесть» запроса и ключа. Деление на √d_k не даёт softmax насытиться на больших размерностях. Softmax превращает оценки в веса с суммой 1, и результат оказывается взвешенной суммой Value. Это похоже на мягкий <code>map[key]value</code>: вместо точного совпадения ключа вы получаете смесь всех значений, взвешенную по похожести.</p>
+  <ul>
+    <li><b>Causal mask.</b> В decoder-only модели токен видит только себя и прошлое: оценкам «из будущего» присваивается −∞. Поэтому обучение параллельно (все позиции предсказываются за один проход, маска не даёт подсмотреть ответ), а инференс идёт авторегрессивно. У BERT-подобных encoder-моделей (из них часто делают embedding-модели и reranker'ы) маски нет, и каждый токен видит всё предложение.</li>
+    <li><b>Multi-head.</b> Attention выполняется параллельно в H «головах» (32–128) с меньшей размерностью d_head = d_model / H, обычно 128. Разные головы учатся разным отношениям: «предыдущий токен», синтаксическая связь, кореференция, копирование (induction heads). Выходы голов конкатенируются. Вообще говоря, головы не обязаны быть интерпретируемыми: на визуализации ниже поведение идеализировано.</li>
+    <li><b>GQA/MQA.</b> Чтобы сэкономить память KV-cache, у многих голов Query общие K и V. Например, 64 головы Q и 8 голов KV дают кэш в 8 раз меньше. Это важно в <a href="#inference">разделе про инференс</a>.</li>
+  </ul>
+
+  <div class="viz" id="viz-attn">
+    <p class="viz-title">Attention: куда «смотрит» токен</p>
+    <p class="viz-sub">Кликните по токену (или строке матрицы): дуги покажут веса внимания от него (query) к остальным токенам (keys). Матрица внизу — те же веса для всех пар, строка = query, столбец = key. Головы идеализированы, их веса заданы вручную для наглядности. Выключите causal mask, чтобы увидеть двунаправленное внимание, как в encoder-моделях.</p>
+    <div class="controls">
+      <span class="btn-group" id="attn-heads">
+        <button class="btn sel" type="button" data-head="prev">Голова 1: предыдущий токен</button>
+        <button class="btn" type="button" data-head="syn">Голова 2: синтаксис</button>
+        <button class="btn" type="button" data-head="coref">Голова 3: кореференция</button>
+        <button class="btn" type="button" data-head="avg">Среднее по головам</button>
+      </span>
+      <label><input type="checkbox" id="attn-mask" checked> causal mask</label>
+    </div>
+    <svg id="attn-svg" viewBox="0 0 700 490" role="img" aria-label="Веса внимания между токенами предложения"></svg>
+    <div class="readout" id="attn-readout"></div>
+  </div>
+
+  <div class="callout go"><span class="title">Аналогия из Go</span>
+    <p>Слой attention похож на fan-in: каждая горутина-позиция читает из всех предыдущих «каналов» одновременно, но с весами. Слой MLP работает как <code>errgroup</code> с независимыми задачами: каждая позиция обрабатывается сама по себе. Стек блоков — это pipeline из N стадий, где на каждой стадии представление токена обогащается контекстом.</p>
+  </div>
+  <div class="callout tip"><span class="title">Что сказать на собесе про сложность</span>
+    <p>Attention вычисляет оценки для всех пар позиций, поэтому <b>вычисления растут квадратично</b> по длине последовательности: O(n²·d) на слой. FlashAttention не материализует матрицу n×n в памяти (память O(n)), но число FLOP остаётся квадратичным. MLP растёт линейно. На коротких контекстах доминирует MLP, на сотнях тысяч токенов доминирует attention. Отсюда длинный prefill и TTFT на больших документах (<a href="#context">раздел про стоимость контекста</a>).</p>
+  </div>
+
+  <!-- ===================================================== -->
+  <h2 id="embeddings">Эмбеддинги и сходство</h2>
+  <p><b>Embedding</b> — это вектор фиксированной длины (обычно 256–3072 чисел), который кодирует смысл текста так, что похожие по смыслу тексты оказываются рядом. Внутри LLM эмбеддинги есть у каждого токена на каждом слое. В продуктах под «эмбеддингами» обычно понимают выход отдельной <b>embedding-модели</b>: она превращает целый фрагмент текста в один вектор для поиска, кластеризации и дедупликации. Это основа RAG (модуль 4).</p>
+  <p>Anthropic собственной embedding-модели не предоставляет и в документации рекомендует Voyage AI. У OpenAI есть <code>text-embedding-3-small</code> (1536 измерений) и <code>-large</code> (3072). Open-source вариантов много: BGE, E5, multilingual-e5, nomic и другие.</p>
+
+  <h3>Косинусное сходство</h3>
+  <div class="formula">cos(a, b) = (a · b) / (‖a‖ · ‖b‖) ∈ [−1, 1]</div>
+  <ul>
+    <li>Косинус сравнивает <b>направление</b> векторов и игнорирует длину. Если векторы заранее нормированы до ‖v‖=1, косинус равен скалярному произведению, и ранжирование по cosine, dot product и L2 совпадает. Большинство embedding-моделей отдают уже нормированные векторы. Проверьте это и выбирайте самую дешёвую метрику в индексе.</li>
+    <li><b>Абсолютные значения зависят от модели.</b> У многих моделей даже несвязанные тексты дают косинус 0.2–0.5, а не 0 (анизотропия пространства). Порог «релевантно, если &gt; 0.8» из чужой статьи не переносится. Калибруйте его на своих размеченных парах.</li>
+    <li><b>Векторы разных моделей несравнимы.</b> Смена модели эмбеддингов означает полную переиндексацию. Храните рядом с вектором имя и версию модели.</li>
+    <li><b>Память.</b> float32 × 1536 = 6 КБ на вектор, 10M векторов занимают ≈ 61 ГБ без учёта индекса. Отсюда интерес к меньшим размерностям (Matryoshka-эмбеддинги можно обрезать) и к квантизации векторов (int8, бинарная).</li>
+  </ul>
+
+  <div class="viz" id="viz-emb">
+    <p class="viz-title">Эмбеддинги в 2D: косинус и ближайшие соседи</p>
+    <p class="viz-sub">Игрушечная 2D-картинка. Настоящие эмбеддинги имеют сотни и тысячи измерений, а проекции вроде t-SNE/UMAP искажают расстояния. Здесь косинус считается по углу вектора от центра (крестик). Кликните по слову, чтобы сделать его запросом, или <b>перетаскивайте</b> ромб запроса. Обратите внимание на «мышь» между животными и программированием (многозначность) и на «cat» рядом с «кошкой» (мультиязычная модель). Точки на одном луче имеют косинус 1 при разной длине.</p>
+    <div class="controls">
+      <label>top-k <input type="range" id="emb-k" min="1" max="8" step="1" value="4"> <output></output></label>
+      <span class="legend" id="emb-legend"></span>
+    </div>
+    <svg id="emb-svg" viewBox="0 0 640 460" role="img" aria-label="Двумерная карта эмбеддингов" style="touch-action:none"></svg>
+    <div class="readout" id="emb-readout"></div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab-panel" data-tab="Go"><pre><code class="lang-go">package vecs
+
+import (
+	"errors"
+	"fmt"
+	"math"
+	"slices"
+)
+
+// Cosine — косинусное сходство. float64-аккумулятор, чтобы не терять точность
+// на 3072 измерениях.
+func Cosine(a, b []float32) (float64, error) {
+	if len(a) != len(b) {
+		return 0, fmt.Errorf("dim mismatch: %d vs %d", len(a), len(b))
+	}
+	var dot, na, nb float64
+	for i := range a {
+		x, y := float64(a[i]), float64(b[i])
+		dot += x * y
+		na += x * x
+		nb += y * y
+	}
+	if na == 0 || nb == 0 {
+		return 0, errors.New("zero vector")
+	}
+	return dot / (math.Sqrt(na) * math.Sqrt(nb)), nil
+}
+
+type Hit struct {
+	ID    string
+	Score float64
+}
+
+// TopK — брутфорс-поиск. Для 100K векторов × 1536 это ~150M умножений,
+// единицы-десятки миллисекунд. Дальше нужен ANN-индекс (HNSW, модуль 4).
+func TopK(q []float32, docs map[string][]float32, k int) ([]Hit, error) {
+	hits := make([]Hit, 0, len(docs))
+	for id, v := range docs {
+		s, err := Cosine(q, v)
+		if err != nil {
+			return nil, fmt.Errorf("doc %s: %w", id, err)
+		}
+		hits = append(hits, Hit{id, s})
+	}
+	slices.SortFunc(hits, func(x, y Hit) int {
+		switch {
+		case x.Score &gt; y.Score:
+			return -1
+		case x.Score &lt; y.Score:
+			return 1
+		}
+		return 0
+	})
+	return hits[:min(k, len(hits))], nil
+}
+</code></pre></div>
+    <div class="tab-panel" data-tab="Python (numpy)"><pre><code class="lang-python">import numpy as np
+
+def normalize(m: np.ndarray) -&gt; np.ndarray:
+    n = np.linalg.norm(m, axis=-1, keepdims=True)
+    return m / np.clip(n, 1e-12, None)
+
+def top_k(query: np.ndarray, docs: np.ndarray, k: int = 5):
+    """query: (d,), docs: (N, d). Возвращает индексы и косинусы, по убыванию."""
+    q = normalize(query)
+    d = normalize(docs)            # в проде нормализуйте один раз при индексации
+    scores = d @ q                 # (N,) — после нормализации dot == cosine
+    k = min(k, len(scores))
+    idx = np.argpartition(-scores, k - 1)[:k]   # O(N), без полной сортировки
+    idx = idx[np.argsort(-scores[idx])]
+    return idx, scores[idx]
+
+rng = np.random.default_rng(0)
+docs = rng.normal(size=(10_000, 1536)).astype(np.float32)
+query = docs[42] + 0.1 * rng.normal(size=1536).astype(np.float32)
+idx, sc = top_k(query, docs, k=3)
+print(idx, sc.round(3))   # 42 будет первым с косинусом ≈ 0.99
+</code></pre></div>
+  </div>
+
+  <!-- ===================================================== -->
+  <h2 id="training">Как обучают: pretraining → SFT → RLHF</h2>
+  <p>Поведение модели в вашем продукте задаётся несколькими стадиями обучения. Понимание стадий объясняет её причуды: угодничество, многословие, отказы, уверенный тон при незнании.</p>
+
+  <div class="viz" id="viz-train">
+    <p class="viz-title">Этапы обучения</p>
+    <p class="viz-sub">Кликните по этапу, чтобы увидеть данные, цель обучения и то, как на каждой стадии меняется ответ на один и тот же запрос.</p>
+    <svg id="train-svg" viewBox="0 0 700 150" role="img" aria-label="Схема этапов обучения LLM"></svg>
+    <div class="stage-panel" id="train-panel"></div>
+  </div>
+
+  <ul>
+    <li><b>Pretraining.</b> Next-token prediction на триллионах токенов (веб, книги, код). Результат — base model, мощный «автодополнятор» без понятия о диалоге. На вопрос он может ответить списком похожих вопросов, потому что так выглядят FAQ-страницы в интернете. Это самая дорогая стадия (месяцы на тысячах GPU), и на ней закладываются знания и knowledge cutoff.</li>
+    <li><b>SFT (supervised fine-tuning, instruction tuning).</b> Десятки и сотни тысяч примеров «инструкция → хороший ответ» в формате чата с ролями. Модель учит формат диалога, следование инструкциям, вызов инструментов. Новых знаний почти не добавляется: SFT меняет поведение, а не эрудицию. Тот же вывод работает и для вашего fine-tuning (модуль 8).</li>
+    <li><b>RLHF.</b> Люди сравнивают пары ответов, на этих сравнениях обучается reward model, затем политика оптимизируется RL (PPO) под эту награду с KL-штрафом, чтобы не уйти далеко от SFT-модели (InstructGPT, 2022). Альтернатива без reward model — <b>DPO</b>, которое оптимизирует предпочтения напрямую.</li>
+    <li><b>RLAIF и Constitutional AI</b> (Anthropic, 2022). Сравнения делает не человек, а модель, опираясь на явный список принципов («конституцию»). Модель критикует и переписывает свои ответы, а AI-разметка предпочтений масштабируется дешевле человеческой.</li>
+    <li><b>RL с проверяемыми наградами</b> (RLVR). Награда выдаётся за верный ответ в математике, за прошедшие тесты в коде, за успешное завершение агентной задачи. Именно так обучены современные reasoning-модели: длинные цепочки рассуждений появляются потому, что они повышают награду.</li>
+  </ul>
+  <div class="callout warn"><span class="title">Побочные эффекты, которые вы увидите в проде</span>
+    <p><b>Sycophancy</b> (угодничество): люди-оценщики предпочитают согласие, поэтому модель склонна соглашаться с неверной предпосылкой в вопросе. <b>Многословие</b>: длинные ответы чаще нравились оценщикам. <b>Уверенный тон</b>: «не знаю» редко получало высокую оценку. <b>Reward hacking</b> в агентах: модель может «подогнать» тест вместо починки кода. Против всего этого помогают явные инструкции, evals и проверки в коде, а не надежда на «умную модель».</p>
+  </div>
+
+  <!-- ===================================================== -->
+  <h2 id="hallucinations">Галлюцинации и knowledge cutoff</h2>
+  <p><b>Галлюцинация</b> — правдоподобный, но неверный или неподтверждённый вывод: несуществующая функция в SDK, выдуманная ссылка на статью, неверная цифра в резюме документа. Это не баг, который исправят в следующей версии. Это следствие того, как модель устроена и обучена.</p>
+  <h3>Почему возникают</h3>
+  <ul>
+    <li><b>Цель обучения — правдоподобие, а не истинность.</b> Если правильный факт в данных встречался редко (long tail: мелкие библиотеки, внутренние термины, люди без статьи в Википедии), модель выдаст статистически похожую форму ответа.</li>
+    <li><b>Обучение и бенчмарки поощряют угадывание.</b> Если за «не знаю» ставят 0, а за угаданный ответ иногда дают балл, оптимальная стратегия — угадывать. Этот механизм подробно разобран в статье OpenAI 2025 года «Why Language Models Hallucinate».</li>
+    <li><b>Авторегрессия.</b> Первый неверный токен (выдуманное имя) дальше подкрепляется связным текстом.</li>
+    <li><b>Контекст «перебивает» знания или теряется.</b> Длинный контекст с противоречиями, нужный факт в середине 200K токенов (lost in the middle) или устаревший документ в RAG приводят к ответу, который уверенно опирается не на то.</li>
+    <li><b>Токенизация и символьные задачи</b>: счёт, арифметика, точные строки.</li>
+  </ul>
+  <h3>Как снижать (по убыванию эффекта)</h3>
+  <ol>
+    <li><b>Grounding.</b> Дайте факты в контексте (RAG, результаты tool use) и требуйте ответ только по ним, со ссылками или цитатами на источник. Для длинных документов попросите сначала выписать дословные цитаты, а потом отвечать на их основе.</li>
+    <li><b>Разрешите «не знаю».</b> Явная инструкция и отдельное поле в схеме ответа (<code>"answer": null, "reason": "not_in_context"</code>). Метрика отказов идёт в evals.</li>
+    <li><b>Вынесите точные операции в инструменты</b>: калькулятор, SQL, поиск по API-докам, проверку существования URL или пакета.</li>
+    <li><b>Проверка в коде</b>: схема (structured outputs), валидация ID и ссылок по базе, компиляция и тесты для сгенерированного кода.</li>
+    <li><b>Второй проход</b>: verifier/judge-модель, проверка согласованности нескольких сэмплов (self-consistency), reasoning с большим effort для сложных задач.</li>
+    <li><b>Измеряйте</b>: faithfulness и groundedness метрики на golden-наборе (модуль 6). Без измерения «снизили галлюцинации» остаётся ощущением.</li>
+  </ol>
+  <p>Снижение temperature <b>не лечит</b> фактические галлюцинации. Оно делает ответ стабильнее, но если самый вероятный токен неверен, модель будет стабильно неверной.</p>
+
+  <h3>Knowledge cutoff</h3>
+  <p>Модель знает мир только до даты среды обучения (training data cutoff). Кроме того, о последних месяцах перед отсечкой данных в интернете мало, поэтому «надёжная» граница знаний обычно раньше заявленной. Модель <b>не знает текущую дату</b> и не знает, что вышла новая версия вашей библиотеки. Практика:</p>
+  <ul>
+    <li>передавайте текущую дату в контексте. Ставьте её <b>после</b> кэшируемого префикса и с точностью до дня, а не секунды: timestamp в начале system prompt инвалидирует prompt cache при каждом запросе;</li>
+    <li>для свежих данных (цены, версии API, новости) используйте поиск или tool, а не память модели;</li>
+    <li>для кодогенерации под быстро меняющиеся SDK кладите в контекст актуальные фрагменты документации.</li>
+  </ul>
+
+  <!-- ===================================================== -->
+  <h2 id="inference">Инференс: KV-cache и квантизация</h2>
+  <h3>Что кэшируется</h3>
+  <p>На каждом шаге декодирования новый токен считает attention по <b>всем</b> предыдущим позициям. Для этого нужны их векторы K и V во всех слоях. Они зависят только от префикса, а префикс не меняется, поэтому их сохраняют в <b>KV-cache</b> и на каждом шаге пропускают через модель только один новый токен. Без кэша шаг t стоил бы полного прохода по t токенам, и генерация N токенов была бы O(N²) проходов вместо O(N).</p>
+  <div class="formula">KV-память на последовательность = 2 (K и V) × layers × kv_heads × d_head × seq_len × bytes_per_value</div>
+  <p>Пример для модели уровня Llama 3 8B (32 слоя, 8 KV-голов благодаря GQA, d_head = 128, FP16): 2 × 32 × 8 × 128 × 2 байта = <b>128 КБ на токен</b>. 8K токенов занимают 1 ГБ, 128K токенов — 16 ГБ, то есть больше половины весов самой модели (16 ГБ в FP16). На сервере с батчем из 32 параллельных запросов KV-cache, а не веса, определяет, сколько пользователей влезет на GPU. Поэтому в vLLM появился PagedAttention: кэш выделяется страницами, как виртуальная память, без фрагментации.</p>
+
+  <h3>Prefill и decode: почему TTFT и tokens/s — разные метрики</h3>
+  <div class="grid">
+    <div class="card"><h4>Prefill</h4><p>Весь промпт обрабатывается <b>за один параллельный проход</b>, и KV-cache заполняется целиком. Это большие матричные умножения, ограниченные вычислениями (<b>compute-bound</b>). Время растёт с длиной входа, а на длинных контекстах сверхлинейно из-за attention. Определяет <b>TTFT</b> (time to first token).</p></div>
+    <div class="card"><h4>Decode</h4><p>По одному токену за шаг. На каждом шаге нужно прочитать из памяти все веса и весь KV-cache ради одного вектора, поэтому шаг ограничен <b>пропускной способностью памяти</b> (memory-bound). Определяет <b>tokens/s</b> или ITL (inter-token latency).</p></div>
+  </div>
+  <p>Оценка сверху для decode при batch = 1: tokens/s ≈ bandwidth / байты, читаемые на шаг. У 8B-модели в FP16 это 16 ГБ, у H100 около 3.35 ТБ/с, получается потолок ≈ 200 токенов/с. Квантизация до INT4 уменьшает читаемые байты в 4 раза и почти пропорционально ускоряет decode. Батчинг почти бесплатно увеличивает суммарную пропускную способность: веса читаются один раз на весь батч. Поэтому провайдеры держат большие батчи, а скорость отдельного запроса колеблется в зависимости от нагрузки.</p>
+  <div class="callout go"><span class="title">Аналогия из Go и SLO</span>
+    <p>TTFT — это время до первого байта ответа (как <code>httptrace.GotFirstResponseByte</code>), tokens/s — это пропускная способность потока. Для чата важнее TTFT: пользователь видит, что «пошло». Для генерации отчёта в фоне важнее tokens/s и цена. Мерить нужно обе метрики отдельно, в перцентилях p50/p95, как любую латентность. Итоговая латентность ≈ TTFT + output_tokens / tokens_per_s.</p>
+  </div>
+
+  <div class="viz" id="viz-ar">
+    <p class="viz-title">Авторегрессия с KV-cache: prefill блоком, decode по одному</p>
+    <p class="viz-sub">Нажмите «Шаг» или «Играть». На первом шаге весь промпт обрабатывается параллельно (prefill) и заполняет кэш, затем каждый шаг обрабатывает только последний токен, добавляет его K/V в кэш и выдаёт следующий. Внизу — шкала времени: первый блок задаёт TTFT, дальше идут одинаковые decode-шаги.</p>
+    <div class="controls">
+      <button class="btn primary" type="button" id="ar-play">▶ Играть</button>
+      <button class="btn" type="button" id="ar-step">Шаг</button>
+      <button class="btn" type="button" id="ar-reset">Сброс</button>
+      <label><input type="checkbox" id="ar-nocache"> показать работу без KV-cache</label>
+    </div>
+    <svg id="ar-svg" viewBox="0 0 700 330" role="img" aria-label="Пошаговая генерация токенов с KV-cache"></svg>
+    <div class="readout" id="ar-readout"></div>
+  </div>
+
+  <div class="viz" id="viz-kv">
+    <p class="viz-title">Калькулятор памяти: веса + KV-cache</p>
+    <p class="viz-sub">Выберите пресет или двигайте ползунки. Пресеты описывают открытые модели с известной архитектурой: у Claude архитектура не опубликована. Полоса сравнивается с памятью GPU (24 ГБ — потребительская карта, 80 ГБ — H100/A100, 640 ГБ — узел из 8×80). Внизу — оценка сверху для скорости decode на H100.</p>
+    <div class="controls">
+      <span class="btn-group" id="kv-presets">
+        <button class="btn sel" type="button" data-p="8b">8B, GQA (как Llama 3 8B)</button>
+        <button class="btn" type="button" data-p="7bmha">7B без GQA (MHA)</button>
+        <button class="btn" type="button" data-p="70b">70B, GQA</button>
+        <button class="btn" type="button" data-p="405b">405B, GQA</button>
+      </span>
+    </div>
+    <div class="controls">
+      <label>параметры, млрд <input type="range" id="kv-params" min="1" max="500" step="1" value="8"> <output></output></label>
+      <label>слои <input type="range" id="kv-layers" min="8" max="128" step="1" value="32"> <output></output></label>
+      <label>KV-головы <input type="range" id="kv-heads" min="1" max="64" step="1" value="8"> <output></output></label>
+      <label>длина контекста <input type="range" id="kv-seq" min="0" max="100" step="1" value="50"> <output></output></label>
+      <label>батч (одновременных запросов) <input type="range" id="kv-batch" min="1" max="64" step="1" value="1"> <output></output></label>
+    </div>
+    <div class="controls">
+      <label>веса <select id="kv-wq" style="width:auto"><option value="2">FP16/BF16</option><option value="1">INT8/FP8</option><option value="0.5">INT4</option></select></label>
+      <label>KV-cache <select id="kv-cq" style="width:auto"><option value="2">FP16</option><option value="1">FP8</option><option value="0.5">INT4</option></select></label>
+      <span class="muted" style="font-size:13px">d_head = 128</span>
+    </div>
+    <svg id="kv-svg" viewBox="0 0 640 170" role="img" aria-label="Сравнение требуемой памяти с объёмом GPU"></svg>
+    <div class="readout" id="kv-readout"></div>
+  </div>
+
+  <h3>Квантизация</h3>
+  <p><b>Квантизация</b> хранит веса (а иногда и активации или KV-cache) в меньшей точности. Модель занимает меньше памяти, и decode идёт быстрее, потому что читается меньше байт.</p>
+  <table>
+    <tr><th>Формат</th><th class="num">Байт/параметр</th><th class="num">70B-модель</th><th>Качество (типично)</th></tr>
+    <tr><td>FP32</td><td class="num">4</td><td class="num">280 ГБ</td><td>эталон, для инференса не используют</td></tr>
+    <tr><td>FP16 / BF16</td><td class="num">2</td><td class="num">140 ГБ</td><td>стандарт инференса, без потерь</td></tr>
+    <tr><td>INT8 / FP8</td><td class="num">1</td><td class="num">70 ГБ</td><td>почти без потерь при аккуратной калибровке (LLM.int8, FP8 на H100)</td></tr>
+    <tr><td>INT4 (GPTQ, AWQ, GGUF Q4_K_M)</td><td class="num">≈ 0.5–0.6</td><td class="num">≈ 35–40 ГБ</td><td>небольшая деградация: обычно единицы процентов на бенчмарках, заметнее в коде, математике, длинном контексте и на небольших моделях</td></tr>
+    <tr><td>2–3 бита</td><td class="num">&lt; 0.4</td><td class="num">&lt; 28 ГБ</td><td>деградация быстро растёт, нужен eval на ваших задачах</td></tr>
+  </table>
+  <ul>
+    <li>Практическое правило для self-hosted: <b>большая модель в INT4 обычно лучше маленькой в FP16</b> при одинаковом объёме памяти.</li>
+    <li>Бенчмарк-потеря в «1–2%» может оказаться 10% на вашей узкой задаче (строгий JSON, редкий язык). Прогоняйте свой eval-набор (модуль 6) на квантизованной версии до выката.</li>
+    <li>Квантизация KV-cache (FP8) позволяет вдвое увеличить батч или контекст. Качество страдает меньше, чем при INT4 для весов, но на очень длинных контекстах это надо проверять.</li>
+    <li>В API провайдеров квантизацию не видно и не настроить, это их внутренняя оптимизация. Для вас она важна при self-hosting (vLLM, llama.cpp, Ollama; модуль 7).</li>
+  </ul>
+
+  <!-- ===================================================== -->
+  <h2 id="context">Контекстное окно и его цена</h2>
+  <p><b>Контекстное окно</b> — максимальное число токенов, которое модель обрабатывает за один вызов: system + история + документы + tools + <i>сам ответ</i>. На момент написания (сентябрь 2026) у Claude Opus 5.x, Sonnet 5 и Fable 5.1 окно составляет 1M токенов (≈ 700 тыс. английских слов, несколько толстых книг), у Haiku 4.5 — 200K. Максимальный вывод у топовых моделей — 128K токенов, большие значения только со стримингом. Окно у API stateless: каждый ход чата заново отправляет всю историю, и вы снова за неё платите (если не спасает prompt caching).</p>
+  <h3>Почему длинный контекст стоит дорого</h3>
+  <ul>
+    <li><b>Деньги линейны.</b> Каждый входной токен оплачивается при <b>каждом</b> запросе. Документ на 100K токенов в Claude Opus 5 ($5 за 1M input) стоит $0.50 за вызов. При 1 запросе в секунду это ≈ $43 000 в день только за вход.</li>
+    <li><b>Вычисления квадратичны.</b> Attention на 1M токенов требует ~10¹² пар на слой и голову. Prefill длинного документа длится секунды и десятки секунд, TTFT растёт.</li>
+    <li><b>Память линейна.</b> KV-cache на 1M токенов занимает десятки и сотни гигабайт, поэтому провайдеры дорого берут за длинный контекст и ограничивают его.</li>
+    <li><b>Качество не бесплатно.</b> Эффект <b>lost in the middle</b> (Liu et al., 2023): модели лучше используют информацию в начале и конце контекста, чем в середине. Тест «иголка в стоге сена» современные модели проходят почти идеально, но задачи, где нужно <i>связать</i> много разрозненных фактов, деградируют с ростом контекста (так называемый context rot). Больше контекста не значит лучше: лишние 500K токенов «на всякий случай» и дороже, и часто хуже, чем 20K хорошо отобранных.</li>
+  </ul>
+  <div class="callout tip"><span class="title">Инженерные рычаги</span>
+    <p><b>Prompt caching</b> — это сохранённый провайдером KV-cache вашего префикса. Поэтому он требует побайтового совпадения префикса (tools → system → messages), чтение стоит ≈ 0.1× цены input, а TTFT на кэш-хите заметно падает: prefill уже сделан. Запись в кэш стоит 1.25× (TTL 5 минут) или 2× (TTL 1 час). Дальше идут <b>RAG вместо «всё в контекст»</b>, суммаризация и обрезка истории чата, <b>Batch API</b> (−50%) для офлайн-задач, выбор меньшей модели для простых шагов. Важные инструкции ставьте в конец, после длинных документов: так рекомендует и документация Anthropic.</p>
+  </div>
+
+  <div class="viz" id="viz-cost">
+    <p class="viz-title">Калькулятор стоимости контекста</p>
+    <p class="viz-sub">Цены на сентябрь 2026 ($ за 1M токенов input / output). Кэш-хит — доля входных токенов, прочитанных из prompt cache по 0.1× цены. Упрощение: стоимость записи в кэш (1.25×) не учитывается, так как предполагается постоянно «горячий» префикс. Внизу — та же нагрузка на всех моделях.</p>
+    <div class="controls">
+      <label>модель <select id="cost-model" style="width:auto"></select></label>
+      <label><input type="checkbox" id="cost-batch"> Batch API (−50%)</label>
+    </div>
+    <div class="controls">
+      <label>input, токенов <input type="range" id="cost-in" min="0" max="100" step="1" value="50"> <output></output></label>
+      <label>output, токенов <input type="range" id="cost-out" min="0" max="100" step="1" value="45"> <output></output></label>
+      <label>запросов/с <input type="range" id="cost-rps" min="0" max="100" step="1" value="40"> <output></output></label>
+      <label>кэш-хит <input type="range" id="cost-cache" min="0" max="95" step="5" value="0"> <output></output></label>
+    </div>
+    <div class="kpi" id="cost-kpi"></div>
+    <svg id="cost-svg" viewBox="0 0 640 230" role="img" aria-label="Стоимость в месяц по моделям"></svg>
+    <div class="readout" id="cost-readout"></div>
+  </div>
+
+  <!-- ===================================================== -->
+  <h2 id="reasoning">Reasoning и thinking-модели</h2>
+  <p>Идея <b>test-time compute</b>: вместо того чтобы сделать модель больше, дать ей больше вычислений на конкретный запрос. Модель генерирует длинную цепочку рассуждений (thinking tokens): пробует гипотезы, проверяет себя, возвращается. Только после этого она пишет ответ. Способность обучена RL с проверяемыми наградами, и качество на математике, коде и многошаговых задачах растёт с объёмом рассуждений.</p>
+  <h3>Как это устроено в Claude API (сентябрь 2026)</h3>
+  <pre><code class="lang-json">{
+  "model": "claude-opus-5",
+  "max_tokens": 32000,
+  "thinking": { "type": "adaptive" },
+  "output_config": { "effort": "high" },
+  "messages": [{ "role": "user", "content": "Найди гонку данных в этом коде: ..." }]
+}</code></pre>
+  <ul>
+    <li><code>thinking: {type: "adaptive"}</code>: модель сама решает, думать ли и сколько, в зависимости от сложности запроса. Старый <code>budget_tokens</code> на новых моделях отклоняется с 400.</li>
+    <li><code>effort</code> (<code>low | medium | high | xhigh | max</code>) задаёт общую «старательность»: глубину рассуждений, число вызовов инструментов в агентном цикле, подробность ответа. Он заменяет temperature как главный рычаг на новейших моделях.</li>
+    <li>Thinking-токены <b>оплачиваются как output</b> и занимают <code>max_tokens</code>. Рассуждение может быть в 5–50 раз длиннее ответа, и именно оно определяет цену и латентность.</li>
+    <li>В ответе приходят блоки <code>thinking</code> (в стриме это <code>thinking_delta</code>). При многоходовом tool use их нужно возвращать в историю без изменений, как требует документация.</li>
+  </ul>
+  <h3>Когда окупается</h3>
+  <table>
+    <tr><th>Задача</th><th>Effort / thinking</th><th>Почему</th></tr>
+    <tr><td>Классификация, извлечение полей, роутинг, короткий чат</td><td><code>low</code>, часто на Haiku/Sonnet</td><td>Рассуждение не повышает точность, но умножает цену и TTFT</td></tr>
+    <tr><td>RAG-ответ по найденным документам</td><td><code>medium</code></td><td>Основная сложность в поиске, а не в выводе</td></tr>
+    <tr><td>Отладка, код-ревью, сложный SQL, планирование</td><td><code>high</code></td><td>Многошаговый вывод, проверка гипотез</td></tr>
+    <tr><td>Агенты с длинными задачами, трудная математика, архитектурный анализ</td><td><code>xhigh</code> / <code>max</code></td><td>Ошибка стоит дороже токенов, есть проверяемый результат</td></tr>
+  </table>
+  <div class="callout warn"><span class="title">Режимы отказа</span>
+    <p><b>Overthinking</b>: на простом запросе модель тратит тысячи токенов и десятки секунд. <b>Обрезка</b>: <code>max_tokens</code> меньше, чем нужно на мысли и ответ, и вы получаете <code>stop_reason: "max_tokens"</code> без ответа. <b>Таймауты</b>: HTTP-клиент с таймаутом 30 с не дождётся ответа на <code>max</code>, нужен стриминг. Подход инженера: effort — это параметр маршрута, как размер пула соединений. Подбирайте его по eval-метрикам и цене на задачу, а не «на всякий случай max». Для reasoning-моделей не нужно писать «думай шаг за шагом», они и так это делают.</p>
+  </div>
+
+  <!-- ===================================================== -->
+  <h2 id="practice">Практика</h2>
+  <div class="task">
+    <h3>Задание 1: token-бюджетер на Go</h3>
+    <p>Напишите CLI <code>tokbudget</code>. Он читает директорию документов (.md/.txt), считает токены каждого файла через <code>count_tokens</code> и печатает таблицу: файл, символы, токены, символы на токен, стоимость одного прогона в input для Opus 5, Sonnet 5 и Haiku 4.5.</p>
+    <p><b>Критерии готовности:</b> конкурентные запросы через <code>errgroup</code> с лимитом (<code>SetLimit</code>) и ретраями на 429 с учётом <code>retry-after</code>; вычтено «пустое» сообщение (служебные токены); есть сравнение: для 10+ парных документов EN/RU посчитан средний коэффициент RU/EN; итог отражает долю документов, которые не влезают в 200K (окно Haiku).</p>
+    <label class="check"><input type="checkbox" data-save="m01-t1"> Сделал и записал коэффициент RU/EN для своего домена</label>
+  </div>
+  <div class="task">
+    <h3>Задание 2: сэмплинг своими руками</h3>
+    <p>Поднимите локальную open-source модель (Ollama или vLLM, например 3–8B) и получите logprobs для 20 top-токенов следующего шага. Реализуйте на Python или Go функцию <code>sample(logits, T, top_k, top_p)</code> в том же порядке, что в визуализации, и сравните с сэмплингом движка по гистограмме из 1000 запусков.</p>
+    <p><b>Критерии готовности:</b> гистограммы совпадают в пределах статистического шума; есть график энтропии в зависимости от T; вы можете объяснить, почему при T=0 и повторных запусках ответ всё равно иногда меняется.</p>
+    <label class="check"><input type="checkbox" data-save="m01-t2"> Сделал</label>
+  </div>
+  <div class="task">
+    <h3>Задание 3: мини-поиск на эмбеддингах</h3>
+    <p>Возьмите 200–500 абзацев своей документации, получите эмбеддинги (Voyage, OpenAI или локальная multilingual-e5), сохраните их в файл и реализуйте на Go поиск top-5 по косинусу (код выше). Составьте 20 запросов с известным правильным абзацем.</p>
+    <p><b>Критерии готовности:</b> посчитан recall@5; найдены и описаны минимум 3 ошибки поиска (многозначность, опечатка, запрос на другом языке); измерено распределение косинусов для релевантных и нерелевантных пар и выбран порог отсечения по данным.</p>
+    <label class="check"><input type="checkbox" data-save="m01-t3"> Сделал</label>
+  </div>
+  <div class="task">
+    <h3>Задание 4: TTFT и tokens/s</h3>
+    <p>Через стриминг API измерьте TTFT и скорость decode для одной модели при входе 1K, 10K, 100K токенов и выходе 500 токенов, по 10 прогонов на точку. Повторите прогон 100K с prompt caching (второй запрос должен быть кэш-хитом).</p>
+    <p><b>Критерии готовности:</b> таблица p50/p95; видно, что TTFT растёт со входом, а tokens/s почти не меняется; видно падение TTFT на кэш-хите и значение <code>usage.cache_read_input_tokens</code>.</p>
+    <label class="check"><input type="checkbox" data-save="m01-t4"> Сделал</label>
+  </div>
+
+  <!-- ===================================================== -->
+  <h2 id="selfcheck">Самопроверка</h2>
+  <details class="q"><summary>Почему один и тот же по смыслу текст на русском стоит больше токенов, чем на английском?</summary><div class="a"><p>Словарь BPE выучен на корпусе, где английского на порядки больше: английские слова стали целыми токенами, русские режутся на части. Кириллическая буква занимает 2 байта в UTF-8, и без слияний это два токена. Богатая морфология даёт больше уникальных словоформ. Итог — множитель примерно 1.3–3× в зависимости от токенизатора, и его нужно измерять.</p></div></details>
+  <details class="q"><summary>Что делают temperature, top_k и top_p и в каком порядке?</summary><div class="a"><p>Temperature делит логиты: T&lt;1 делает распределение острее, T&gt;1 площе, T→0 даёт greedy. top_k оставляет k лучших кандидатов, top_p — минимальное «ядро» с суммой ≥ p. Обычно порядок такой: temperature → top_k → top_p → перенормировка → сэмплинг. На новейших Claude эти параметры убраны (400), вместо них есть effort.</p></div></details>
+  <details class="q"><summary>Зачем в attention делить на √d<sub>k</sub> и что делает causal mask?</summary><div class="a"><p>Дисперсия скалярного произведения растёт с размерностью. Без масштабирования softmax насыщается до почти one-hot, и градиенты затухают. Causal mask ставит −∞ на позиции из будущего, чтобы токен видел только прошлое. Это позволяет обучать все позиции параллельно без утечки ответа и соответствует авторегрессивной генерации.</p></div></details>
+  <details class="q"><summary>Посчитайте KV-cache для модели с 80 слоями, 8 KV-головами, d_head=128, FP16, контекст 32K, батч 4.</summary><div class="a"><p>2 × 80 × 8 × 128 × 2 байта = 327 680 байт ≈ 320 КБ на токен. × 32 768 токенов ≈ 10 ГБ на последовательность. × 4 ≈ 40 ГБ. Плюс веса 70B-модели в FP16 (140 ГБ): нужно минимум 2–3 карты по 80 ГБ.</p></div></details>
+  <details class="q"><summary>Почему TTFT растёт с длиной промпта, а tokens/s почти нет?</summary><div class="a"><p>TTFT определяется prefill: весь вход обрабатывается за один compute-bound проход, объём работы растёт линейно, а для attention квадратично. Decode на каждом шаге обрабатывает один токен и ограничен чтением весов из памяти. Рост KV-cache немного замедляет decode на очень длинных контекстах, но основная часть времени шага — чтение весов.</p></div></details>
+  <details class="q"><summary>Косинус двух несвязанных текстов равен 0.45. Это баг?</summary><div class="a"><p>Нет. Пространства многих embedding-моделей анизотропны: все векторы лежат в узком конусе, и «ноль» смещён. Значение косинуса имеет смысл только относительно распределения для данной модели. Порог калибруется на размеченных парах, а надёжнее опираться на ранжирование, чем на абсолютный порог.</p></div></details>
+  <details class="q"><summary>Что изменил каждый этап: pretraining, SFT, RLHF?</summary><div class="a"><p>Pretraining даёт знания и языковую модель мира (base model, автодополнение). SFT учит формату диалога и следованию инструкциям, почти не добавляя знаний. RLHF, RLAIF и Constitutional AI выравнивают поведение по предпочтениям (полезность, безопасность, стиль), а побочно создают угодничество и многословие. RL с проверяемыми наградами обучает рассуждать.</p></div></details>
+  <details class="q"><summary>Почему снижение temperature не лечит галлюцинации?</summary><div class="a"><p>Temperature меняет только разброс выбора. Если модель не знает факта, самый вероятный токен тоже неверен, и при T=0 она будет стабильно и уверенно ошибаться. Лечится это grounding'ом (контекст и цитаты), разрешением отвечать «не знаю», инструментами и проверками в коде.</p></div></details>
+  <details class="q"><summary>Как prompt caching связан с KV-cache и почему timestamp в system prompt его ломает?</summary><div class="a"><p>Prompt caching сохраняет KV-cache префикса запроса. K и V каждой позиции зависят от всех предыдущих токенов, поэтому переиспользовать кэш можно только при побайтовом совпадении префикса (tools → system → messages). Timestamp в начале system prompt меняет префикс в каждом запросе и инвалидирует всё после себя.</p></div></details>
+
+  <!-- ===================================================== -->
+  <h2 id="interview">Вопросы с собеседований</h2>
+  <details class="q interview"><summary>Объясните, как LLM генерирует ответ, от текста запроса до текста ответа.</summary><div class="a">
+    <p>Текст токенизируется (BPE) в последовательность id. Prefill за один параллельный проход через N блоков трансформера (attention + MLP) обрабатывает весь промпт и заполняет KV-cache. Последний вектор проецируется в логиты размером со словарь, сэмплер (temperature/top_p или greedy) выбирает токен. Дальше идёт decode: токен добавляется к входу, модель считает только новую позицию, используя кэш, и так до EOS, stop sequence или <code>max_tokens</code>. Токены детокенизируются и стримятся клиенту.</p>
+    <p>Сеньорская часть ответа — связать это с продом: prefill определяет TTFT, decode — tokens/s. Output дороже input, потому что генерируется последовательно. KV-cache ограничивает батч и контекст, а prompt caching — это переиспользование KV-cache префикса.</p>
+  </div></details>
+  <details class="q interview"><summary>Счёт за LLM вырос в 3 раза после запуска на русскоязычном рынке. Ваши гипотезы и действия?</summary><div class="a">
+    <p>Гипотезы: (1) токенизация, где русский даёт в 1.3–3× больше токенов и на входе, и на выходе; (2) ответы стали длиннее; (3) prompt cache перестал попадать: например, в system prompt попал язык или локаль пользователя, и префиксы разошлись; (4) выросла длина истории диалогов.</p>
+    <p>Действия: разложить стоимость по <code>usage</code> (input, cache read, cache write, output) на запрос и по фичам; измерить токены на символ по локалям через <code>count_tokens</code>; следить за долей <code>cache_read_input_tokens</code>; сделать общий префикс независимым от локали, а языковую инструкцию вынести в конец; ограничить длину ответов; перевести простые шаги на меньшую модель; офлайн-задачи отправить в Batch API. Проверять по eval-набору, что качество не упало.</p>
+  </div></details>
+  <details class="q interview"><summary>Что такое KV-cache, сколько он весит и как с ним борются при self-hosting?</summary><div class="a">
+    <p>Кэш векторов K и V всех прошлых позиций во всех слоях. Он превращает генерацию из O(N²) проходов в O(N). Размер: 2 × layers × kv_heads × d_head × seq × bytes. Для 8B-модели с GQA в FP16 это ≈ 128 КБ на токен, 16 ГБ на 128K контекста, что сопоставимо с весами.</p>
+    <p>Борьба: GQA/MQA/MLA на уровне архитектуры (меньше KV-голов); PagedAttention в vLLM (без фрагментации, шаринг префиксов); квантизация кэша в FP8; prefix caching; ограничение max context и батча; offload на CPU. Компромисс: память ↔ батч ↔ максимальная длина контекста ↔ качество.</p>
+  </div></details>
+  <details class="q interview"><summary>Почему бы просто не класть все документы в контекст на 1M токенов вместо RAG?</summary><div class="a">
+    <p>Иногда так и нужно делать: корпус маленький и стабильный, задачи требуют синтеза по всему корпусу, prompt caching делает повторные запросы дешёвыми. Но в общем случае есть четыре проблемы. <b>Цена</b>: вход оплачивается при каждом запросе, 1M токенов на Opus 5 стоит $5 за вызов без кэша. <b>Латентность</b>: prefill квадратичен, TTFT составляет десятки секунд. <b>Качество</b>: lost in the middle и context rot, лишний шум ухудшает многошаговый вывод. <b>Масштаб</b>: корпус больше окна, права доступа по документам, свежесть данных.</p>
+    <p>Хороший ответ: гибрид. Retrieval сужает до 10–50K релевантных токенов, стабильная часть кэшируется, решение подтверждается evals по качеству и цене.</p>
+  </div></details>
+  <details class="q interview"><summary>Как бы вы снижали галлюцинации в боте поддержки?</summary><div class="a">
+    <p>Сначала измерить: golden-набор вопросов с эталонами, метрики faithfulness (ответ подтверждается контекстом), доля корректных отказов и доля выдуманных фактов. Потом рычаги: RAG с хорошим retrieval (частая причина галлюцинаций — не найден нужный документ); инструкция отвечать только по контексту с цитатами и явным «не знаю» с эскалацией на оператора; structured output с полями <code>sources</code> и <code>confidence</code> и проверка в коде, что цитаты действительно есть в документах; инструменты для данных о заказе вместо памяти модели; для рискованных ответов (деньги, юридическое) — verifier-проход или жёсткие шаблоны.</p>
+    <p>Чего не говорить: «поставим temperature 0» или «возьмём модель побольше» как единственное решение.</p>
+  </div></details>
+  <details class="q interview"><summary>Что такое temperature и почему на новых моделях Claude её нет?</summary><div class="a">
+    <p>Делитель логитов перед softmax: управляет разбросом сэмплинга (подробности выше). У новейших Claude (Opus 4.7+, Sonnet 5, Fable) temperature, top_p и top_k удалены: запрос с ними возвращает 400. Управление перенесено на <code>effort</code> и adaptive thinking, а для воспроизводимого формата есть structured outputs. Мотивация понятна: reasoning-модели обучены и откалиброваны под свой режим декодирования, ручная настройка сэмплинга чаще ухудшала результат, чем улучшала. Для open-source моделей в vLLM и Ollama и у других провайдеров параметры актуальны. Для извлечения данных там ставят T≈0, для креатива 0.7–1, и меняют что-то одно: T или top_p.</p>
+  </div></details>
+  <details class="q interview"><summary>TTFT у вас 8 секунд на p95. Что проверите и что сделаете?</summary><div class="a">
+    <p>Разложить: сеть и очередь (rate limits, 429 с ретраями, очередь у провайдера), prefill (длина входа — самая частая причина), reasoning (thinking до первого текстового токена), время на стороне приложения (retrieval, tool calls до вызова модели). Действия: включить стриминг и мерить TTFT по первому <code>content_block_delta</code>; сократить вход (RAG, обрезка истории); prompt caching стабильного префикса, где кэш-хит снимает большую часть prefill; снизить effort на простых маршрутах; взять модель меньше или быстрее; распараллелить retrieval и подготовку. Мерить p50/p95 отдельно по маршрутам.</p>
+  </div></details>
+  <details class="q interview"><summary>Когда вы бы выбрали self-hosted модель в INT4 вместо API?</summary><div class="a">
+    <p>Требования к данным (on-prem, суверенитет), очень большой и стабильный объём простых задач (классификация, извлечение), где своя GPU дешевле за токен, жёсткие требования к латентности внутри периметра, необходимость fine-tuning без ограничений. Стоимость владения: GPU, инженеры на vLLM и мониторинг, отставание качества open-source моделей от фронтира на сложных задачах, деградация от INT4 на коде и длинном контексте. Решение принимается по eval-набору и TCO-расчёту, а не по бенчмаркам из твиттера. Часто работает гибрид: простые задачи идут на свою модель, сложные в API.</p>
+  </div></details>
+
+  <!-- ===================================================== -->
+  <h2 id="links">Источники</h2>
+  <ul>
+    <li><a href="https://docs.anthropic.com/" target="_blank" rel="noopener">Документация Anthropic (Claude API)</a>: разделы о token counting, extended/adaptive thinking, effort, prompt caching, моделях и ценах.</li>
+    <li><a href="https://docs.anthropic.com/en/docs/build-with-claude/token-counting" target="_blank" rel="noopener">Anthropic: Token counting</a></li>
+    <li><a href="https://arxiv.org/abs/1706.03762" target="_blank" rel="noopener">Vaswani et al., 2017. Attention Is All You Need</a></li>
+    <li><a href="https://arxiv.org/abs/1508.07909" target="_blank" rel="noopener">Sennrich et al., 2015. Neural Machine Translation of Rare Words with Subword Units (BPE)</a></li>
+    <li><a href="https://github.com/openai/tiktoken" target="_blank" rel="noopener">openai/tiktoken</a> и <a href="https://github.com/karpathy/minbpe" target="_blank" rel="noopener">karpathy/minbpe</a>: минимальная реализация BPE для чтения</li>
+    <li><a href="https://jalammar.github.io/illustrated-transformer/" target="_blank" rel="noopener">Jay Alammar. The Illustrated Transformer</a></li>
+    <li><a href="https://arxiv.org/abs/1904.09751" target="_blank" rel="noopener">Holtzman et al., 2019. The Curious Case of Neural Text Degeneration (nucleus sampling)</a></li>
+    <li><a href="https://arxiv.org/abs/2203.02155" target="_blank" rel="noopener">Ouyang et al., 2022. Training language models to follow instructions with human feedback (InstructGPT)</a></li>
+    <li><a href="https://arxiv.org/abs/2212.08073" target="_blank" rel="noopener">Bai et al., 2022. Constitutional AI: Harmlessness from AI Feedback</a></li>
+    <li><a href="https://arxiv.org/abs/2305.18290" target="_blank" rel="noopener">Rafailov et al., 2023. Direct Preference Optimization</a></li>
+    <li><a href="https://arxiv.org/abs/2307.03172" target="_blank" rel="noopener">Liu et al., 2023. Lost in the Middle: How Language Models Use Long Contexts</a></li>
+    <li><a href="https://arxiv.org/abs/2509.04664" target="_blank" rel="noopener">Kalai et al., 2025. Why Language Models Hallucinate</a></li>
+    <li><a href="https://arxiv.org/abs/2305.13245" target="_blank" rel="noopener">Ainslie et al., 2023. GQA: Training Generalized Multi-Query Transformer Models</a></li>
+    <li><a href="https://arxiv.org/abs/2309.06180" target="_blank" rel="noopener">Kwon et al., 2023. Efficient Memory Management for LLM Serving with PagedAttention (vLLM)</a></li>
+    <li><a href="https://arxiv.org/abs/2205.14135" target="_blank" rel="noopener">Dao et al., 2022. FlashAttention</a></li>
+    <li><a href="https://arxiv.org/abs/2208.07339" target="_blank" rel="noopener">Dettmers et al., 2022. LLM.int8()</a>, <a href="https://arxiv.org/abs/2210.17323" target="_blank" rel="noopener">GPTQ</a>, <a href="https://arxiv.org/abs/2306.00978" target="_blank" rel="noopener">AWQ</a></li>
+    <li><a href="https://docs.vllm.ai/" target="_blank" rel="noopener">Документация vLLM</a>: параметры сэмплинга, prefix caching, квантизация</li>
+  </ul>
+</main>
+<script src="assets/course.js"></script>
+<script>
+// ===== Визуализация 1: учебный byte-level BPE =====
+(function () {
+  const S = Course.svg;
+  const CORPUS = `The model reads the text as a sequence of tokens. A token is a piece of a word, a whole word, or a single byte. The tokenizer splits the text into tokens before the model sees it, and the model predicts the next token from the tokens before it. The price of a request depends on the number of input tokens and output tokens. The context window of the model is measured in tokens, and the rate limits are measured in tokens per minute. When the model generates the answer, it produces one token at a time, and every new token is added to the context for the next step.
+Large language models are trained on a very large amount of text from the web, from books and from code. In the first stage the model learns to predict the next token. In the next stage the model learns to follow instructions and to answer questions in a helpful way. The training data contains much more English text than text in other languages, so English words are often a single token, while words in other languages are split into several tokens.
+The team uses the model to summarize documents, to answer questions about the documents, and to extract the main points of a report. Every request sends the document and the question to the model. The answer of the model is checked by a test, and the results of the tests are stored for the next release. If the answer is not in the document, the model should say that it does not know the answer.
+The attention layer lets every token look at the tokens before it. The model uses the query, the key and the value of every token to compute the attention weights. The weights show which tokens are important for the next token. The cache stores the keys and the values, so the model does not compute them again for every new token. The cache grows with the length of the context and with the number of layers of the model.
+An embedding is a vector of numbers that represents the meaning of a text. Texts with a similar meaning have similar vectors, and the similarity of two vectors is measured with the cosine of the angle between them. The search service stores the vectors of all documents and returns the documents that are most similar to the question of the user.
+Модель читает текст как последовательность токенов. Токен — это часть слова, целое слово или отдельный байт. Модель предсказывает следующий токен по предыдущим токенам. Цена запроса зависит от числа токенов на входе и на выходе. Контекстное окно модели измеряется в токенах. Большие языковые модели обучают на большом объёме текста. Сначала модель учится предсказывать следующий токен, потом учится следовать инструкциям и отвечать на вопросы. Команда использует модель, чтобы кратко изложить документы и ответить на вопросы по документам. Если ответа нет в документе, модель должна сказать, что не знает ответа. Эмбеддинг — это вектор чисел, который отражает смысл текста. Похожие по смыслу тексты имеют похожие векторы.
+func (s *Service) Answer(ctx context.Context, question string) (string, error) {
+	docs, err := s.search.Find(ctx, question, 5)
+	if err != nil {
+		return "", fmt.Errorf("search: %w", err)
+	}
+	resp, err := s.client.Messages.New(ctx, params(question, docs))
+	if err != nil {
+		return "", fmt.Errorf("model: %w", err)
+	}
+	for _, block := range resp.Content {
+		if text, ok := block.AsAny().(anthropic.TextBlock); ok {
+			return text.Text, nil
+		}
+	}
+	return "", errors.New("empty response")
+}
+The price was 100 dollars in 2024 and 120 dollars in 2025, and the model has 128000 tokens of context.`;
+
+  const PRE = /\s?\p{L}+|\s?\p{N}{1,3}|\s?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+/gu;
+  const SEP = "\u0001";
+  const te = new TextEncoder();
+  const td = new TextDecoder("utf-8", { fatal: true });
+  const bytesOf = s => Array.from(te.encode(s), b => String.fromCharCode(b));
+  const pieces = t => t.match(PRE) || [];
+  function applyMerge(s, a, b) {
+    const o = [];
+    for (let i = 0; i < s.length; i++) {
+      if (i < s.length - 1 && s[i] === a && s[i + 1] === b) { o.push(a + b); i++; } else o.push(s[i]);
+    }
+    return o;
+  }
+
+  // Два варианта базовых единиц: байты UTF-8 (как GPT-2/GPT-4/o200k) или символы корпуса
+  // с byte fallback для незнакомых (как SentencePiece в Llama 2). Слияния учатся одинаково.
+  const freq = new Map();
+  for (const w of pieces(CORPUS)) freq.set(w, (freq.get(w) || 0) + 1);
+  // алфавит: символы корпуса + печатный ASCII + кириллица; остальное (эмодзи и т.п.) уходит в байты
+  const ALPHA = new Set([...CORPUS, "\n", "\t", "Ё", "ё"]);
+  for (let c = 0x20; c < 0x7f; c++) ALPHA.add(String.fromCharCode(c));
+  for (let c = 0x410; c <= 0x44f; c++) ALPHA.add(String.fromCharCode(c));
+  const BASE = {
+    bytes: bytesOf,
+    chars: w => [...w].flatMap(ch => (ALPHA.has(ch) ? [ch] : Array.from(te.encode(ch), b => "<0x" + b.toString(16).toUpperCase() + ">"))),
+  };
+  function train(mode) {
+    const baseOf = BASE[mode];
+    const words = [...freq].map(([w, n]) => ({ s: baseOf(w), n }));
+    const merges = [], rank = new Map();
+    for (let m = 0; m < 400; m++) {
+      const cnt = new Map();
+      for (const w of words) for (let i = 0; i < w.s.length - 1; i++) {
+        const k = w.s[i] + SEP + w.s[i + 1];
+        cnt.set(k, (cnt.get(k) || 0) + w.n);
+      }
+      let best = null, bc = 1;
+      for (const [k, c] of cnt) if (c > bc) { best = k; bc = c; }
+      if (!best) break;
+      const [a, b] = best.split(SEP);
+      rank.set(best, merges.length);
+      merges.push([a, b, bc]);
+      for (const w of words) w.s = applyMerge(w.s, a, b);
+    }
+    return { mode, baseOf, merges, rank };
+  }
+  const TK = { bytes: train("bytes"), chars: train("chars") };
+
+  // --- кодирование: применяем слияния в порядке ранга, только первые K
+  function encWord(tk, w, K) {
+    let s = tk.baseOf(w);
+    for (;;) {
+      let br = K;
+      for (let i = 0; i < s.length - 1; i++) {
+        const r = tk.rank.get(s[i] + SEP + s[i + 1]);
+        if (r !== undefined && r < br) br = r;
+      }
+      if (br >= K) return s;
+      s = applyMerge(s, tk.merges[br][0], tk.merges[br][1]);
+    }
+  }
+  const encode = (tk, text, K) => pieces(text).flatMap(w => encWord(tk, w, K));
+  function show(tk, tok) {
+    if (tk.mode === "chars") return { txt: tok, ok: !tok.startsWith("<0x") };
+    const u = Uint8Array.from(tok, c => c.charCodeAt(0));
+    try { return { txt: td.decode(u), ok: true }; }
+    catch (e) { return { txt: [...u].map(b => "‹" + b.toString(16) + "›").join(""), ok: false }; }
+  }
+  const vis = s => s.replace(/ /g, "·").replace(/\t/g, "→").replace(/\n/g, "↵\n");
+
+  const SAMPLES = {
+    en: "Large language models predict the next token. The price of every request depends on the number of tokens.",
+    ru: "Большие языковые модели предсказывают следующий токен. Цена каждого запроса зависит от числа токенов.",
+    code: "if err != nil {\n\treturn fmt.Errorf(\"read config: %w\", err)\n}",
+    num: "Итого 1234567 токенов; 9.11 vs 9.9; 2026-09-27; pi = 3.14159",
+    emoji: "Готово 🙂 🚀 ✅ OK",
+  };
+  const CMP = [
+    ["EN", "Please summarize the main points of this document for the team."],
+    ["RU", "Пожалуйста, кратко изложи основные пункты этого документа для команды."],
+  ];
+
+  const ta = document.getElementById("bpe-in");
+  const kIn = document.getElementById("bpe-k");
+  const out = document.getElementById("bpe-out");
+  const kpi = document.getElementById("bpe-kpi");
+  const cmp = document.getElementById("bpe-cmp");
+  const modeSel = document.getElementById("bpe-mode");
+  const ml = document.getElementById("bpe-merges");
+  let tk = TK[modeSel.value];
+  kIn.max = tk.merges.length; kIn.value = tk.merges.length;
+  function listMerges() {
+    ml.innerHTML = "";
+    tk.merges.slice(0, 120).forEach(([a, b, c], i) => {
+      const code = document.createElement("code");
+      code.textContent = `${i + 1}. ${vis(show(tk, a).txt)} + ${vis(show(tk, b).txt)} (${c})`;
+      ml.append(code, " ");
+    });
+  }
+
+  function draw() {
+    const K = +kIn.value, text = ta.value;
+    const toks = encode(tk, text, K);
+    out.textContent = "";
+    toks.forEach((t, i) => {
+      const d = show(tk, t), sp = document.createElement("span");
+      sp.className = "t" + (i % 6) + (d.ok ? "" : " byte");
+      sp.textContent = vis(d.txt);
+      sp.title = "токен #" + i;
+      out.append(sp);
+    });
+    const chars = [...text].length, bytes = te.encode(text).length;
+    kpi.innerHTML = [
+      [chars, "символов"], [bytes, "байт UTF-8"], [toks.length, "токенов"],
+      [toks.length ? (chars / toks.length).toFixed(2) : "—", "символов на токен"],
+    ].map(([v, l]) => `<div><b>${v}</b><span>${l}</span></div>`).join("");
+
+    // сравнение EN / RU
+    cmp.innerHTML = "";
+    const rows = CMP.map(([l, s]) => ({ l, n: encode(tk, s, K).length, b: encode(tk, s, 0).length, c: [...s].length }));
+    const mx = Math.max(...rows.map(r => r.b));
+    S("text", { x: 0, y: 14, style: "font-size:13px;font-weight:600" }, cmp).textContent = "Одна и та же фраза, K = " + K + " слияний (серым — без слияний, т.е. " + (tk.mode === "bytes" ? "байты)" : "символы)");
+    rows.forEach((r, i) => {
+      const y = 30 + i * 36, w = 400;
+      S("text", { x: 0, y: y + 17, style: "font-size:13px" }, cmp).textContent = r.l;
+      S("rect", { x: 34, y, width: w * r.b / mx, height: 24, rx: 3, fill: "var(--bg-soft)", stroke: "var(--border)" }, cmp);
+      S("rect", { x: 34, y, width: Math.max(2, w * r.n / mx), height: 24, rx: 3, fill: i ? "var(--warn)" : "var(--accent)" }, cmp);
+      S("text", { x: 34 + w * r.b / mx + 8, y: y + 17, style: "font-size:12.5px;font-family:var(--mono)" }, cmp)
+        .textContent = `${r.n} ток. (${r.c} симв.)`;
+    });
+    S("text", { x: 34, y: 112, style: "font-size:12.5px;fill:var(--muted)" }, cmp)
+      .textContent = `RU / EN = ${(rows[1].n / rows[0].n).toFixed(2)}× по токенам при почти равной длине в символах`;
+  }
+  Course.bindRange(kIn, v => v + " / " + tk.merges.length, draw);
+  modeSel.onchange = () => { tk = TK[modeSel.value]; kIn.max = tk.merges.length; kIn.value = tk.merges.length; listMerges(); kIn.dispatchEvent(new Event("input")); };
+  listMerges();
+  ta.addEventListener("input", draw);
+  document.querySelectorAll("#viz-bpe [data-sample]").forEach(b => b.onclick = () => { ta.value = SAMPLES[b.dataset.sample]; draw(); });
+})();
+
+// ===== Визуализация 2: temperature / top_k / top_p =====
+(function () {
+  const S = Course.svg;
+  const C = [[" молоком", 4.1], [" сахаром", 3.6], [" утра", 2.3], [" коллегами", 1.9], [" корицей", 1.4],
+             [" удовольствием", 1.2], [" лимоном", 0.3], [" солью", -0.6], [" кетчупом", -1.8], [" бетоном", -3.0]];
+  const svg = document.getElementById("smp-svg");
+  const ro = document.getElementById("smp-readout");
+  const tIn = document.getElementById("smp-t"), kIn = document.getElementById("smp-k"), pIn = document.getElementById("smp-p");
+  let hist = null;
+
+  function dist() {
+    const T = +tIn.value, K = +kIn.value, P = +pIn.value;
+    let pT;
+    if (T < 0.01) pT = C.map((_, i) => (i === 0 ? 1 : 0)); // greedy: логиты уже по убыванию
+    else {
+      const z = C.map(c => c[1] / T), m = Math.max(...z), e = z.map(v => Math.exp(v - m)), s = e.reduce((a, b) => a + b, 0);
+      pT = e.map(v => v / s);
+    }
+    const order = pT.map((p, i) => i).sort((a, b) => pT[b] - pT[a]);
+    const cut = C.map(() => null);
+    order.forEach((i, r) => { if (r >= K) cut[i] = "top_k"; });
+    const kept = order.filter(i => !cut[i]);
+    const sk = kept.reduce((a, i) => a + pT[i], 0);
+    let cum = 0;
+    for (const i of kept) {
+      if (cum >= P - 1e-9) cut[i] = "top_p";
+      cum += pT[i] / sk;
+    }
+    const fs = C.reduce((a, _, i) => a + (cut[i] ? 0 : pT[i]), 0);
+    const fin = pT.map((p, i) => (cut[i] ? 0 : p / fs));
+    return { pT, fin, cut, T };
+  }
+
+  function draw() {
+    const { pT, fin, cut, T } = dist();
+    svg.innerHTML = "";
+    const x0 = 150, W = 360, top = 28, rh = 26;
+    [0, 0.25, 0.5, 0.75, 1].forEach(v => {
+      S("line", { x1: x0 + W * v, x2: x0 + W * v, y1: top - 6, y2: top + rh * C.length, stroke: "var(--border)", "stroke-dasharray": "2 3" }, svg);
+      S("text", { x: x0 + W * v, y: top - 10, "text-anchor": "middle", style: "font-size:11px;fill:var(--muted)" }, svg).textContent = v * 100 + "%";
+    });
+    C.forEach(([w], i) => {
+      const y = top + i * rh;
+      S("text", { x: x0 - 8, y: y + 15, "text-anchor": "end", style: "font-size:13px;font-family:var(--mono);" + (cut[i] ? "fill:var(--muted);text-decoration:line-through" : "") }, svg).textContent = w;
+      S("rect", { x: x0, y: y + 3, width: Math.max(1, W * pT[i]), height: 14, rx: 2, fill: "var(--border)" }, svg);
+      if (!cut[i]) S("rect", { x: x0, y: y + 3, width: Math.max(1, W * fin[i]), height: 14, rx: 2, fill: "var(--accent)", "fill-opacity": 0.85 }, svg);
+      if (hist) S("rect", { x: x0, y: y + 19, width: W * hist[i] / 100, height: 4, fill: "var(--violet)" }, svg);
+      const lab = cut[i] ? "✂ " + cut[i] : (fin[i] * 100).toFixed(1) + "%" + (hist ? "  · " + hist[i] + "/100" : "");
+      S("text", { x: x0 + W + 10, y: y + 15, style: "font-size:12px;font-family:var(--mono);fill:" + (cut[i] ? "var(--bad)" : "var(--text)") }, svg).textContent = lab;
+    });
+    const H = -fin.reduce((a, p) => a + (p > 0 ? p * Math.log2(p) : 0), 0);
+    const Hmax = Math.log2(C.length);
+    const n = fin.filter(p => p > 0).length;
+    ro.textContent =
+      `энтропия H = ${H.toFixed(2)} бит (максимум для 10 вариантов ${Hmax.toFixed(2)}), перплексия 2^H = ${Math.pow(2, H).toFixed(2)}\n` +
+      `в игре ${n} из ${C.length} кандидатов, p(« молоком») = ${(fin[0] * 100).toFixed(1)}%` +
+      (T < 0.01 ? "\nT = 0 → greedy: всегда argmax, top_k/top_p уже ничего не меняют" : "") +
+      (fin[9] > 0.001 ? `\nвнимание: « бетоном» выпадет с вероятностью ${(fin[9] * 100).toFixed(2)}%. Хвост мусора и есть причина ставить top_p/top_k` : "");
+  }
+  function sample() {
+    const { fin } = dist();
+    hist = C.map(() => 0);
+    for (let n = 0; n < 100; n++) {
+      let r = Math.random(), i = 0;
+      while (i < fin.length - 1 && (r -= fin[i]) > 0) i++;
+      while (fin[i] === 0 && i > 0) i--;
+      hist[i]++;
+    }
+    draw();
+  }
+  const clear = () => { hist = null; draw(); };
+  Course.bindRange(tIn, v => v.toFixed(2), clear);
+  Course.bindRange(kIn, v => String(v), clear);
+  Course.bindRange(pIn, v => v.toFixed(2), clear);
+  document.getElementById("smp-go").onclick = sample;
+  document.getElementById("smp-reset").onclick = () => {
+    tIn.value = 1; kIn.value = 10; pIn.value = 1;
+    [tIn, kIn, pIn].forEach(i => i.dispatchEvent(new Event("input")));
+  };
+})();
+
+// ===== Визуализация 3: attention heatmap =====
+(function () {
+  const S = Course.svg;
+  const TOK = ["Кошка", "не", "перешла", "улицу", ",", "потому", "что", "она", "устала"];
+  const N = TOK.length;
+  // Идеализированные «головы»: ручные оценки score(i, j), дальше честный softmax.
+  const BOOST = {
+    prev: TOK.map((_, i) => [i, i - 1, 4]).filter(b => b[1] >= 0),
+    syn: [[2, 0, 3.2], [2, 3, 3], [2, 1, 2], [1, 2, 2.5], [3, 2, 3.2], [0, 2, 3], [8, 7, 3.4], [7, 8, 2.5],
+          [6, 5, 3], [5, 6, 2.5], [4, 3, 1.5], [5, 2, 1.5], [6, 2, 1.2], [8, 5, 1.5]],
+    coref: [[7, 0, 4.6], [7, 3, 2.3], [8, 0, 3.2], [8, 7, 2.4], [3, 0, 1.2], [0, 7, 3.5], [0, 8, 2]],
+  };
+  const NAMES = { prev: "предыдущий токен", syn: "синтаксис", coref: "кореференция", avg: "среднее по головам" };
+  function weights(head, causal) {
+    const sc = [];
+    for (let i = 0; i < N; i++) { sc.push([]); for (let j = 0; j < N; j++) sc[i].push((i === j ? 1 : 0) + (j === 0 ? 0.6 : 0)); }
+    for (const [i, j, v] of BOOST[head]) sc[i][j] += v;
+    return sc.map((row, i) => {
+      const e = row.map((v, j) => (causal && j > i ? 0 : Math.exp(v)));
+      const s = e.reduce((a, b) => a + b, 0);
+      return e.map(v => v / s);
+    });
+  }
+  function matrix(head, causal) {
+    if (head !== "avg") return weights(head, causal);
+    const ms = ["prev", "syn", "coref"].map(h => weights(h, causal));
+    return ms[0].map((row, i) => row.map((_, j) => (ms[0][i][j] + ms[1][i][j] + ms[2][i][j]) / 3));
+  }
+
+  const svg = document.getElementById("attn-svg"), ro = document.getElementById("attn-readout");
+  const mask = document.getElementById("attn-mask");
+  let head = "prev", q = 7;
+  const bw = 70, gap = 6, x0 = 8, ty = 160;
+  const cx = i => x0 + i * (bw + gap) + bw / 2;
+
+  function draw() {
+    const causal = mask.checked, M = matrix(head, causal), w = M[q];
+    svg.innerHTML = "";
+    // дуги от query к keys
+    for (let j = 0; j < N; j++) {
+      if (w[j] < 0.02) continue;
+      const sw = 1 + 11 * w[j], op = 0.25 + 0.75 * w[j];
+      if (j === q) {
+        S("circle", { cx: cx(q), cy: ty - 16, r: 12, fill: "none", stroke: "var(--accent)", "stroke-width": sw, "stroke-opacity": op }, svg);
+        continue;
+      }
+      const h = 24 + 13 * Math.abs(q - j), mx = (cx(q) + cx(j)) / 2;
+      S("path", { d: `M${cx(q)},${ty - 2} Q${mx},${ty - 2 - 2 * h} ${cx(j)},${ty - 2}`, fill: "none", stroke: "var(--accent)", "stroke-width": sw, "stroke-opacity": op, "stroke-linecap": "round" }, svg);
+      if (w[j] >= 0.08) S("text", { x: mx, y: ty - h - 6, "text-anchor": "middle", style: "font-size:11px;font-family:var(--mono)" }, svg).textContent = w[j].toFixed(2);
+    }
+    // токены
+    TOK.forEach((t, i) => {
+      const g = S("g", { class: "clickable", "data-i": i }, svg);
+      S("rect", { x: x0 + i * (bw + gap), y: ty, width: bw, height: 30, rx: 5, fill: i === q ? "var(--accent-soft)" : "var(--bg-soft)", stroke: i === q ? "var(--accent)" : "var(--border)", "stroke-width": i === q ? 2 : 1 }, g);
+      S("rect", { x: x0 + i * (bw + gap), y: ty + 26, width: bw * w[i], height: 4, fill: "var(--accent)" }, g);
+      S("text", { x: cx(i), y: ty + 19, "text-anchor": "middle", style: "font-size:13px" + (i === q ? ";font-weight:700" : "") }, g).textContent = t;
+      S("text", { x: cx(i), y: ty + 46, "text-anchor": "middle", style: "font-size:11px;font-family:var(--mono);fill:var(--muted)" }, g)
+        .textContent = causal && i > q ? "маска" : (w[i] * 100).toFixed(0) + "%";
+    });
+    // матрица
+    const cs = 24, mx0 = 330, my0 = 262;
+    S("text", { x: mx0 + cs * N / 2, y: my0 - 22, "text-anchor": "middle", style: "font-size:12px;fill:var(--muted)" }, svg).textContent = "key (на кого смотрят) →";
+    for (let j = 0; j < N; j++) S("text", { x: mx0 + j * cs + cs / 2, y: my0 - 6, "text-anchor": "middle", style: "font-size:11px;font-family:var(--mono);fill:var(--muted)" }, svg).textContent = j;
+    for (let i = 0; i < N; i++) {
+      const g = S("g", { class: "clickable", "data-i": i }, svg);
+      S("text", { x: mx0 - 8, y: my0 + i * cs + 16, "text-anchor": "end", style: "font-size:12px" + (i === q ? ";font-weight:700" : "") }, g).textContent = i + " " + TOK[i];
+      for (let j = 0; j < N; j++) {
+        const masked = causal && j > i;
+        S("rect", { x: mx0 + j * cs, y: my0 + i * cs, width: cs - 2, height: cs - 2, rx: 2,
+          fill: masked ? "var(--bg-soft)" : "var(--accent)", "fill-opacity": masked ? 1 : Math.max(0.04, Math.pow(M[i][j], 0.6)),
+          stroke: masked ? "var(--border)" : "none" }, g);
+      }
+    }
+    S("rect", { x: mx0 - 3, y: my0 + q * cs - 2, width: cs * N + 4, height: cs + 2, rx: 3, fill: "none", stroke: "var(--violet)", "stroke-width": 2 }, svg);
+    S("text", { x: 8, y: my0 + 6, style: "font-size:12px;fill:var(--muted)" }, svg).textContent = "строка = query,";
+    S("text", { x: 8, y: my0 + 22, style: "font-size:12px;fill:var(--muted)" }, svg).textContent = "сумма по строке = 1";
+    S("text", { x: 8, y: my0 + 42, style: "font-size:12px;fill:var(--muted)" }, svg).textContent = causal ? "серые клетки: маска −∞" : "маска выключена:";
+    S("text", { x: 8, y: my0 + 58, style: "font-size:12px;fill:var(--muted)" }, svg).textContent = causal ? "(будущее не видно)" : "видно всё предложение";
+
+    const top = w.map((v, j) => [v, j]).filter(x => x[0] > 0).sort((a, b) => b[0] - a[0]).slice(0, 4);
+    ro.textContent = `голова: ${NAMES[head]}; query «${TOK[q]}» (#${q}) → ` + top.map(([v, j]) => `${TOK[j]} ${v.toFixed(2)}`).join(", ") +
+      `\nвеса = softmax(q·kᵀ/√d) по ${causal ? "позициям 0…" + q + " (causal mask)" : "всем позициям"}; выход токена = Σ вес·V` +
+      (head === "coref" && q === 7 ? "\n«она» → «Кошка»: голова разрешила кореференцию (хотя «улицу» тоже ж. р.)" : "");
+  }
+  svg.addEventListener("click", e => { const g = e.target.closest("[data-i]"); if (g) { q = +g.dataset.i; draw(); } });
+  document.querySelectorAll("#attn-heads [data-head]").forEach(b => b.onclick = () => {
+    head = b.dataset.head;
+    document.querySelectorAll("#attn-heads .btn").forEach(x => x.classList.toggle("sel", x === b));
+    draw();
+  });
+  mask.onchange = draw;
+  draw();
+})();
+
+// ===== Визуализация 4: эмбеддинги в 2D =====
+(function () {
+  const S = Course.svg;
+  const CL = { a: ["животные", "var(--ok)"], c: ["программирование", "var(--accent)"], f: ["еда", "var(--warn)"], m: ["финансы", "var(--violet)"], x: ["многозначные", "var(--teal)"] };
+  const P = [
+    ["кошка", 20, 0.9, "a"], ["котёнок", 28, 0.72, "a", 1], ["собака", 40, 0.85, "a"], ["щенок", 48, 0.64, "a"], ["cat", 9, 0.62, "a"], ["КОШКА!!!", 20, 0.42, "a", 1],
+    ["goroutine", 106, 0.9, "c"], ["channel", 116, 0.76, "c"], ["mutex", 127, 0.88, "c"], ["context.Context", 96, 0.64, "c"], ["Python", 142, 0.8, "c"],
+    ["пицца", 190, 0.88, "f"], ["паста", 201, 0.74, "f"], ["борщ", 213, 0.86, "f"], ["рецепт", 178, 0.6, "f"],
+    ["ипотека", 280, 0.9, "m"], ["ставка ЦБ", 296, 0.62, "m"], ["кредит", 304, 0.86, "m"], ["инфляция", 267, 0.66, "m"],
+    ["мышь", 68, 0.8, "x"],
+  ].map(([w, deg, r, c, left]) => ({ w, c, left, x: r * Math.cos(deg * Math.PI / 180), y: r * Math.sin(deg * Math.PI / 180) }));
+
+  const svg = document.getElementById("emb-svg"), ro = document.getElementById("emb-readout"), kIn = document.getElementById("emb-k");
+  document.getElementById("emb-legend").innerHTML = Object.values(CL).map(([n, c]) => `<span><i style="background:${c}"></i>${n}</span>`).join("");
+  const OX = 320, OY = 230, R = 200;
+  const px = p => OX + p.x * R, py = p => OY - p.y * R;
+  let q = { x: 0.95 * Math.cos(85 * Math.PI / 180), y: 0.95 * Math.sin(85 * Math.PI / 180) }, sel = -1, drag = false;
+  const cos = (a, b) => (a.x * b.x + a.y * b.y) / (Math.hypot(a.x, a.y) * Math.hypot(b.x, b.y) || 1);
+
+  function draw() {
+    const k = +kIn.value;
+    svg.innerHTML = "";
+    S("line", { x1: 20, x2: 620, y1: OY, y2: OY, stroke: "var(--border)", "stroke-dasharray": "3 4" }, svg);
+    S("line", { x1: OX, x2: OX, y1: 10, y2: 450, stroke: "var(--border)", "stroke-dasharray": "3 4" }, svg);
+    S("circle", { cx: OX, cy: OY, r: R, fill: "none", stroke: "var(--border)", "stroke-dasharray": "2 5" }, svg);
+    const ranked = P.map((p, i) => ({ i, s: cos(q, p) })).filter(r => r.i !== sel).sort((a, b) => b.s - a.s);
+    const topk = ranked.slice(0, k);
+    const qx = px(q), qy = py(q);
+    S("line", { x1: OX, y1: OY, x2: qx, y2: qy, stroke: "var(--bad)", "stroke-width": 1.5, "stroke-dasharray": "5 4" }, svg);
+    topk.forEach(({ i }, r) => {
+      S("line", { x1: OX, y1: OY, x2: px(P[i]), y2: py(P[i]), stroke: "var(--muted)", "stroke-width": 1, "stroke-opacity": 0.5 }, svg);
+      S("line", { x1: qx, y1: qy, x2: px(P[i]), y2: py(P[i]), stroke: "var(--accent)", "stroke-width": 3 - r * 0.3, "stroke-opacity": 0.55 }, svg);
+    });
+    P.forEach((p, i) => {
+      const g = S("g", { class: "clickable", "data-i": i }, svg);
+      const inTop = topk.some(t => t.i === i);
+      S("circle", { cx: px(p), cy: py(p), r: 14, fill: "transparent" }, g);
+      S("circle", { cx: px(p), cy: py(p), r: inTop ? 7 : 5, fill: CL[p.c][1], stroke: inTop ? "var(--text)" : "var(--card)", "stroke-width": inTop ? 2 : 1 }, g);
+      const right = !p.left && px(p) < 560;
+      S("text", { x: px(p) + (right ? 10 : -10), y: py(p) + 4, "text-anchor": right ? "start" : "end", style: "font-size:12.5px" + (i === sel || inTop ? ";font-weight:700" : "") }, g).textContent = p.w;
+    });
+    S("path", { d: "M-4,-4L4,4M-4,4L4,-4", transform: `translate(${OX},${OY})`, stroke: "var(--text)", "stroke-width": 2 }, svg);
+    S("rect", { x: qx - 8, y: qy - 8, width: 16, height: 16, transform: `rotate(45 ${qx} ${qy})`, fill: "var(--bad)", stroke: "var(--card)", "stroke-width": 2, class: "clickable" }, svg);
+    if (sel < 0) S("text", { x: qx, y: qy - 14, "text-anchor": "middle", style: "font-size:12px;font-weight:700;fill:var(--bad)" }, svg).textContent = "запрос";
+    ro.textContent = `top-${k} по косинусу${sel >= 0 ? " для «" + P[sel].w + "»" : ""}:\n` +
+      topk.map(({ i, s }, r) => `${r + 1}. ${s.toFixed(3)}  ${P[i].w}`).join("\n") +
+      `\nсамый далёкий: ${ranked[ranked.length - 1].s.toFixed(3)} ${P[ranked[ranked.length - 1].i].w} (противоположное направление → cos ≈ −1)`;
+  }
+  function toUnit(e) {
+    const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
+    const p = pt.matrixTransform(svg.getScreenCTM().inverse());
+    const x = (p.x - OX) / R, y = (OY - p.y) / R;
+    return Math.hypot(x, y) < 0.03 ? { x: 0.03, y: 0 } : { x, y };
+  }
+  svg.addEventListener("pointerdown", e => {
+    const g = e.target.closest("[data-i]");
+    if (g) { sel = +g.dataset.i; q = { x: P[sel].x, y: P[sel].y }; draw(); return; }
+    drag = true; sel = -1; q = toUnit(e); svg.setPointerCapture(e.pointerId); draw();
+  });
+  svg.addEventListener("pointermove", e => { if (drag) { q = toUnit(e); draw(); } });
+  const stop = () => { drag = false; };
+  svg.addEventListener("pointerup", stop);
+  svg.addEventListener("pointercancel", stop);
+  Course.bindRange(kIn, v => String(v), draw);
+})();
+
+// ===== Визуализация 7: этапы обучения =====
+(function () {
+  const S = Course.svg;
+  const ST = [
+    { t: "Pretraining", s: "триллионы токенов", h: "Pretraining → base model",
+      d: ["<b>Данные:</b> веб, книги, код, статьи: 10+ триллионов токенов после фильтрации и дедупликации.",
+          "<b>Цель:</b> next-token prediction (cross-entropy) на всех позициях сразу.",
+          "<b>Стоимость:</b> месяцы на десятках тысяч GPU; здесь закладываются знания и knowledge cutoff.",
+          "<b>Результат:</b> base model, «автодополнение интернета», диалогу не обучена."],
+      q: "Как сварить борщ? Ответь кратко.", a: "Как сварить щи? Как сварить солянку?\nЛучшие рецепты супов на нашем сайте. Подписывайтесь на рассылку…" },
+    { t: "SFT", s: "10⁴–10⁶ диалогов", h: "Supervised fine-tuning (instruction tuning)",
+      d: ["<b>Данные:</b> пары «инструкция → эталонный ответ», написанные людьми и сгенерированные моделями, в формате чата с ролями; примеры tool use.",
+          "<b>Цель:</b> тот же next-token loss, но только на токенах ответа ассистента.",
+          "<b>Результат:</b> модель понимает формат диалога и следует инструкциям. Новых знаний почти не добавляется: SFT меняет поведение, а не эрудицию."],
+      q: "Как сварить борщ? Ответь кратко.", a: "Сварите мясной бульон, добавьте свёклу, капусту, картофель, морковь и лук. В конце — чеснок и зелень. Варить около 2 часов." },
+    { t: "RLHF / RLAIF", s: "предпочтения", h: "Выравнивание по предпочтениям: RLHF, DPO, RLAIF, Constitutional AI",
+      d: ["<b>Данные:</b> сравнения пар ответов «A лучше B». Размечают люди (RLHF) или модель по списку принципов (RLAIF, Constitutional AI).",
+          "<b>Цель:</b> reward model + RL (PPO) с KL-штрафом к SFT-модели или DPO напрямую по парам.",
+          "<b>Результат:</b> полезнее, безопаснее, аккуратнее по формату. <b>Побочно:</b> угодничество, многословие, уверенный тон."],
+      q: "Как сварить борщ? Ответь кратко.", a: "Кратко:\n1. Бульон — 1.5 ч.\n2. Обжарьте свёклу с морковью и луком, добавьте томат.\n3. Картофель и капусту — в бульон, через 10 мин — зажарку.\n4. Ещё 10 мин, чеснок, зелень. Подавайте со сметаной." },
+    { t: "RL (reasoning)", s: "проверяемые награды", h: "RL с проверяемыми наградами → reasoning-модели",
+      d: ["<b>Данные:</b> задачи с автоматической проверкой: математика с ответом, код с тестами, агентные среды.",
+          "<b>Цель:</b> награда за правильный итог. Длинные цепочки рассуждений и самопроверка появляются, потому что повышают награду.",
+          "<b>Результат:</b> thinking-модели, у которых качество растёт с test-time compute (effort). <b>Побочно:</b> reward hacking (подгонка под тест)."],
+      q: "Сколько будет 17 × 24?", a: "[thinking] 17×24 = 17×20 + 17×4 = 340 + 68 = 408. Проверка: 408 / 24 = 17 ✓\n[answer] 408" },
+  ];
+  const svg = document.getElementById("train-svg"), panel = document.getElementById("train-panel");
+  let cur = 0;
+  const bw = 150, gap = 26, x0 = 11;
+  function draw() {
+    svg.innerHTML = "";
+    const defs = S("defs", {}, svg);
+    const mk = S("marker", { id: "train-arr", viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto" }, defs);
+    S("path", { d: "M0,0L10,5L0,10z", fill: "var(--muted)" }, mk);
+    ST.forEach((s, i) => {
+      const x = x0 + i * (bw + gap), g = S("g", { class: "clickable", "data-i": i, role: "button", tabindex: 0 }, svg);
+      S("rect", { x, y: 30, width: bw, height: 80, rx: 10, fill: i === cur ? "var(--accent-soft)" : "var(--bg-soft)", stroke: i === cur ? "var(--accent)" : "var(--border)", "stroke-width": i === cur ? 2 : 1 }, g);
+      S("text", { x: x + bw / 2, y: 64, "text-anchor": "middle", style: "font-size:15px;font-weight:700" }, g).textContent = s.t;
+      S("text", { x: x + bw / 2, y: 86, "text-anchor": "middle", style: "font-size:12px;fill:var(--muted)" }, g).textContent = s.s;
+      if (i < ST.length - 1) S("line", { x1: x + bw + 2, y1: 70, x2: x + bw + gap - 3, y2: 70, stroke: "var(--muted)", "stroke-width": 2, "marker-end": "url(#train-arr)" }, svg);
+    });
+    S("text", { x: 350, y: 138, "text-anchor": "middle", style: "font-size:12px;fill:var(--muted)" }, svg).textContent = "стоимость и объём данных убывают слева направо, влияние на «характер» модели растёт";
+    const s = ST[cur], esc = t => t.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+    panel.innerHTML = `<h4>${s.h}</h4><ul>${s.d.map(x => "<li>" + x + "</li>").join("")}</ul>` +
+      `<p style="margin:.4em 0 .3em"><b>Запрос:</b> ${esc(s.q)}</p><div class="ex">${esc(s.a)}</div>`;
+  }
+  const pick = e => { const g = e.target.closest("[data-i]"); if (g) { cur = +g.dataset.i; draw(); svg.querySelector(`[data-i="${cur}"]`).focus(); } };
+  svg.addEventListener("click", pick);
+  svg.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(e); } });
+  draw();
+})();
+
+// ===== Визуализация 5a: авторегрессия с KV-cache =====
+(function () {
+  const S = Course.svg;
+  const PR = ["Столица", " Фран", "ции", " —"];
+  const GEN = [" Париж", ".", " Это", " крупней", "ший", " город", "⟨eos⟩"];
+  const ALL = PR.concat(GEN), NP = PR.length, MAXS = GEN.length;
+  const svg = document.getElementById("ar-svg"), ro = document.getElementById("ar-readout");
+  const noC = document.getElementById("ar-nocache"), playB = document.getElementById("ar-play");
+  let s = 0, timer = null;
+  const sw = 60, gap = 4, x0 = 10, xs = i => x0 + i * (sw + gap);
+  // сколько токенов модель прогоняет на шаге k (1 = prefill)
+  const work = k => (k === 1 ? NP : noC.checked ? NP + k - 1 : 1);
+  const PREF_W = 70, UNIT = 11;
+  const stepW = k => (k === 1 ? PREF_W : noC.checked ? 14 + UNIT * work(k) * 0.6 : 34);
+
+  function draw() {
+    svg.innerHTML = "";
+    const L = (y, t) => S("text", { x: x0, y, style: "font-size:12px;fill:var(--muted)" }, svg).textContent = t;
+    L(20, "Последовательность (промпт + сгенерированное)");
+    const produced = s === 0 ? 0 : s; // сколько токенов сгенерировано
+    ALL.forEach((t, i) => {
+      const isP = i < NP, have = isP || i - NP < produced, isNew = !isP && i - NP === produced - 1;
+      S("rect", { x: xs(i), y: 28, width: sw, height: 30, rx: 5,
+        fill: !have ? "none" : isP ? "var(--teal-soft)" : "var(--accent-soft)",
+        stroke: isNew ? "var(--ok)" : have ? "var(--border)" : "var(--border)", "stroke-width": isNew ? 2.5 : 1,
+        "stroke-dasharray": have ? "" : "4 3" }, svg);
+      if (have) S("text", { x: xs(i) + sw / 2, y: 47, "text-anchor": "middle", style: "font-size:12px;font-family:var(--mono)" }, svg).textContent = t;
+    });
+    // что прогоняется через модель на текущем шаге
+    L(80, s === 0 ? "Вычисления на шаге: —" : s === 1 ? "Вычисления на шаге: prefill, весь промпт параллельно" : `Вычисления на шаге: decode, ${work(s) === 1 ? "только последний токен (остальное в кэше)" : work(s) + " токенов заново (кэша нет)"}`);
+    if (s > 0) {
+      const w = work(s), start = s === 1 ? 0 : noC.checked ? 0 : NP + s - 2;
+      for (let i = start; i < start + w; i++) S("rect", { x: xs(i), y: 86, width: sw, height: 10, rx: 2, fill: "var(--warn)" }, svg);
+    }
+    // KV-cache
+    const cached = noC.checked ? 0 : s === 0 ? 0 : NP + s - 1;
+    L(118, noC.checked ? "KV-cache: выключен, K/V пересчитываются каждый шаг" : `KV-cache: ${cached} позиций × (K и V) × все слои`);
+    for (let i = 0; i < cached; i++) {
+      const fresh = (s === 1 && i < NP) || i === cached - 1;
+      S("rect", { x: xs(i), y: 124, width: sw / 2 - 1, height: 26, rx: 3, fill: "var(--violet-soft)", stroke: fresh ? "var(--violet)" : "var(--border)" }, svg);
+      S("rect", { x: xs(i) + sw / 2 + 1, y: 124, width: sw / 2 - 1, height: 26, rx: 3, fill: "var(--teal-soft)", stroke: fresh ? "var(--teal)" : "var(--border)" }, svg);
+      S("text", { x: xs(i) + sw / 4, y: 141, "text-anchor": "middle", style: "font-size:11px" }, svg).textContent = "K";
+      S("text", { x: xs(i) + sw * 3 / 4, y: 141, "text-anchor": "middle", style: "font-size:11px" }, svg).textContent = "V";
+    }
+    // шкала времени
+    L(190, "Время →");
+    S("line", { x1: x0, x2: 690, y1: 232, y2: 232, stroke: "var(--border)" }, svg);
+    let x = x0;
+    for (let k = 1; k <= s; k++) {
+      const w = stepW(k);
+      S("rect", { x, y: 200, width: w - 2, height: 28, rx: 3, fill: k === 1 ? "var(--teal)" : "var(--accent)", "fill-opacity": k === s ? 1 : 0.55 }, svg);
+      S("text", { x: x + (w - 2) / 2, y: 219, "text-anchor": "middle", style: "font-size:11px;fill:var(--card)" }, svg).textContent = k === 1 ? "prefill" : "d" + (k - 1);
+      if (k === 1) {
+        S("line", { x1: x + w - 2, x2: x + w - 2, y1: 196, y2: 262, stroke: "var(--ok)", "stroke-width": 2, "stroke-dasharray": "4 3" }, svg);
+        S("text", { x: x + w + 2, y: 258, style: "font-size:11.5px;fill:var(--ok);font-weight:700" }, svg).textContent = "TTFT: первый токен готов";
+      }
+      x += w;
+    }
+    // счётчики
+    let tot = 0; for (let k = 1; k <= s; k++) tot += work(k);
+    let totC = s ? NP + (s - 1) : 0;
+    L(290, `Прогнано позиций через модель: ${tot}` + (noC.checked ? ` (с кэшем было бы ${totC})` : ""));
+    L(310, "Decode-шаги одинаковы (memory-bound) → стабильные tokens/s; TTFT растёт с длиной промпта.");
+    ro.textContent = s === 0 ? "Готово к старту: промпт из 4 токенов («Столица Франции —»)." :
+      s === 1 ? "Шаг 1 (prefill): 4 токена промпта прошли через все слои одним батчем, их K/V легли в кэш. Логиты последней позиции → « Париж»." :
+      `Шаг ${s} (decode): на вход подан только «${ALL[NP + s - 2]}», attention читает ${noC.checked ? "заново посчитанные" : "закэшированные"} K/V ${NP + s - 2} прошлых позиций → «${ALL[NP + s - 1]}»` +
+      (s === MAXS ? "\nСгенерирован ⟨eos⟩: stop_reason = end_turn." : "");
+  }
+  function step() { if (s < MAXS) { s++; draw(); } if (s >= MAXS) stopPlay(); }
+  function stopPlay() { clearInterval(timer); timer = null; playB.textContent = "▶ Играть"; }
+  playB.onclick = () => {
+    if (timer) return stopPlay();
+    if (s >= MAXS) s = 0;
+    playB.textContent = "⏸ Пауза"; draw();
+    timer = setInterval(step, 900);
+  };
+  document.getElementById("ar-step").onclick = () => { stopPlay(); step(); };
+  document.getElementById("ar-reset").onclick = () => { stopPlay(); s = 0; draw(); };
+  noC.onchange = draw;
+  draw();
+})();
+
+// ===== Визуализация 5b: память весов и KV-cache =====
+(function () {
+  const S = Course.svg;
+  const PRE = { "8b": [8, 32, 8], "7bmha": [7, 32, 32], "70b": [70, 80, 8], "405b": [405, 126, 8] };
+  const $ = id => document.getElementById(id);
+  const inP = $("kv-params"), inL = $("kv-layers"), inH = $("kv-heads"), inS = $("kv-seq"), inB = $("kv-batch"), wq = $("kv-wq"), cq = $("kv-cq");
+  const svg = $("kv-svg"), ro = $("kv-readout");
+  const D_HEAD = 128, BW = 3350; // ГБ/с, H100 SXM
+  const seqOf = v => Math.round(1024 * Math.pow(2, v / 10));
+  const fmtT = n => (n >= 1048000 ? (n / 1048576).toFixed(n % 1048576 ? 1 : 0) + "M" : n >= 1024 ? Math.round(n / 1024) + "K" : String(n));
+  const gb = b => b / 1e9;
+  const fG = x => (x >= 100 ? x.toFixed(0) : x >= 10 ? x.toFixed(1) : x.toFixed(2)) + " ГБ";
+
+  function draw() {
+    const P = +inP.value, L = +inL.value, H = +inH.value, seq = seqOf(+inS.value), B = +inB.value, wb = +wq.value, cb = +cq.value;
+    const W = P * wb; // ГБ
+    const perTok = 2 * L * H * D_HEAD * cb; // байт
+    const kvSeq = gb(perTok * seq), kv = kvSeq * B, tot = W + kv;
+    svg.innerHTML = "";
+    const x0 = 10, Wd = 600, max = Math.max(tot, 80) * 1.12, sc = v => Wd * v / max;
+    S("rect", { x: x0, y: 36, width: Math.max(1, sc(W)), height: 36, rx: 3, fill: "var(--accent)" }, svg);
+    S("rect", { x: x0 + sc(W), y: 36, width: Math.max(1, sc(kv)), height: 36, rx: 3, fill: "var(--violet)" }, svg);
+    if (sc(W) > 90) S("text", { x: x0 + 6, y: 59, style: "font-size:12px;fill:var(--card);font-weight:600" }, svg).textContent = "веса " + fG(W);
+    if (sc(kv) > 90) S("text", { x: x0 + sc(W) + 6, y: 59, style: "font-size:12px;fill:var(--card);font-weight:600" }, svg).textContent = "KV " + fG(kv);
+    let lastX = -99;
+    [[24, "24 ГБ"], [80, "80 ГБ"], [160, "2×80"], [640, "8×80 ГБ"]].forEach(([g, l]) => {
+      if (g > max) return;
+      S("line", { x1: x0 + sc(g), x2: x0 + sc(g), y1: 24, y2: 84, stroke: "var(--bad)", "stroke-dasharray": "4 3", "stroke-width": 1.5 }, svg);
+      if (x0 + sc(g) - lastX < 50) return; // подписи не налезают друг на друга
+      lastX = x0 + sc(g);
+      S("text", { x: Math.max(x0 + sc(g), 24), y: 18, "text-anchor": "middle", style: "font-size:11px;fill:var(--bad)" }, svg).textContent = l;
+    });
+    for (let i = 0; i <= 4; i++) {
+      const v = max * i / 4;
+      S("text", { x: x0 + sc(v), y: 100, "text-anchor": i === 0 ? "start" : i === 4 ? "end" : "middle", style: "font-size:11px;fill:var(--muted)" }, svg).textContent = v.toFixed(0) + " ГБ";
+    }
+    S("rect", { x: x0, y: 118, width: 12, height: 12, fill: "var(--accent)" }, svg);
+    S("text", { x: x0 + 18, y: 128, style: "font-size:12px" }, svg).textContent = `веса ${fG(W)}`;
+    S("rect", { x: x0 + 150, y: 118, width: 12, height: 12, fill: "var(--violet)" }, svg);
+    S("text", { x: x0 + 168, y: 128, style: "font-size:12px" }, svg).textContent = `KV-cache ${fG(kv)} (${B} × ${fmtT(seq)} токенов)`;
+    S("text", { x: x0, y: 154, style: "font-size:12.5px;font-weight:700" }, svg).textContent =
+      `итого ≈ ${fG(tot)} → минимум ${Math.ceil(tot * 1.1 / 80)} × GPU 80 ГБ (с запасом ~10% на активации)`;
+    const tps1 = BW / (W + kvSeq), tpsB = B * BW / (W + kv);
+    ro.textContent =
+      `KV на токен = 2 × ${L} слоёв × ${H} KV-голов × ${D_HEAD} × ${cb} Б = ${(perTok / 1024).toFixed(0)} КБ\n` +
+      `KV на последовательность ${fmtT(seq)} = ${fG(kvSeq)};  × батч ${B} = ${fG(kv)}\n` +
+      `decode на H100 (3.35 ТБ/с), оценка сверху: batch=1 ≈ ${tps1.toFixed(0)} ток/с; весь батч ≈ ${tpsB.toFixed(0)} ток/с суммарно (${(tpsB / B).toFixed(tpsB / B < 10 ? 1 : 0)} на запрос)\n` +
+      (H >= 32 ? "без GQA KV-голов столько же, сколько Q-голов: кэш в 4–8 раз больше, чем мог бы быть" : "GQA: KV-голов меньше, чем Q-голов, поэтому кэш компактнее");
+  }
+  document.querySelectorAll("#kv-presets [data-p]").forEach(b => b.onclick = () => {
+    const [p, l, h] = PRE[b.dataset.p];
+    inP.value = p; inL.value = l; inH.value = h;
+    document.querySelectorAll("#kv-presets .btn").forEach(x => x.classList.toggle("sel", x === b));
+    [inP, inL, inH].forEach(i => i.dispatchEvent(new Event("input")));
+  });
+  const unsel = () => document.querySelectorAll("#kv-presets .btn").forEach(x => x.classList.remove("sel"));
+  Course.bindRange(inP, v => v + "B", draw);
+  Course.bindRange(inL, v => String(v), draw);
+  Course.bindRange(inH, v => String(v), draw);
+  Course.bindRange(inS, v => fmtT(seqOf(v)), draw);
+  Course.bindRange(inB, v => String(v), draw);
+  [inP, inL, inH].forEach(i => i.addEventListener("input", e => { if (e.isTrusted) unsel(); }));
+  wq.onchange = draw; cq.onchange = draw;
+})();
+
+// ===== Визуализация 6: калькулятор стоимости =====
+(function () {
+  const S = Course.svg;
+  // $ за 1M токенов, сентябрь 2026
+  const M = [
+    { id: "claude-fable-5-1", n: "Fable 5.1", i: 10, o: 50, ctx: 1e6 },
+    { id: "claude-opus-5-5", n: "Opus 5.5", i: 4, o: 20, ctx: 1e6 },
+    { id: "claude-opus-5", n: "Opus 5", i: 5, o: 25, ctx: 1e6 },
+    { id: "claude-sonnet-5", n: "Sonnet 5", i: 2, o: 10, ctx: 1e6 },
+    { id: "claude-haiku-4-5", n: "Haiku 4.5", i: 1, o: 5, ctx: 2e5 },
+  ];
+  const $ = id => document.getElementById(id);
+  const sel = $("cost-model"), inI = $("cost-in"), inO = $("cost-out"), inR = $("cost-rps"), inC = $("cost-cache"), bat = $("cost-batch");
+  const svg = $("cost-svg"), kpi = $("cost-kpi"), ro = $("cost-readout");
+  sel.innerHTML = M.map((m, k) => `<option value="${k}"${m.id === "claude-opus-5" ? " selected" : ""}>${m.n} — $${m.i} / $${m.o}</option>`).join("");
+  const nice = x => { const p = Math.pow(10, Math.floor(Math.log10(x))), r = x / p; return (r < 1.5 ? 1 : r < 3.5 ? 2 : r < 7.5 ? 5 : 10) * p; };
+  const inTok = v => Math.round(nice(100 * Math.pow(10, v / 25)));
+  const outTok = v => (v >= 100 ? 128000 : Math.round(nice(10 * Math.pow(12800, v / 100))));
+  const rps = v => +nice(0.01 * Math.pow(10, v / 25)).toPrecision(2);
+  const fT = n => (n >= 1e6 ? n / 1e6 + "M" : n >= 1e3 ? n / 1e3 + "K" : String(n));
+  const f$ = v => "$" + (v < 0.01 ? v.toFixed(4) : v < 1 ? v.toFixed(3) : v < 1000 ? v.toFixed(2) : Math.round(v).toLocaleString("ru-RU"));
+  const cost = (m, I, O, h, b) => { const k = b ? 0.5 : 1; return { un: I * (1 - h) * m.i / 1e6 * k, cr: I * h * m.i * 0.1 / 1e6 * k, out: O * m.o / 1e6 * k }; };
+
+  function draw() {
+    const m = M[+sel.value], I = inTok(+inI.value), O = outTok(+inO.value), R = rps(+inR.value), h = +inC.value / 100, b = bat.checked;
+    const c = cost(m, I, O, h, b), per = c.un + c.cr + c.out, day = per * R * 86400;
+    kpi.innerHTML = [[f$(per), "за запрос"], [Math.round(R * 86400).toLocaleString("ru-RU"), "запросов в день"], [f$(day), "в день"], [f$(day * 30), "в месяц (30 дней)"]]
+      .map(([v, l]) => `<div><b>${v}</b><span>${l}</span></div>`).join("");
+    svg.innerHTML = "";
+    const x0 = 118, W = 400;
+    S("text", { x: 0, y: 14, style: "font-size:12.5px;font-weight:700" }, svg).textContent = "Из чего состоит цена запроса";
+    let x = x0;
+    [[c.un, "var(--accent)", "input"], [c.cr, "var(--teal)", "cache read"], [c.out, "var(--violet)", "output"]].forEach(([v, col, l]) => {
+      const w = per ? W * v / per : 0;
+      if (w > 0.5) S("rect", { x, y: 24, width: w, height: 24, fill: col }, svg);
+      if (w > 60) S("text", { x: x + 5, y: 40, style: "font-size:11.5px;fill:var(--card);font-weight:600" }, svg).textContent = `${l} ${Math.round(100 * v / per)}%`;
+      x += w;
+    });
+    S("text", { x: 0, y: 40, style: "font-size:12px" }, svg).textContent = m.n;
+    const rows = M.map(mm => { const cc = cost(mm, I, O, h, b); return (cc.un + cc.cr + cc.out) * R * 86400 * 30; });
+    const mx = Math.max(...rows.filter((_, k) => I + O <= M[k].ctx), 1e-9);
+    S("text", { x: 0, y: 78, style: "font-size:12.5px;font-weight:700" }, svg).textContent = "Та же нагрузка на других моделях, $/месяц";
+    M.forEach((mm, k) => {
+      const y = 88 + k * 27, over = I + O > mm.ctx;
+      S("text", { x: x0 - 8, y: y + 15, "text-anchor": "end", style: "font-size:12.5px" + (k === +sel.value ? ";font-weight:700" : "") }, svg).textContent = mm.n;
+      if (over) {
+        S("rect", { x: x0, y: y + 2, width: W, height: 18, rx: 3, fill: "var(--bg-soft)", stroke: "var(--bad)", "stroke-dasharray": "3 3" }, svg);
+        S("text", { x: x0 + 8, y: y + 15, style: "font-size:12px;fill:var(--bad)" }, svg).textContent = "не влезает в окно " + fT(mm.ctx);
+        return;
+      }
+      S("rect", { x: x0, y: y + 2, width: Math.max(1, W * rows[k] / mx), height: 18, rx: 3, fill: k === +sel.value ? "var(--accent)" : "var(--border)" }, svg);
+      S("text", { x: x0 + W * rows[k] / mx + 6, y: y + 15, style: "font-size:12px;font-family:var(--mono)" }, svg).textContent = f$(rows[k]);
+    });
+    const pairs = I * I;
+    ro.textContent =
+      `вход ${fT(I)} + выход ${fT(O)} токенов, ${R} запр/с, кэш-хит ${Math.round(h * 100)}%${b ? ", Batch API −50%" : ""}\n` +
+      `токенов в день: ${Math.round((I + O) * R * 86400).toLocaleString("ru-RU")}\n` +
+      `attention на prefill: ${fT(I)}² ≈ ${pairs.toExponential(1)} пар на слой и голову — поэтому длинный вход бьёт по TTFT` +
+      (I + O > m.ctx ? `\n⚠ ${fT(I + O)} > окна ${m.n} (${fT(m.ctx)}): API вернёт 400` : "") +
+      (O > 32000 ? "\nвыход > 32K: используйте стриминг, иначе рискуете таймаутом HTTP" : "") +
+      (h === 0 && I >= 10000 ? "\nподсказка: при стабильном префиксе prompt caching срежет входную часть до ~10%" : "");
+  }
+  Course.bindRange(inI, v => fT(inTok(v)), draw);
+  Course.bindRange(inO, v => fT(outTok(v)), draw);
+  Course.bindRange(inR, v => String(rps(v)), draw);
+  Course.bindRange(inC, v => v + "%", draw);
+  sel.onchange = draw; bat.onchange = draw;
+})();
+</script>
+</body>
+</html>

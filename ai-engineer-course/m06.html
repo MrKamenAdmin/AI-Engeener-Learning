@@ -1,0 +1,726 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>6 · Evals</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; margin: 8px 0; }
+.metrics div { background: var(--bg-soft); border-radius: 6px; padding: 6px 10px; font-size: 12px; color: var(--muted); }
+.metrics b { display: block; font: 600 16px var(--mono); color: var(--text); }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 8px 0; }
+.pair .ans { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 13.5px; background: var(--bg-soft); }
+.pair .ans .pos { font: 600 11px var(--mono); color: var(--muted); text-transform: uppercase; }
+.pair .ans.win { border-color: var(--ok); background: var(--ok-soft); }
+@media (max-width: 560px) { .pair { grid-template-columns: 1fr; } }
+.verdict { font-weight: 600; margin: 6px 0; }
+</style>
+</head>
+<body data-module="m06">
+<main class="content">
+  <div class="module-hero">
+    <div class="eyebrow">Модуль 6</div>
+    <h1>Evals</h1>
+    <p class="lead">Evals — это тесты для недетерминированной системы. Без них любое изменение промпта, модели или retrieval — гадание по трём примерам в чате. Разберём, как собрать golden dataset, когда хватает regex, как откалибровать LLM-as-a-judge, сколько кейсов нужно, чтобы отличить 82% от 85%, и как встроить всё это в CI и мониторинг прода.</p>
+    <div class="meta-row"><span class="chip">≈ 10 часов</span><span class="chip">Python + Go</span><span class="chip">4 визуализации</span><span class="chip">самый недооценённый навык</span></div>
+  </div>
+
+  <h2 id="why">Зачем evals</h2>
+  <p>В обычном коде <code>f(x)</code> детерминирована, и unit-тест с одним <code>assert</code> доказывает поведение. В LLM-системе выход вероятностный, пространство входов открыто, а «правильный ответ» часто не единственный. Отсюда три следствия:</p>
+  <ul>
+    <li><b>Один пример ничего не доказывает.</b> Качество — это доля успехов на распределении входов, то есть статистика, а не булево значение.</li>
+    <li><b>Любое изменение может сломать что-то в другом месте.</b> Поправили промпт под жалобу клиента — упала точность на другой категории. Без регрессионного набора вы этого не увидите до инцидента.</li>
+    <li><b>Модели меняются под вами.</b> Новая версия модели, миграция на другого провайдера, изменение retrieval — eval-набор даёт ответ «можно ли переключаться» за час, а не за неделю жалоб.</li>
+  </ul>
+  <p>Практический тезис, который стоит произносить на собеседовании: <b>evals — это главный артефакт AI-продукта</b>, важнее промпта. Промпт можно переписать за вечер, модель поменять одной строкой, а хороший eval-набор с откалиброванными проверками копится месяцами и позволяет делать и то, и другое безопасно.</p>
+  <div class="callout go"><span class="title">Аналогия из Go</span>Eval-набор — это table-driven тесты, где <code>want</code> иногда заменён функцией-предикатом, а итоговый вердикт — не «все зелёные», а «pass rate ≥ порога и нет регрессии относительно main». Прогон на реальной модели — это интеграционный тест: дорогой, медленный, под build tag или <code>t.Skip</code> без ключа.</div>
+
+  <h2 id="types">Виды evals</h2>
+  <table>
+    <tr><th>Вид</th><th>Что проверяет</th><th>Когда запускать</th></tr>
+    <tr><td><b>Unit-like кейсы</b></td><td>Отдельную способность компонента: роутер выбирает категорию, экстрактор достаёт поле, SQL-генератор пишет валидный запрос</td><td>На каждый PR, быстро и дёшево</td></tr>
+    <tr><td><b>End-to-end</b></td><td>Всю систему: вопрос пользователя → retrieval → генерация → ответ; для агентов — траекторию и итоговое состояние среды</td><td>На PR в критичные части, nightly</td></tr>
+    <tr><td><b>Offline</b></td><td>Фиксированный датасет до выкатки</td><td>CI, эксперименты с промптами и моделями</td></tr>
+    <tr><td><b>Online</b></td><td>Реальный трафик после выкатки: семплы + judge, неявный фидбек, A/B</td><td>Постоянно, с алертами</td></tr>
+    <tr><td><b>Adversarial / red team</b></td><td>Prompt injection, jailbreak, утечки PII, токсичность</td><td>Перед релизом, после изменений guardrails</td></tr>
+  </table>
+  <p>Для RAG полезно разделять оценку <b>retrieval</b> (recall@k, MRR — модуль 4) и <b>генерации</b> (faithfulness: ответ опирается на найденное; relevance: отвечает на вопрос). Так понятно, где чинить. Для агентов — оценивать и <b>итог</b> (задача решена? состояние БД правильное?), и <b>процесс</b> (число шагов, стоимость, не было ли опасных действий).</p>
+
+  <h2 id="dataset">Golden dataset</h2>
+  <h3>Откуда брать кейсы</h3>
+  <ul>
+    <li><b>Реальные логи</b> (обезличенные) — лучший источник: реальное распределение формулировок, опечаток, языков.</li>
+    <li><b>Инциденты и жалобы</b> — каждый баг из прода становится регрессионным кейсом. Как в обычной разработке: сначала тест, потом фикс.</li>
+    <li><b>Эксперты предметной области</b> пишут трудные и граничные случаи, которых в логах мало.</li>
+    <li><b>Синтетика от LLM</b> — для холодного старта и расширения покрытия: генерировать вариации по измерениям (тип вопроса × персона × сложность), а не «придумай 100 вопросов» (получите 100 похожих). Синтетику обязательно просматривает человек.</li>
+  </ul>
+  <h3>Размер и состав</h3>
+  <ul>
+    <li><b>50–200 кейсов для старта.</b> Меньше 30 — один флаки-кейс сдвигает метрику на 3%+; больше 200 на старте никто не разметит вдумчиво. Растите по мере появления багов.</li>
+    <li><b>Стратификация</b>: у каждого кейса тег категории (тип запроса, язык, сложность, сегмент клиента). Pass rate считаем и в целом, и по срезам — общая цифра прячет провал на малой категории.</li>
+    <li><b>Edge cases</b>: пустой ввод, очень длинный, другой язык, вопрос вне домена («не знаю» — правильный ответ), неоднозначный, с противоречием в контексте.</li>
+    <li><b>Adversarial</b>: инъекции («игнорируй инструкции…»), попытки вытащить system prompt, PII, провокации. Для них порог часто 100%.</li>
+    <li><b>Негативные кейсы</b>: где правильное поведение — отказаться, переспросить, эскалировать на человека.</li>
+  </ul>
+  <h3>Гигиена</h3>
+  <ul>
+    <li><b>Версионирование</b>: датасет в git (JSONL) или в eval-платформе с версиями; в отчёте прогона — версия датасета, промпта, модели. Сравнивать можно только прогоны на одной версии набора.</li>
+    <li><b>Утечка в промпт</b>: если вы добавляете кейсы из eval-набора как few-shot примеры, метрика перестаёт измерять обобщение. Делите: dev-набор (на нём итерируете и смотрите ошибки) и held-out (смотрите редко, только цифры). То же самое для fine-tuning — кейсы не должны попадать в обучающие данные.</li>
+    <li><b>Насыщение</b>: набор, на котором 99% проходят, не ловит улучшений. Регулярно добавляйте более трудные кейсы.</li>
+    <li><b>Ожидаемый ответ устаревает</b>: цены, политики, документация меняются — кейсы с фактами нужно пересматривать.</li>
+  </ul>
+  <pre><code class="lang-json">{"id": "refund-017", "tags": ["refund", "ru", "hard"], "input": "Оплатил дважды, верните одно списание", "checks": ["not_contains", "judge"], "forbidden": ["гарантируем возврат"], "criterion": "Бот не обещает возврат сам, а объясняет процесс и предлагает оформить заявку", "reference": "Возврат оформляется через форму…"}
+{"id": "extract-042", "tags": ["extract", "en"], "input": "Invoice #A-993 due 2026-10-01, total $1,250.00", "checks": ["json_schema", "exact_fields"], "expected": {"invoice_id": "A-993", "due": "2026-10-01", "total_cents": 125000}}</code></pre>
+
+  <h2 id="checks">Точные проверки и эвристики</h2>
+  <p>Правило: <b>используйте самую дешёвую проверку, которая надёжно ловит дефект.</b> Детерминированная проверка бесплатна, мгновенна и не шумит. LLM-judge — когда без понимания смысла не обойтись.</p>
+  <table>
+    <tr><th>Проверка</th><th>Для чего</th><th>Подводные камни</th></tr>
+    <tr><td>Exact match</td><td>Классификация, извлечение полей, ответы из enum</td><td>Нормализуйте: регистр, пробелы, формат дат и чисел</td></tr>
+    <tr><td>Regex / contains / not_contains</td><td>Обязательные элементы (ссылка, дисклеймер), запрещённые фразы, формат</td><td>Хрупко к перефразированию; хорошо для «запрещено», хуже для «обязательно»</td></tr>
+    <tr><td>JSON-схема</td><td>Structured output, аргументы инструментов</td><td>При <code>strict</code>/structured outputs формат гарантирован — проверяйте семантику полей</td></tr>
+    <tr><td>Вызван нужный инструмент</td><td>Агенты и tool use: имя и аргументы <code>tool_use</code></td><td>Несколько правильных траекторий — проверяйте итоговое состояние, а не точную последовательность</td></tr>
+    <tr><td>Выполнение SQL</td><td>Text-to-SQL: выполнить сгенерированный и эталонный запрос на тестовой БД и сравнить результаты</td><td>Сравнивайте множества строк (порядок, алиасы колонок); read-only реплика; таймауты</td></tr>
+    <tr><td>Выполнение кода / тесты</td><td>Кодогенерация</td><td>Sandbox обязателен; pass@k</td></tr>
+    <tr><td>Метрики схожести (BLEU, ROUGE, cosine embedding)</td><td>Грубый сигнал для перевода и суммаризации</td><td>Плохо коррелируют с человеческой оценкой; для принятия решений — только как вспомогательные</td></tr>
+    <tr><td>Операционные</td><td>Латентность, токены, стоимость, число шагов агента</td><td>Это тоже часть eval-отчёта: «качество +2% при стоимости ×3» — другое решение</td></tr>
+  </table>
+
+  <h2 id="judge">LLM-as-a-judge</h2>
+  <p>Когда критерий смысловой («ответ опирается на контекст», «тон вежливый», «не обещает того, чего нет в политике»), проверку делает другая LLM по рубрике. Это масштабируемо, но judge — сам по себе модель со своими ошибками, и <b>его нужно валидировать так же, как классификатор</b>.</p>
+  <h3>Как писать рубрику</h3>
+  <ul>
+    <li><b>Один критерий — один judge-вызов</b> (или один вердикт в структурированном ответе). «Оцени качество ответа» — бесполезно; «Содержит ли ответ утверждения, которых нет в контексте?» — работает.</li>
+    <li><b>Бинарные вердикты лучше шкал 1–10.</b> Разница между 6 и 7 не определена ни для модели, ни для человека; калибровать шкалу почти невозможно, распределение сбивается к «7–8». PASS/FAIL с чётким определением воспроизводимее, агрегируется в понятный pass rate и легко сверяется с разметкой. Нужна градация — несколько бинарных критериев.</li>
+    <li><b>Сначала обоснование, потом вердикт</b> (поле <code>reasoning</code> перед <code>verdict</code> в JSON-схеме) — вердикт точнее, а обоснование помогает разбирать ошибки judge.</li>
+    <li><b>Дайте эталон или контекст</b>, если он есть: judge сравнивает с reference лучше, чем оценивает «с нуля».</li>
+    <li><b>Примеры</b> пограничных PASS и FAIL из вашей разметки в промпте judge — самый действенный способ калибровки.</li>
+  </ul>
+  <h3>Pointwise vs pairwise</h3>
+  <p><b>Pointwise</b> — оценка одного ответа по рубрике (абсолютная метрика, годится для CI-порогов). <b>Pairwise</b> — «какой из двух ответов лучше» (надёжнее для сравнения двух версий промпта/модели, потому что относительное суждение проще абсолютного; даёт win rate). Pairwise требует борьбы с position bias.</p>
+  <h3>Калибровка против человеческой разметки</h3>
+  <p>Процедура: 100–200 кейсов размечает человек (эксперт домена) → прогоняете judge → считаете согласие. Метрики:</p>
+  <ul>
+    <li><b>Agreement</b> (доля совпадений) — обманчива при несбалансированных классах: если 90% ответов хорошие, judge «всегда PASS» даёт 90% agreement.</li>
+    <li><b>Cohen's kappa</b> κ = (p<sub>o</sub> − p<sub>e</sub>) / (1 − p<sub>e</sub>) — согласие сверх случайного. Ориентиры: &lt; 0,4 слабо, 0,6–0,8 хорошо, &gt; 0,8 отлично. Сравнивайте с kappa между двумя людьми — это потолок.</li>
+    <li><b>Precision/recall по классу FAIL</b> (или TPR/TNR): judge, пропускающий 40% реальных провалов, в CI бесполезен, даже если agreement высокий.</li>
+  </ul>
+
+  <div class="viz" id="viz-calib">
+    <p class="viz-title">Калибровка judge: матрица ошибок против человека</p>
+    <p class="viz-sub">200 синтетических кейсов: человек разметил PASS/FAIL, judge выдал уверенность 0–1. Двигайте порог и «качество judge»: смотрите, как меняются agreement, kappa, precision/recall и — главное — оценка pass rate, которую judge покажет в отчёте.</p>
+    <div class="controls">
+      <label>порог judge <input type="range" id="cb-thr" min="0.05" max="0.95" step="0.01" value="0.5"> <output></output></label>
+      <label>качество judge <input type="range" id="cb-sep" min="0" max="1" step="0.05" value="0.6"> <output></output></label>
+      <label>доля PASS у людей <input type="range" id="cb-base" min="0.5" max="0.95" step="0.05" value="0.7"> <output></output></label>
+    </div>
+    <svg id="cb-svg" viewBox="0 0 640 250" role="img" aria-label="Гистограмма уверенности judge и матрица ошибок"></svg>
+    <div class="metrics" id="cb-metrics"></div>
+    <p class="muted" style="font-size:13px;margin:4px 0 0">Поставьте долю PASS 0,9 и качество 0: agreement останется высоким при kappa ≈ 0 — judge ничего не понимает, просто угадывает частый класс.</p>
+  </div>
+
+  <h3>Смещения judge</h3>
+  <ul>
+    <li><b>Position bias</b> — в pairwise judge предпочитает ответ на определённой позиции (часто первый). Лечение: оценивать в обоих порядках; несовпадение вердиктов = ничья или «не уверен»; рандомизировать порядок.</li>
+    <li><b>Verbosity bias</b> — длинный ответ кажется лучше. Лечение: явно в рубрике «длина не является достоинством», сравнение при контроле длины, отдельный критерий краткости.</li>
+    <li><b>Self-preference</b> — модель выше оценивает тексты своей модели/семейства (ниже перплексия для «своего» стиля). Лечение: judge другой моделью или другим семейством, чем тестируемая; хотя бы — калибровка на человеческой разметке.</li>
+    <li><b>Авторитетность и уверенный тон</b>, ложные ссылки, «похоже на правильный формат» — judge ведётся на форму. Давайте reference и проверяйте факты детерминированно, где можно.</li>
+  </ul>
+
+  <div class="viz" id="viz-bias">
+    <p class="viz-title">Position bias: меняем порядок — меняется вердикт</p>
+    <p class="viz-sub">Симуляция pairwise-judge с заданным смещением к первой позиции. Нажмите «Спросить judge» несколько раз, поменяйте порядок, затем прогоните 200 сравнений в обоих порядках.</p>
+    <div class="controls">
+      <label>смещение к 1-й позиции <input type="range" id="pb-bias" min="0" max="0.4" step="0.02" value="0.2"> <output></output></label>
+      <label>A реально лучше на <input type="range" id="pb-gap" min="-0.2" max="0.3" step="0.02" value="0.06"> <output></output></label>
+    </div>
+    <div class="pair" id="pb-pair"></div>
+    <div class="controls">
+      <button class="btn primary" id="pb-ask">Спросить judge</button>
+      <button class="btn" id="pb-swap">⇄ Поменять порядок</button>
+      <button class="btn" id="pb-run">Прогнать 200 × 2 порядка</button>
+    </div>
+    <div class="verdict" id="pb-verdict"></div>
+    <svg id="pb-svg" viewBox="0 0 640 170" role="img" aria-label="Доля побед A в зависимости от порядка"></svg>
+  </div>
+
+  <h2 id="humans">Человеческая разметка и error analysis</h2>
+  <h3>Сначала смотрите на данные</h3>
+  <p>Самая частая ошибка — начинать с выбора метрик и фреймворка. Правильный порядок (его настойчиво продвигают практики вроде Hamel Husain и Shreya Shankar):</p>
+  <ol>
+    <li>Соберите 50–100 реальных трасс (вход, контекст, ответ, вызовы инструментов).</li>
+    <li>Просмотрите их руками и напишите свободным текстом, что не так в каждой проблемной (open coding).</li>
+    <li>Сгруппируйте заметки в категории ошибок (axial coding) и посчитайте частоты: «выдумывает номер заказа — 14%, отвечает на английском — 6%, не эскалирует злого клиента — 5%».</li>
+    <li>Только теперь пишите проверки — под реальные частые режимы отказа, а не под воображаемые. Часть закроется regex, часть потребует judge.</li>
+  </ol>
+  <p>Error analysis повторяется после каждого значимого изменения и регулярно на прод-семплах. Критерии оценки «дрейфуют»: глядя на ответы, люди уточняют, что считают хорошим (criteria drift, Shankar et al., 2024) — это нормально, рубрики версионируются.</p>
+  <h3>Инструкции и согласие разметчиков</h3>
+  <ul>
+    <li>Письменные инструкции с определениями и примерами пограничных случаев; бинарные метки + комментарий «почему».</li>
+    <li><b>Inter-annotator agreement</b>: 20–30% кейсов размечают двое, считают Cohen's kappa (для большего числа разметчиков — Fleiss' kappa или Krippendorff's alpha). Низкое согласие людей = размытый критерий; judge не может быть согласован с людьми лучше, чем люди между собой.</li>
+    <li>Разметчик — эксперт домена (юрист для юридического бота), а не случайный краудворкер. Для старта часто достаточно одного «benevolent dictator» — продакт или эксперт, который задаёт планку качества.</li>
+    <li>Удобный инструмент разметки окупается: простая внутренняя страница, показывающая трассу целиком, с горячими клавишами PASS/FAIL, ускоряет разметку в разы.</li>
+  </ul>
+
+  <h2 id="stats">Статистика: когда 85% лучше 82%</h2>
+  <p>Pass rate на n кейсах — оценка доли с погрешностью. Приближённо полуширина 95%-го интервала ≈ 1,96·√(p(1−p)/n); для p ≈ 0,8 и n = 100 это ±8 п.п. Поэтому «было 82%, стало 85% на 100 кейсах» — <b>шум</b>. Для малых n и p около 0 или 1 используйте интервал Уилсона (он в визуализации ниже и в коде).</p>
+  <ul>
+    <li><b>Размер выборки</b> для различения двух долей (80% мощности, α = 0,05): n ≈ (1,96 + 0,84)² · (p₁q₁ + p₂q₂) / Δ². Чтобы отличить 80% от 85% — около 900 кейсов на вариант. Отсюда практический вывод: небольшой набор ловит большие регрессии, а маленькие улучшения требуют большого набора или более чувствительного дизайна.</li>
+    <li><b>Парный дизайн</b>: оба варианта прогоняются на одних и тех же кейсах, анализируются различия по кейсам (тест Макнемара, bootstrap по кейсам). Это заметно сужает интервал, потому что убирает разброс сложности кейсов. Всегда сравнивайте на одном наборе.</li>
+    <li><b>Шум повторов</b>: один и тот же прогон дважды даёт разные цифры (сэмплирование модели, недетерминизм провайдера, judge тоже шумит). Прогоните baseline 3–5 раз и измерьте разброс — это ваш noise floor; изменения меньше него не обсуждаются. Anthropic в статье «Adding error bars to evals» рекомендует именно так: кластеризованные стандартные ошибки, повторы, парные разности.</li>
+    <li><b>pass@k</b> — вероятность, что хотя бы одна из k попыток успешна (метрика кодогенерации). Несмещённая оценка по n попыткам с c успехами: 1 − C(n−c, k)/C(n, k). Для продукта часто важнее обратное — <b>pass^k</b> (все k попыток успешны): надёжность, которую почувствует пользователь, повторяющий запрос.</li>
+    <li><b>Множественные сравнения</b>: смотрите 20 срезов — один «значимо упадёт» случайно. Заранее решите, какие срезы критичные.</li>
+  </ul>
+
+  <div class="viz" id="viz-ci">
+    <p class="viz-title">Доверительный интервал: различимы ли две версии промпта?</p>
+    <p class="viz-sub">Двигайте размер набора и pass rate двух версий. Полосы — 95%-е интервалы Уилсона; ниже — интервал разности (непарный, консервативный) и сколько кейсов нужно, чтобы уверенно различить такую разницу.</p>
+    <div class="controls">
+      <label>кейсов n <input type="range" id="ci-n" min="20" max="2000" step="10" value="100"> <output></output></label>
+      <label>v1 pass rate <input type="range" id="ci-a" min="0.5" max="0.99" step="0.01" value="0.82"> <output></output></label>
+      <label>v2 pass rate <input type="range" id="ci-b" min="0.5" max="0.99" step="0.01" value="0.85"> <output></output></label>
+    </div>
+    <svg id="ci-svg" viewBox="0 0 640 200" role="img" aria-label="Доверительные интервалы двух версий"></svg>
+    <div class="readout" id="ci-out"></div>
+  </div>
+
+  <h2 id="framework">Мини-фреймворк на Python</h2>
+  <p>Фреймворк evals — это 80 строк, а не платформа. Датасет JSONL → прогон приложения конкурентно → детерминированные проверки и LLM-judge с рубрикой → отчёт pandas с интервалами по срезам. Judge — другая модель (в идеале — другое семейство), вердикт — через structured outputs, чтобы не парсить свободный текст.</p>
+  <pre><code class="lang-python">"""Мини-фреймворк evals: golden.jsonl -> прогон -> проверки -> judge -> отчёт."""
+import json, math, re
+from concurrent.futures import ThreadPoolExecutor
+
+import anthropic, jsonschema, pandas as pd
+
+client = anthropic.Anthropic()  # ключ из ANTHROPIC_API_KEY; SDK сам ретраит 429/5xx
+APP_MODEL, JUDGE_MODEL = "claude-sonnet-5", "claude-opus-5"
+SYSTEM = open("prompts/support_v7.txt").read()
+
+def run_app(case: dict) -> str:
+    r = client.messages.create(model=APP_MODEL, max_tokens=2000, system=SYSTEM,
+                               messages=[{"role": "user", "content": case["input"]}])
+    if r.stop_reason == "max_tokens":
+        raise RuntimeError("truncated")  # не провал качества, а отдельный статус
+    return "".join(b.text for b in r.content if b.type == "text")
+
+# --- детерминированные проверки: (output, case) -> bool
+def exact_fields(out, c):
+    got = json.loads(out)
+    return all(got.get(k) == v for k, v in c["expected"].items())
+def json_schema(out, c):
+    try:
+        jsonschema.validate(json.loads(out), c["schema"]); return True
+    except (json.JSONDecodeError, jsonschema.ValidationError):
+        return False
+def not_contains(out, c): return not any(s.lower() in out.lower() for s in c["forbidden"])
+def regex(out, c): return re.search(c["pattern"], out, re.S) is not None
+
+RUBRIC = """Ты проверяешь ответ бота поддержки по ОДНОМУ критерию.
+Критерий: {criterion}
+Длина ответа не является достоинством.
+&lt;question&gt;{q}&lt;/question&gt;
+&lt;reference&gt;{ref}&lt;/reference&gt;
+&lt;answer&gt;{a}&lt;/answer&gt;
+Сначала кратко обоснуй, затем вынеси вердикт PASS или FAIL."""
+VERDICT = {"type": "object", "additionalProperties": False, "required": ["reasoning", "verdict"],
+           "properties": {"reasoning": {"type": "string"},
+                          "verdict": {"type": "string", "enum": ["PASS", "FAIL"]}}}
+
+def judge(out, c):
+    r = client.messages.create(
+        model=JUDGE_MODEL, max_tokens=1000,
+        messages=[{"role": "user", "content": RUBRIC.format(
+            criterion=c["criterion"], q=c["input"], ref=c.get("reference", "—"), a=out)}],
+        output_config={"format": {"type": "json_schema", "schema": VERDICT}})
+    return json.loads(r.content[0].text)["verdict"] == "PASS"
+
+CHECKS = {"exact_fields": exact_fields, "json_schema": json_schema,
+          "not_contains": not_contains, "regex": regex, "judge": judge}
+
+def evaluate(case: dict) -> dict:
+    row = {"id": case["id"], "tag": case["tags"][0]}
+    try:
+        out = run_app(case)
+        for name in case["checks"]:
+            row[name] = CHECKS[name](out, case)
+    except Exception as e:  # инфраструктура: не смешиваем с провалом качества
+        return {**row, "status": "error", "error": repr(e)}
+    return {**row, "status": "ok", "passed": all(row[n] for n in case["checks"]), "output": out}
+
+def wilson(k: int, n: int, z: float = 1.96) -> str:
+    if n == 0: return "n/a"
+    p = k / n; d = 1 + z * z / n
+    c = (p + z * z / (2 * n)) / d
+    h = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d
+    return f"[{c - h:.0%}, {c + h:.0%}]"
+
+if __name__ == "__main__":
+    cases = [json.loads(l) for l in open("golden.jsonl") if l.strip()]
+    with ThreadPoolExecutor(max_workers=8) as ex:  # под rate limit аккаунта
+        df = pd.DataFrame(ex.map(evaluate, cases))
+    ok = df[df.status == "ok"]
+    by = ok.groupby("tag")["passed"].agg(passed="sum", n="count")
+    by["rate"] = (by.passed / by.n).map("{:.0%}".format)
+    by["ci95"] = [wilson(k, n) for k, n in zip(by.passed, by.n)]
+    print(by.to_string())
+    k, n = int(ok.passed.sum()), len(ok)
+    print(f"TOTAL {k}/{n} = {k / n:.1%} CI95 {wilson(k, n)}; errors: {(df.status == 'error').sum()}")
+    df.to_json("results.jsonl", orient="records", lines=True, force_ascii=False)</code></pre>
+  <div class="callout warn"><span class="title">Что упрощено</span>Нет повторов (добавьте <code>reps</code> и считайте разброс), нет кэша ответов и judge-вердиктов, нет сохранения версии промпта/модели/датасета в <code>results.jsonl</code> — в реальном проекте это первое, что понадобится при сравнении прогонов. Проверьте, что <code>response.model</code> совпадает с запрошенной моделью: тихая подмена модели обесценивает сравнение.</div>
+
+  <h2 id="ci">Evals в CI</h2>
+  <p>Цель — чтобы изменение промпта проходило ту же дисциплину, что изменение кода: PR → автоматический прогон → отчёт в комментарии → gate.</p>
+  <ul>
+    <li><b>Пороги</b>: абсолютный (pass rate ≥ 90%), по критичным срезам (safety/adversarial — 100%, ни одного провала), и относительный (не хуже baseline из main больше, чем на noise floor). Абсолютный порог ловит деградацию, относительный — постепенное сползание.</li>
+    <li><b>Регрессии по кейсам</b>: список кейсов, которые в main проходили, а в PR — нет. Это полезнее агрегата для ревьюера.</li>
+    <li><b>Уровни</b>: быстрый smoke-набор (20–50 кейсов, детерминированные проверки) на каждый PR; полный набор с judge — на PR, меняющие промпты/модель (фильтр по путям), и nightly.</li>
+    <li><b>Стоимость</b>: 200 кейсов × (3K input + 500 output) на Sonnet 5 ≈ $2,2, плюс judge на Opus 5 ≈ $3,5 — около $6 за прогон (цены на момент написания, сентябрь 2026). 20 PR в день — ~$120/день. Рычаги: prompt caching общего system prompt, Batch API (−50%) для nightly, кэш ответов по хэшу (промпт, модель, параметры, вход) для неизменённых компонентов, дешёвый judge там, где его согласие с людьми достаточное.</li>
+    <li><b>Инфраструктурные ошибки</b> (429, таймауты) — отдельный статус, не провал качества. Если их больше ~5–10% — прогон невалиден.</li>
+  </ul>
+  <p>Go-вариант: eval-набор как обычный <code>go test</code>, который пропускается без ключа и в <code>-short</code>, гоняет кейсы параллельно с ограничением и падает при pass rate ниже порога.</p>
+  <pre><code class="lang-go">package support_test
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"os"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/anthropics/anthropic-sdk-go"
+	"golang.org/x/sync/errgroup"
+
+	"example.com/app/support" // тестируемый код: support.Answer(ctx, client, question)
+)
+
+type evalCase struct {
+	ID             string   `json:"id"`
+	Input          string   `json:"input"`
+	MustMatch      string   `json:"must_match"`       // regex, опционально
+	MustNotContain []string `json:"must_not_contain"` // запрещённые фразы
+}
+
+const minPassRate = 0.90
+
+func TestSupportEvals(t *testing.T) {
+	if os.Getenv("ANTHROPIC_API_KEY") == "" {
+		t.Skip("ANTHROPIC_API_KEY not set: paid evals skipped")
+	}
+	if testing.Short() {
+		t.Skip("evals skipped in -short mode")
+	}
+	cases := loadCases(t, "testdata/golden.jsonl")
+	client := anthropic.NewClient()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	type result struct {
+		pass  bool
+		why   string
+		infra error
+	}
+	results := make([]result, len(cases))
+	var g errgroup.Group
+	g.SetLimit(8) // не больше 8 запросов в полёте: rate limit аккаунта
+	for i, c := range cases {
+		g.Go(func() error {
+			out, err := support.Answer(ctx, client, c.Input)
+			if err != nil {
+				results[i] = result{infra: err} // 429/таймаут — не провал качества
+				return nil
+			}
+			ok, why := check(c, out)
+			results[i] = result{pass: ok, why: why}
+			return nil
+		})
+	}
+	_ = g.Wait()
+
+	var pass, infra int
+	for i, r := range results {
+		switch {
+		case r.infra != nil:
+			infra++
+			t.Logf("INFRA %s: %v", cases[i].ID, r.infra)
+		case r.pass:
+			pass++
+		default:
+			t.Logf("FAIL  %s: %s", cases[i].ID, r.why)
+		}
+	}
+	if infra*10 &gt; len(cases) {
+		t.Fatalf("infra errors %d/%d: run is invalid", infra, len(cases))
+	}
+	rate := float64(pass) / float64(len(cases)-infra)
+	t.Logf("pass rate %.1f%% (%d/%d), infra errors: %d", 100*rate, pass, len(cases)-infra, infra)
+	if rate &lt; minPassRate {
+		t.Errorf("pass rate %.1f%% is below threshold %.0f%%", 100*rate, 100*minPassRate)
+	}
+}
+
+func check(c evalCase, out string) (bool, string) {
+	for _, bad := range c.MustNotContain {
+		if strings.Contains(strings.ToLower(out), strings.ToLower(bad)) {
+			return false, "contains forbidden phrase " + bad
+		}
+	}
+	if c.MustMatch != "" &amp;&amp; !regexp.MustCompile(c.MustMatch).MatchString(out) {
+		return false, "does not match " + c.MustMatch
+	}
+	return true, ""
+}
+
+func loadCases(t *testing.T, path string) []evalCase {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	var cases []evalCase
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1&lt;&lt;20), 1&lt;&lt;20) // длинные строки JSONL
+	for sc.Scan() {
+		if strings.TrimSpace(sc.Text()) == "" {
+			continue
+		}
+		var c evalCase
+		if err := json.Unmarshal(sc.Bytes(), &amp;c); err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		cases = append(cases, c)
+	}
+	if err := sc.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return cases
+}</code></pre>
+  <p>Запуск: <code>go test ./support -run Evals -v -timeout 15m</code>. Альтернатива errgroup — подтесты с <code>t.Parallel()</code> и флаг <code>-parallel 8</code>: идиоматично и даёт отчёт по каждому кейсу, но тогда каждый провал кейса роняет тест, и порог pass rate приходится считать в родительском тесте после <code>t.Run</code>-группы, логируя вместо <code>t.Error</code> внутри.</p>
+  <div class="callout go"><span class="title">Аналогия из Go</span>Это как бенчмарки: результат шумный, поэтому сравнивают не один прогон, а распределения (<code>benchstat</code> с <code>-count=10</code>). Для evals тот же подход: несколько повторов baseline, сравнение с учётом разброса.</div>
+
+  <div class="viz" id="viz-pipe">
+    <p class="viz-title">Пайплайн evals: CI и прод как один цикл</p>
+    <p class="viz-sub">Верхняя полоса — offline (до выкатки), нижняя — online (после). Нажмите на этап, чтобы увидеть, что там происходит. Ключевая стрелка — слева: ошибки из прода становятся новыми кейсами golden-набора.</p>
+    <svg id="pp-svg" viewBox="0 0 640 270" role="img" aria-label="Схема пайплайна evals"></svg>
+    <div class="readout" id="pp-out">Нажмите на любой этап.</div>
+  </div>
+
+  <h2 id="online">Онлайн-оценка</h2>
+  <p>Offline-набор отражает прошлое; реальные пользователи приходят с новым. Онлайн-оценка отвечает на вопрос «как система работает сейчас».</p>
+  <ul>
+    <li><b>A/B-тесты</b> на бизнес-метриках (решённые тикеты без эскалации, конверсия, удержание). Единственный способ проверить, что «лучше по judge» значит «лучше для бизнеса». Нужен достаточный трафик и заранее выбранная первичная метрика.</li>
+    <li><b>Неявный фидбек</b>: копирование ответа, принятие черновика (и насколько его отредактировали — edit distance), повторная генерация, переформулирование вопроса, уход из сессии, эскалация на человека. Лайки/дизлайки — редкие (часто &lt; 1% ответов) и смещённые (жалуются недовольные), но точные для найденных случаев.</li>
+    <li><b>Мониторинг семплов с judge</b>: 1–5% трафика (плюс все сессии с негативными сигналами) автоматически оцениваются теми же откалиброванными judge. Дашборд pass rate по дням и срезам, алерт на падение сверх шума.</li>
+    <li><b>Дрейф входов</b>: распределение запросов меняется (новый продукт, сезон, другая аудитория). Мониторьте язык, длину, темы (кластеризация эмбеддингов, доля запросов далеко от центроидов известных кластеров), долю «не знаю»-ответов и отказов. Новый кластер = кандидат в golden-набор.</li>
+    <li><b>Приватность</b>: логи с пользовательскими данными — PII-редакция до хранения, сроки хранения, доступ по ролям; judge на внешнем API — проверьте, что это допустимо договором.</li>
+  </ul>
+
+  <h2 id="tools">Инструменты</h2>
+  <table>
+    <tr><th>Инструмент</th><th>Что это</th><th>Когда брать</th></tr>
+    <tr><td><b>promptfoo</b></td><td>Open-source CLI: YAML-конфиг с промптами, провайдерами, тест-кейсами и assert'ами (включая llm-rubric), матрица сравнения, red teaming</td><td>Быстрый старт и CI без своей инфраструктуры; языконезависим</td></tr>
+    <tr><td><b>Langfuse</b></td><td>Open-source (можно self-host) трейсинг LLM-приложений + датасеты, эксперименты, оценки, разметка</td><td>Нужны трейсы из прода и evals в одном месте, данные у себя</td></tr>
+    <tr><td><b>Braintrust</b></td><td>SaaS-платформа evals: эксперименты, сравнение прогонов, логирование, playground, скореры</td><td>Команде нужен UI для сравнения экспериментов «из коробки»</td></tr>
+    <tr><td><b>OpenAI Evals</b></td><td>Фреймворк и реестр eval-наборов (GitHub), плюс Evals в платформе OpenAI</td><td>Экосистема OpenAI; как референс структуры</td></tr>
+    <tr><td><b>RAGAS</b></td><td>Библиотека метрик RAG: faithfulness, answer relevancy, context precision/recall (в основном LLM-based)</td><td>Быстро получить RAG-метрики; калибруйте их на своей разметке, как любой judge</td></tr>
+  </table>
+  <p>Также встречаются DeepEval (pytest-стиль), Inspect (UK AISI) и Phoenix (Arize). Выбор инструмента вторичен: каркас из этого модуля (JSONL + проверки + judge + отчёт + CI-gate) переносится на любой из них. На собеседовании ценится понимание методологии, а не знание кнопок.</p>
+
+  <h2 id="practice">Практика</h2>
+  <div class="task">
+    <h3>Задание 1: golden dataset и error analysis</h3>
+    <p>Для своего RAG из модуля 4 (или бота поддержки) соберите 60–100 кейсов: реальные/синтетические вопросы, стратифицированные по 4–6 категориям, 10+ edge cases, 5+ adversarial, 5+ «правильный ответ — не знаю». Прогоните систему, вручную просмотрите все ответы и составьте таблицу категорий ошибок с частотами.</p>
+    <p><b>Готово, когда:</b> <code>golden.jsonl</code> в git с тегами; есть таблица «категория ошибки → частота → какой проверкой ловить»; dev/held-out разделены.</p>
+    <label class="check"><input type="checkbox" data-save="m06-t1"> Сделал</label>
+  </div>
+  <div class="task">
+    <h3>Задание 2: откалиброванный judge</h3>
+    <p>Разметите руками 100 ответов PASS/FAIL по одному критерию (например, faithfulness). Напишите judge с бинарным вердиктом и reasoning. Посчитайте agreement, Cohen's kappa, recall по FAIL. Итерируйте рубрику (добавьте примеры пограничных случаев), пока kappa ≥ 0,6. Проверьте position bias для pairwise-варианта: доля несовпадающих вердиктов при смене порядка.</p>
+    <p><b>Готово, когда:</b> есть отчёт до/после калибровки с цифрами; judge — другая модель, чем тестируемая; калибровочный набор отделён от того, на котором подбирали рубрику.</p>
+    <label class="check"><input type="checkbox" data-save="m06-t2"> Сделал</label>
+  </div>
+  <div class="task">
+    <h3>Задание 3: evals в CI</h3>
+    <p>Подключите Python-фреймворк или Go-тест к CI (GitHub Actions): smoke-набор на каждый PR, полный — при изменении <code>prompts/</code>; отчёт в комментарий к PR со списком регрессий относительно main; секрет API-ключа только для доверенных веток.</p>
+    <p><b>Готово, когда:</b> PR с намеренно испорченным промптом краснеет; повторный прогон baseline 3 раза даёт измеренный noise floor, и порог регрессии учитывает его; стоимость прогона видна в отчёте.</p>
+    <label class="check"><input type="checkbox" data-save="m06-t3"> Сделал</label>
+  </div>
+
+  <h2 id="selfcheck">Самопроверка</h2>
+  <details class="q"><summary>Почему agreement judge с людьми 92% может ничего не значить?</summary><div class="a"><p>При несбалансированных классах: если 92% ответов хорошие, judge «всегда PASS» даёт 92% agreement при нулевой полезности. Смотрите Cohen's kappa и recall по классу FAIL.</p></div></details>
+  <details class="q"><summary>Почему бинарные вердикты предпочтительнее шкалы 1–10?</summary><div class="a"><p>Границы между соседними баллами не определены — и judge, и люди ставят их непоследовательно; шкалы плохо калибруются и сжимаются к середине. PASS/FAIL с чётким определением воспроизводим, сверяется с разметкой и агрегируется в понятный pass rate. Нужна градация — несколько бинарных критериев.</p></div></details>
+  <details class="q"><summary>Pass rate вырос с 82% до 85% на 100 кейсах. Выкатываем?</summary><div class="a"><p>Это в пределах шума: 95%-й интервал для p ≈ 0,8, n = 100 — примерно ±8 п.п. Нужен парный анализ по кейсам, повторы для оценки noise floor или больше кейсов (для 80→85% — порядка 900 на вариант при непарном сравнении). Плюс проверить срезы и стоимость.</p></div></details>
+  <details class="q"><summary>Как бороться с position bias в pairwise-оценке?</summary><div class="a"><p>Оценивать каждую пару в обоих порядках; если вердикты противоречат — считать ничьей; рандомизировать порядок; отслеживать долю противоречий как метрику качества judge.</p></div></details>
+  <details class="q"><summary>Что такое утечка eval-набора в промпт и почему она опасна?</summary><div class="a"><p>Кейсы из набора попадают в few-shot примеры (или в обучающие данные). Метрика начинает измерять запоминание, а не обобщение, и завышается. Решение — dev/held-out разделение, held-out не используется при подборе промпта.</p></div></details>
+  <details class="q"><summary>Чем pass@k отличается от pass^k?</summary><div class="a"><p>pass@k — хотя бы одна из k попыток успешна (оптимистично, для генерации кандидатов с последующей проверкой). pass^k — все k успешны (надёжность, важна для продукта, где пользователь ждёт стабильного поведения).</p></div></details>
+  <details class="q"><summary>Почему 429 от API нельзя засчитывать как провал кейса?</summary><div class="a"><p>Это инфраструктурная ошибка, а не качество ответа: pass rate будет зависеть от нагрузки на аккаунт, а не от промпта. Отдельный статус, исключение из знаменателя, и инвалидация прогона при большой доле ошибок.</p></div></details>
+  <details class="q"><summary>С чего начинать evals для нового продукта?</summary><div class="a"><p>С просмотра данных: собрать 50–100 реальных трасс, вручную найти и категоризировать ошибки, посчитать частоты. Потом — проверки под частые категории (сначала детерминированные, потом judge), golden-набор из этих кейсов и CI-gate.</p></div></details>
+
+  <h2 id="interview">Вопросы с собеседований</h2>
+  <details class="q interview"><summary>Как вы построите систему оценки качества для бота поддержки с нуля?</summary><div class="a"><p>Шаг 1 — данные: выгружаю 100–200 обезличенных диалогов, вместе с экспертом поддержки размечаю и делаю error analysis: какие ошибки, как часто. Шаг 2 — golden-набор 100–150 кейсов, стратифицированный по категориям обращений, с edge cases, adversarial и кейсами, где правильный ответ — эскалация. Шаг 3 — проверки: детерминированные (не обещает возврат, есть ссылка на форму, язык ответа совпадает), judge на смысловые критерии (опирается на базу знаний, решает вопрос) — бинарные, другой моделью, откалиброванные на 100 размеченных кейсах до kappa ≥ 0,6. Шаг 4 — CI: smoke на каждый PR, полный набор при изменении промптов, пороги общий + по срезам + регрессии относительно main с учётом noise floor. Шаг 5 — онлайн: семплирование 2–5% трафика в judge, неявные сигналы (эскалация, повторный вопрос, CSAT), алерты, еженедельный error analysis, пополнение набора из инцидентов. Метрику успеха для бизнеса — доля решённых без оператора — проверяю A/B.</p></div></details>
+  <details class="q interview"><summary>Можно ли доверять LLM-as-a-judge? Как вы это проверяете?</summary><div class="a"><p>Доверять можно ровно настолько, насколько он согласуется с людьми на вашей задаче — это измеряемо. Размечаю 100–200 кейсов (в идеале двумя людьми, чтобы знать потолок — inter-annotator kappa), считаю kappa judge vs человек, precision/recall по FAIL. Известные смещения: position bias (оцениваю в обоих порядках), verbosity (явно в рубрике, контроль длины), self-preference (judge другого семейства). Бинарные вердикты, одна рубрика — один критерий, reasoning перед вердиктом, примеры пограничных случаев в промпте. Перекалибровка при смене модели judge или продукта; периодическая выборочная проверка людьми в проде. И judge не заменяет детерминированные проверки там, где они возможны.</p></div></details>
+  <details class="q interview"><summary>Новая модель дешевле на 60%. Как решить, переходить ли?</summary><div class="a"><p>Прогоняю полный eval-набор на обеих моделях — парно, на одних кейсах, с 3+ повторами, чтобы знать шум. Смотрю не только общий pass rate, но срезы (особенно safety и сложные категории), операционные метрики (латентность p95, output-токены — дешевле за токен не значит дешевле за запрос), и различия по кейсам: что именно сломалось. Проверяю промпт — возможно, нужна адаптация под новую модель (на новых моделях, например, удалены temperature, иначе работают effort и thinking). Если offline ок — canary или A/B на части трафика с онлайн-judge и бизнес-метриками. Решение — по сумме: экономия vs допустимая потеря качества на критичных срезах, заранее согласованная с продуктом.</p></div></details>
+  <details class="q interview"><summary>Сколько кейсов нужно в eval-наборе?</summary><div class="a"><p>Зависит от того, какую разницу надо ловить. Для старта 50–200 — достаточно, чтобы поймать крупные регрессии и работать с ошибками. Для различения близких версий считаю: полуширина интервала ≈ 1,96·√(p(1−p)/n); при p ≈ 0,8 и n = 100 это ±8 п.п.; чтобы отличить 80% от 85% непарно, нужно ~900 на вариант. Парный дизайн и повторы уменьшают требования. Практически — несколько сотен кейсов на критичных срезах плюс осознанный noise floor, и не делать выводов из разницы меньше него.</p></div></details>
+  <details class="q interview"><summary>Как оценивать агента, у которого много правильных траекторий?</summary><div class="a"><p>Оценивать итог, а не точный путь: проверять состояние среды после выполнения (файл изменён правильно, тесты проходят, запись в БД корректна) — это детерминированно. Процесс — через ограничения, а не эталонную траекторию: не было запрещённых действий, число шагов и стоимость в пределах бюджета, нужные инструменты вызывались (например, перед записью было чтение). Judge — для качества финального ответа пользователю. Из-за недетерминизма — несколько прогонов на кейс, pass^k для надёжности. Среда для evals — воспроизводимая (sandbox, фикстуры), иначе шум среды смешается с шумом агента.</p></div></details>
+  <details class="q interview"><summary>Offline-метрики растут, а пользователи недовольны. Что происходит?</summary><div class="a"><p>Гипотезы: (1) eval-набор не отражает реальное распределение — дрейф входов или набор собран из синтетики; проверяю, сравнивая распределения тем/длин/языков прода и набора. (2) Метрика не то измеряет — judge откалиброван на критерий, который не важен пользователям, или есть verbosity bias и мы оптимизировали длину. (3) Переобучение на набор — утечка кейсов в few-shot, многократная подгонка промпта под dev-набор. (4) Проблемы не в качестве ответа: латентность, UX, отказы. Лечение: error analysis на прод-семплах с негативными сигналами, пополнение набора, перекалибровка judge на свежей разметке, A/B на бизнес-метрике как финальный арбитр.</p></div></details>
+  <details class="q interview"><summary>Как встроить evals в CI и не разориться?</summary><div class="a"><p>Уровни: детерминированный smoke-набор на каждый PR (секунды, центы), полный набор с judge — только при изменении промптов/моделей/retrieval (фильтр по путям) и nightly. Кэш ответов по хэшу входа и конфигурации для неизменённых компонентов, prompt caching общего префикса, Batch API (−50%) для nightly, дешёвый judge там, где его kappa достаточна. Параллельность под rate limit. Считаю бюджет: 200 кейсов с judge — порядка единиц долларов за прогон, что несопоставимо дешевле инцидента. Инфраструктурные ошибки — отдельно, ретраи в SDK, инвалидация прогона при большой доле ошибок.</p></div></details>
+
+  <h2 id="links">Источники</h2>
+  <ul>
+    <li><a href="https://docs.claude.com/en/docs/test-and-evaluate/develop-tests" target="_blank" rel="noopener">Claude Docs — Create strong empirical evaluations</a> и <a href="https://docs.claude.com/en/docs/test-and-evaluate/define-success" target="_blank" rel="noopener">Define success criteria</a></li>
+    <li><a href="https://arxiv.org/abs/2411.00640" target="_blank" rel="noopener">Miller (Anthropic) — Adding Error Bars to Evals: A Statistical Approach to Language Model Evaluations</a></li>
+    <li><a href="https://hamel.dev/blog/posts/evals/" target="_blank" rel="noopener">Hamel Husain — Your AI Product Needs Evals</a>; <a href="https://hamel.dev/blog/posts/llm-judge/" target="_blank" rel="noopener">Creating a LLM-as-a-Judge That Drives Business Results</a></li>
+    <li><a href="https://arxiv.org/abs/2404.12272" target="_blank" rel="noopener">Shankar et al. — Who Validates the Validators? (criteria drift)</a></li>
+    <li><a href="https://arxiv.org/abs/2306.05685" target="_blank" rel="noopener">Zheng et al. — Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena</a> (position, verbosity, self-enhancement bias)</li>
+    <li><a href="https://eugeneyan.com/writing/llm-evaluators/" target="_blank" rel="noopener">Eugene Yan — Evaluating the Effectiveness of LLM-Evaluators</a></li>
+    <li><a href="https://arxiv.org/abs/2107.03374" target="_blank" rel="noopener">Chen et al. — Evaluating Large Language Models Trained on Code</a> (несмещённая оценка pass@k)</li>
+    <li><a href="https://www.promptfoo.dev/docs/intro/" target="_blank" rel="noopener">promptfoo</a> · <a href="https://langfuse.com/docs" target="_blank" rel="noopener">Langfuse</a> · <a href="https://www.braintrust.dev/docs" target="_blank" rel="noopener">Braintrust</a> · <a href="https://github.com/openai/evals" target="_blank" rel="noopener">OpenAI Evals</a> · <a href="https://docs.ragas.io/" target="_blank" rel="noopener">RAGAS</a></li>
+    <li><a href="https://github.com/anthropics/anthropic-sdk-python" target="_blank" rel="noopener">anthropic-sdk-python</a>, <a href="https://github.com/anthropics/anthropic-sdk-go" target="_blank" rel="noopener">anthropic-sdk-go</a></li>
+  </ul>
+</main>
+<script src="assets/course.js"></script>
+<script>
+// ---------- 1. Калибровка judge ----------
+(function () {
+  const svg = document.getElementById('cb-svg');
+  const met = document.getElementById('cb-metrics');
+  const thr = document.getElementById('cb-thr'), sep = document.getElementById('cb-sep'), base = document.getElementById('cb-base');
+  function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  function data() {
+    const r = rng(42), N = 200, out = [];
+    const gauss = () => Math.sqrt(-2 * Math.log(r() || 1e-9)) * Math.cos(2 * Math.PI * r());
+    const d = +sep.value * 0.32;
+    for (let i = 0; i < N; i++) {
+      const human = r() < +base.value;
+      const noise = gauss() * 0.16;
+      const s = Math.min(0.999, Math.max(0.001, 0.5 + (human ? d : -d) + noise));
+      out.push({ human, s });
+    }
+    return out;
+  }
+  function draw() {
+    const D = data(), t = +thr.value;
+    let tp = 0, fp = 0, fn = 0, tn = 0; // positive = PASS
+    for (const x of D) { const j = x.s >= t; if (j && x.human) tp++; else if (j) fp++; else if (x.human) fn++; else tn++; }
+    const n = D.length, po = (tp + tn) / n;
+    const pe = ((tp + fp) / n) * ((tp + fn) / n) + ((fn + tn) / n) * ((fp + tn) / n);
+    const kappa = pe >= 1 ? 0 : (po - pe) / (1 - pe);
+    svg.innerHTML = '';
+    // гистограмма
+    const X0 = 20, W = 360, Y0 = 200, H = 150, B = 20;
+    const bins = Array.from({ length: B }, () => [0, 0]);
+    for (const x of D) bins[Math.min(B - 1, Math.floor(x.s * B))][x.human ? 0 : 1]++;
+    const mx = Math.max(...bins.map(b => b[0] + b[1]), 1);
+    bins.forEach((b, i) => {
+      const bw = W / B, x = X0 + i * bw;
+      const h0 = b[0] / mx * H, h1 = b[1] / mx * H;
+      Course.svg('rect', { x: x + 1, y: Y0 - h0, width: bw - 2, height: h0, fill: 'var(--ok)', opacity: 0.8 }, svg);
+      Course.svg('rect', { x: x + 1, y: Y0 - h0 - h1, width: bw - 2, height: h1, fill: 'var(--bad)', opacity: 0.8 }, svg);
+    });
+    Course.svg('line', { x1: X0, y1: Y0, x2: X0 + W, y2: Y0, stroke: 'var(--border)' }, svg);
+    const tx = X0 + t * W;
+    Course.svg('line', { x1: tx, y1: Y0 - H - 12, x2: tx, y2: Y0 + 4, stroke: 'var(--accent)', 'stroke-width': 2, 'stroke-dasharray': '5 3' }, svg);
+    Course.svg('text', { x: tx, y: Y0 - H - 16, 'font-size': 11, 'text-anchor': 'middle', fill: 'var(--accent)' }, svg).textContent = 'порог';
+    Course.svg('text', { x: X0, y: Y0 + 18, 'font-size': 11, fill: 'var(--muted)' }, svg).textContent = '0 ← уверенность judge, что ответ хороший → 1';
+    [['--ok', 'человек: PASS'], ['--bad', 'человек: FAIL']].forEach(([c, l], k) => {
+      Course.svg('rect', { x: X0 + k * 120, y: 12, width: 10, height: 10, rx: 2, fill: `var(${c})` }, svg);
+      Course.svg('text', { x: X0 + 14 + k * 120, y: 21, 'font-size': 11, fill: 'var(--muted)' }, svg).textContent = l;
+    });
+    // матрица
+    const MX = 430, MY = 50, C = 90;
+    Course.svg('text', { x: MX + C, y: MY - 26, 'font-size': 11, 'text-anchor': 'middle', fill: 'var(--muted)' }, svg).textContent = 'judge';
+    ['PASS', 'FAIL'].forEach((l, k) => {
+      Course.svg('text', { x: MX + C / 2 + k * C, y: MY - 8, 'font-size': 11, 'text-anchor': 'middle' }, svg).textContent = l;
+      Course.svg('text', { x: MX - 8, y: MY + C / 2 + 4 + k * C, 'font-size': 11, 'text-anchor': 'end' }, svg).textContent = l;
+    });
+    Course.svg('text', { x: MX - 50, y: MY + C + 4, 'font-size': 11, 'text-anchor': 'middle', fill: 'var(--muted)', transform: `rotate(-90 ${MX - 50} ${MY + C})` }, svg).textContent = 'человек';
+    const cells = [[tp, 'ok', 'TP'], [fn, 'bad', 'FN'], [fp, 'bad', 'FP'], [tn, 'ok', 'TN']];
+    cells.forEach(([v, c, lbl], k) => {
+      const x = MX + (k % 2) * C, y = MY + Math.floor(k / 2) * C;
+      Course.svg('rect', { x, y, width: C - 3, height: C - 3, rx: 6, fill: `var(--${c}-soft)`, stroke: `var(--${c})` }, svg);
+      Course.svg('text', { x: x + C / 2, y: y + C / 2 + 2, 'font-size': 22, 'font-weight': 700, 'text-anchor': 'middle' }, svg).textContent = v;
+      Course.svg('text', { x: x + C / 2, y: y + C / 2 + 20, 'font-size': 10, 'text-anchor': 'middle', fill: 'var(--muted)' }, svg).textContent = lbl;
+    });
+    const prec = tp / Math.max(1, tp + fp), rec = tp / Math.max(1, tp + fn), recFail = tn / Math.max(1, tn + fp);
+    const judgeRate = (tp + fp) / n, humanRate = (tp + fn) / n;
+    met.innerHTML = [
+      ['agreement', (po * 100).toFixed(1) + '%'], ['Cohen\'s κ', kappa.toFixed(2)],
+      ['precision PASS', (prec * 100).toFixed(0) + '%'], ['recall PASS', (rec * 100).toFixed(0) + '%'],
+      ['ловит FAIL (TNR)', (recFail * 100).toFixed(0) + '%'], ['pass rate: judge / люди', (judgeRate * 100).toFixed(0) + '% / ' + (humanRate * 100).toFixed(0) + '%'],
+    ].map(([k, v]) => `<div>${k}<b>${v}</b></div>`).join('');
+  }
+  Course.bindRange(thr, v => v.toFixed(2), draw);
+  Course.bindRange(sep, v => v.toFixed(2), draw);
+  Course.bindRange(base, v => Math.round(v * 100) + '%', draw);
+})();
+
+// ---------- 2. Position bias ----------
+(function () {
+  const bias = document.getElementById('pb-bias'), gap = document.getElementById('pb-gap');
+  const pair = document.getElementById('pb-pair'), verdict = document.getElementById('pb-verdict'), svg = document.getElementById('pb-svg');
+  const ANS = {
+    A: 'Используйте <code>errgroup.Group</code> с <code>SetLimit(n)</code> или буферизованный канал как семафор на n слотов.',
+    B: 'Отличный вопрос! Конкурентность — одна из сильных сторон Go. Существует множество подходов: worker pool, семафоры, пакеты из x/sync… Всё зависит от задачи, поэтому важно учитывать контекст, нагрузку и требования.',
+  };
+  let order = ['A', 'B'], last = null, stats = null;
+  let seed = 7;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+  function pFirstWins(first) { const g = +gap.value * (first === 'A' ? 1 : -1); return Math.min(0.99, Math.max(0.01, 0.5 + g + +bias.value)); }
+  function paint() {
+    pair.innerHTML = order.map((k, i) => `<div class="ans ${last === k ? 'win' : ''}"><div class="pos">позиция ${i + 1} · ответ ${k}</div>${ANS[k]}</div>`).join('');
+  }
+  function drawStats() {
+    svg.innerHTML = '';
+    if (!stats) {
+      Course.svg('text', { x: 320, y: 90, 'font-size': 13, 'text-anchor': 'middle', fill: 'var(--muted)' }, svg).textContent = 'Нажмите «Прогнать 200 × 2 порядка», чтобы увидеть статистику';
+      return;
+    }
+    const rows = [['A на 1-й позиции: A побеждает', stats.aFirst, '--accent'], ['B на 1-й позиции: A побеждает', stats.bFirst, '--violet'], ['вердикт согласован в обоих порядках', stats.consistent, '--ok']];
+    const X0 = 250, W = 330;
+    rows.forEach(([l, v, c], i) => {
+      const y = 20 + i * 44;
+      Course.svg('text', { x: X0 - 8, y: y + 15, 'font-size': 11.5, 'text-anchor': 'end' }, svg).textContent = l;
+      Course.svg('rect', { x: X0, y, width: W, height: 22, rx: 4, fill: 'var(--bg-soft)' }, svg);
+      Course.svg('rect', { x: X0, y, width: W * v, height: 22, rx: 4, fill: `var(${c})` }, svg);
+      Course.svg('text', { x: X0 + W + 6, y: y + 15, 'font-size': 12, 'font-weight': 700 }, svg).textContent = Math.round(v * 100) + '%';
+    });
+    const mid = X0 + W * 0.5;
+    Course.svg('line', { x1: mid, y1: 14, x2: mid, y2: 108, stroke: 'var(--muted)', 'stroke-dasharray': '3 3' }, svg);
+    Course.svg('text', { x: 20, y: 150, 'font-size': 12, fill: 'var(--text)' }, svg).textContent =
+      `Наивно (всегда A первым): A выигрывает ${Math.round(stats.aFirst * 100)}%. С обоими порядками: A ${Math.round(stats.aBoth * 100)}%, B ${Math.round(stats.bBoth * 100)}%, ничьи ${Math.round(stats.ties * 100)}%.`;
+  }
+  document.getElementById('pb-ask').onclick = () => {
+    const first = order[0];
+    const w = rnd() < pFirstWins(first) ? order[0] : order[1];
+    last = w; paint();
+    verdict.innerHTML = `Judge: «Лучше ответ на позиции ${order.indexOf(w) + 1}» → победил <b>${w}</b>. ${order[0] === 'A' ? '' : '(порядок обратный)'}`;
+  };
+  document.getElementById('pb-swap').onclick = () => { order.reverse(); last = null; verdict.textContent = 'Порядок изменён. Спросите judge снова.'; paint(); };
+  document.getElementById('pb-run').onclick = () => {
+    const N = 200; let aF = 0, bF = 0, cons = 0, aB = 0, bB = 0, ties = 0;
+    for (let i = 0; i < N; i++) {
+      const w1 = rnd() < pFirstWins('A') ? 'A' : 'B';
+      const w2 = rnd() < pFirstWins('B') ? 'B' : 'A';
+      if (w1 === 'A') aF++;
+      if (w2 === 'A') bF++;
+      if (w1 === w2) { cons++; w1 === 'A' ? aB++ : bB++; } else ties++;
+    }
+    stats = { aFirst: aF / N, bFirst: bF / N, consistent: cons / N, aBoth: aB / N, bBoth: bB / N, ties: ties / N };
+    drawStats();
+  };
+  const rerun = () => { if (stats) document.getElementById('pb-run').onclick(); };
+  Course.bindRange(bias, v => '+' + Math.round(v * 100) + ' п.п.', rerun);
+  Course.bindRange(gap, v => (v >= 0 ? '+' : '') + Math.round(v * 100) + ' п.п.', rerun);
+  paint(); drawStats();
+})();
+
+// ---------- 3. Доверительные интервалы ----------
+(function () {
+  const nI = document.getElementById('ci-n'), aI = document.getElementById('ci-a'), bI = document.getElementById('ci-b');
+  const svg = document.getElementById('ci-svg'), out = document.getElementById('ci-out');
+  const Z = 1.96;
+  function wilson(p, n) { const d = 1 + Z * Z / n, c = (p + Z * Z / (2 * n)) / d, h = Z * Math.sqrt(p * (1 - p) / n + Z * Z / (4 * n * n)) / d; return [c - h, c + h]; }
+  function draw() {
+    const n = +nI.value, a = +aI.value, b = +bI.value;
+    svg.innerHTML = '';
+    const lo = 0.4, hi = 1, X0 = 70, W = 540, sx = v => X0 + (v - lo) / (hi - lo) * W;
+    for (let v = 0.4; v <= 1.0001; v += 0.1) {
+      Course.svg('line', { x1: sx(v), y1: 14, x2: sx(v), y2: 120, stroke: 'var(--border)' }, svg);
+      Course.svg('text', { x: sx(v), y: 134, 'font-size': 11, 'text-anchor': 'middle', fill: 'var(--muted)' }, svg).textContent = Math.round(v * 100) + '%';
+    }
+    [['v1', a, '--accent', 40], ['v2', b, '--violet', 90]].forEach(([l, p, c, y]) => {
+      const [l1, h1] = wilson(p, n);
+      Course.svg('rect', { x: sx(Math.max(lo, l1)), y: y - 9, width: Math.max(2, sx(h1) - sx(Math.max(lo, l1))), height: 18, rx: 4, fill: `var(${c})`, opacity: 0.25 }, svg);
+      Course.svg('circle', { cx: sx(p), cy: y, r: 6, fill: `var(${c})` }, svg);
+      Course.svg('text', { x: X0 - 10, y: y + 4, 'font-size': 12, 'text-anchor': 'end', 'font-weight': 700 }, svg).textContent = l;
+      Course.svg('text', { x: sx(Math.max(lo, l1)), y: y - 13, 'font-size': 10.5, fill: 'var(--muted)' }, svg).textContent = `[${(l1 * 100).toFixed(1)}; ${(h1 * 100).toFixed(1)}]`;
+    });
+    const d = b - a, se = Math.sqrt(a * (1 - a) / n + b * (1 - b) / n), dl = d - Z * se, dh = d + Z * se;
+    const sig = dl > 0 || dh < 0;
+    const need = d === 0 ? Infinity : Math.ceil(Math.pow(1.96 + 0.84, 2) * (a * (1 - a) + b * (1 - b)) / (d * d));
+    // шкала разности
+    const DX = 70, DW = 540, dsx = v => DX + (v + 0.2) / 0.4 * DW;
+    Course.svg('line', { x1: DX, y1: 175, x2: DX + DW, y2: 175, stroke: 'var(--border)' }, svg);
+    Course.svg('line', { x1: dsx(0), y1: 160, x2: dsx(0), y2: 190, stroke: 'var(--muted)', 'stroke-dasharray': '3 3' }, svg);
+    Course.svg('text', { x: DX - 10, y: 179, 'font-size': 11, 'text-anchor': 'end' }, svg).textContent = 'v2 − v1';
+    const cl = v => Math.max(-0.2, Math.min(0.2, v));
+    Course.svg('rect', { x: dsx(cl(dl)), y: 168, width: Math.max(2, dsx(cl(dh)) - dsx(cl(dl))), height: 14, rx: 4, fill: sig ? 'var(--ok)' : 'var(--warn)', opacity: 0.35 }, svg);
+    Course.svg('circle', { cx: dsx(cl(d)), cy: 175, r: 5, fill: sig ? 'var(--ok)' : 'var(--warn)' }, svg);
+    [-0.2, -0.1, 0, 0.1, 0.2].forEach(v => Course.svg('text', { x: dsx(v), y: 198, 'font-size': 10, 'text-anchor': 'middle', fill: 'var(--muted)' }, svg).textContent = (v > 0 ? '+' : '') + Math.round(v * 100));
+    out.textContent =
+      `Разность: ${(d * 100).toFixed(1)} п.п., 95% CI [${(dl * 100).toFixed(1)}; ${(dh * 100).toFixed(1)}]\n` +
+      (sig ? '✓ Версии различимы: интервал разности не содержит 0.' : '✗ Не различимы: интервал разности содержит 0 — это может быть шум.') +
+      `\nДля 80% мощности нужно ≈ ${isFinite(need) ? need.toLocaleString('ru-RU') : '∞'} кейсов на версию (непарно). Парный дизайн и повторы уменьшают это число.`;
+  }
+  Course.bindRange(nI, v => v, draw);
+  Course.bindRange(aI, v => Math.round(v * 100) + '%', draw);
+  Course.bindRange(bI, v => Math.round(v * 100) + '%', draw);
+})();
+
+// ---------- 4. Пайплайн ----------
+(function () {
+  const svg = document.getElementById('pp-svg'), out = document.getElementById('pp-out');
+  const TOP = 70, BOT = 210, XS = [55, 161, 267, 373, 479, 585];
+  const N = [
+    ['pr', XS[0], TOP, 'PR:\nпромпт/модель', 'Изменение промпта, модели, retrieval-параметров или кода. Промпты лежат в git рядом с кодом и ревьюятся как код.'],
+    ['gold', XS[1], TOP, 'Golden\nнабор', 'Версионированный JSONL: 50–200+ кейсов, теги срезов, edge cases, adversarial. dev/held-out разделены. Пополняется из прода.'],
+    ['run', XS[2], TOP, 'Прогон +\nпроверки', 'Приложение прогоняется на наборе (параллельно под rate limit). Детерминированные проверки, затем откалиброванный LLM-judge. Инфраструктурные ошибки — отдельный статус.'],
+    ['cmp', XS[3], TOP, 'Сравнение\nс main', 'Парное сравнение с baseline из main на тех же кейсах: общий pass rate, срезы, список регрессий по кейсам, стоимость и латентность. Отчёт — комментарием в PR.'],
+    ['gate', XS[4], TOP, 'Gate', 'Порог: абсолютный (≥ 90%), критичные срезы (safety = 100%), регрессия относительно main не больше noise floor. Не прошёл — PR красный.'],
+    ['dep', XS[5], TOP, 'Deploy\ncanary', 'Выкатка на 1–10% трафика или A/B. Версия промпта и модели — в каждом трейсе.'],
+    ['traffic', XS[5], BOT, 'Прод-\nтрафик', 'Реальные запросы. Трейсы: вход, контекст retrieval, вызовы инструментов, ответ, токены, латентность (модуль 7). PII — редакция до хранения.'],
+    ['sample', XS[4], BOT, 'Семплинг\n1–5%', 'Случайная выборка + все сессии с негативными сигналами (дизлайк, эскалация, повторный вопрос).'],
+    ['ojudge', XS[3], BOT, 'Judge +\nфидбек', 'Те же откалиброванные judge, что в CI, плюс неявный фидбек: копирование, принятие черновика, регенерация, эскалация.'],
+    ['dash', XS[2], BOT, 'Дашборды\nи алерты', 'Pass rate по дням и срезам, дрейф входов (темы, язык, длина), стоимость. Алерт — падение сверх шума или новый кластер запросов.'],
+    ['ea', XS[1], BOT, 'Error\nanalysis', 'Человек разбирает провалы: категоризация, частоты. Здесь рождаются новые критерии и уточняются рубрики.'],
+    ['new', XS[0], BOT, 'Новые\nкейсы', 'Каждая найденная ошибка — регрессионный кейс в golden-набор (с ожидаемым поведением). Цикл замыкается.'],
+  ];
+  const idx = Object.fromEntries(N.map((n, i) => [n[0], i]));
+  const LOOP = ['gold', 'run', 'cmp', 'gate', 'dep', 'traffic', 'sample', 'ojudge', 'dash', 'ea', 'new', 'gold'];
+  let sel = null, raf = 0;
+  function draw() {
+    svg.innerHTML = '';
+    const defs = Course.svg('defs', {}, svg);
+    const mk = Course.svg('marker', { id: 'pp-arr', viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto' }, defs);
+    Course.svg('path', { d: 'M0,0 L10,5 L0,10 z', fill: 'var(--muted)' }, mk);
+    Course.svg('rect', { x: 4, y: 26, width: 632, height: 92, rx: 10, fill: 'var(--accent-soft)', opacity: 0.5 }, svg);
+    Course.svg('rect', { x: 4, y: 166, width: 632, height: 92, rx: 10, fill: 'var(--teal-soft)', opacity: 0.5 }, svg);
+    Course.svg('text', { x: 12, y: 18, 'font-size': 11.5, 'font-weight': 700, fill: 'var(--accent)' }, svg).textContent = 'OFFLINE · CI (до выкатки)';
+    Course.svg('text', { x: 12, y: 158, 'font-size': 11.5, 'font-weight': 700, fill: 'var(--teal)' }, svg).textContent = 'ONLINE · прод (после выкатки)';
+    const edges = [['pr', 'gold'], ...LOOP.slice(0, -1).map((k, i) => [k, LOOP[i + 1]])];
+    for (const [a, b] of edges) {
+      const A = N[idx[a]], B = N[idx[b]];
+      let x1 = A[1], y1 = A[2], x2 = B[1], y2 = B[2];
+      if (y1 === y2) { const s = Math.sign(x2 - x1); x1 += s * 44; x2 -= s * 46; } else { const s = Math.sign(y2 - y1); y1 += s * 22; y2 -= s * 24; }
+      Course.svg('line', { x1, y1, x2, y2, stroke: 'var(--muted)', 'stroke-width': b === 'gold' && a === 'new' ? 2.2 : 1.3, 'marker-end': 'url(#pp-arr)' }, svg);
+    }
+    for (const [id, x, y, label] of N) {
+      const g = Course.svg('g', { style: 'cursor:pointer', tabindex: 0, role: 'button' }, svg);
+      Course.svg('rect', { x: x - 44, y: y - 22, width: 88, height: 44, rx: 8, fill: sel === id ? 'var(--accent)' : 'var(--card)', stroke: id === 'gold' || id === 'new' ? 'var(--ok)' : 'var(--border)', 'stroke-width': id === 'gold' || id === 'new' ? 2 : 1 }, g);
+      label.split('\n').forEach((l, i, arr) => Course.svg('text', { x, y: y + 4 + (i - (arr.length - 1) / 2) * 13, 'font-size': 11, 'text-anchor': 'middle', fill: sel === id ? 'var(--bg)' : 'var(--text)', 'font-weight': i === 0 ? 600 : 400 }, g).textContent = l);
+      const pick = () => { sel = id; out.textContent = label.replace('\n', ' ') + ': ' + N[idx[id]][4]; draw(); };
+      g.addEventListener('click', pick);
+      g.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
+    }
+    dots = [0, 1, 2].map(() => Course.svg('circle', { r: 4.5, fill: 'var(--warn)' }, svg));
+  }
+  let dots = [];
+  const pts = LOOP.map(k => [N[idx[k]][1], N[idx[k]][2]]);
+  const segs = pts.slice(1).map((p, i) => Math.hypot(p[0] - pts[i][0], p[1] - pts[i][1]));
+  const total = segs.reduce((a, b) => a + b, 0);
+  function at(d) { d = ((d % total) + total) % total; for (let i = 0; i < segs.length; i++) { if (d <= segs[i]) { const u = d / segs[i]; return [pts[i][0] + (pts[i + 1][0] - pts[i][0]) * u, pts[i][1] + (pts[i + 1][1] - pts[i][1]) * u]; } d -= segs[i]; } return pts[0]; }
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function tick(now) {
+    dots.forEach((c, k) => { const p = at(now / 1000 * 70 + k * total / 3); c.setAttribute('cx', p[0]); c.setAttribute('cy', p[1]); });
+    if (!reduce) raf = requestAnimationFrame(tick);
+  }
+  draw();
+  if (reduce) tick(0); else raf = requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>

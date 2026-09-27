@@ -1,0 +1,884 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>8 · Fine-tuning и основы ML</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  /* мобильные: длинный inline-код переносится, табы кода — в несколько строк */
+  p code, li code, td code { overflow-wrap: anywhere; }
+  .tabs .tab-bar { flex-wrap: wrap; }
+  .viz .btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+  .viz .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .viz .seg button { font: inherit; font-size: 13px; border: 0; background: var(--card); color: var(--text); padding: 5px 10px; cursor: pointer; }
+  .viz .seg button.on { background: var(--accent); color: #fff; }
+  .rec { border: 1px solid var(--border); border-left: 4px solid var(--ok); border-radius: 8px; padding: 10px 14px; margin-top: 10px; background: var(--bg-soft); }
+  .rec h4 { margin: 0 0 4px; }
+  .rec p { margin: 4px 0; font-size: 14.5px; }
+  .dt-node { cursor: pointer; }
+  .formula { font: 15px var(--mono); background: var(--bg-soft); border-radius: 8px; padding: 10px 14px; margin: 1em 0; overflow-x: auto; }
+</style>
+</head>
+<body data-module="m08">
+<main class="content">
+  <div class="module-hero">
+    <div class="eyebrow">Модуль 8</div>
+    <h1>Fine-tuning и основы ML</h1>
+    <p class="lead">Прикладному AI-инженеру не нужно обучать модели с нуля, но нужно уверенно отвечать на вопрос «а может, дообучим?»: когда fine-tuning оправдан, чем LoRA отличается от полного дообучения, как собрать датасет, который не обманет вас метриками, и как читать precision, recall и кривые обучения. Без этого нельзя спорить с ML-командой и защищать решения на system design.</p>
+    <div class="meta-row"><span class="chip">≈ 8 часов</span><span class="chip">Python + Go</span><span class="chip">4 визуализации</span><span class="chip">актуально на сентябрь 2026</span></div>
+  </div>
+
+  <h2 id="when">Когда fine-tuning, а когда промпт или RAG</h2>
+  <p>Главное правило: <b>fine-tuning меняет поведение, а не знания</b>. Дообучение на внутренней вики не научит модель надёжно отвечать фактами из неё. Модель выучит стиль вики и начнёт уверенно галлюцинировать в этом стиле. Знания подключают через RAG (модуль 4): его можно обновлять без переобучения, давать ссылки на источники и учитывать права доступа.</p>
+  <p>Fine-tuning оправдан, когда нужно:</p>
+  <ul>
+    <li><b>Устойчивый формат или стиль,</b> который промптом держится нестабильно: особый тон бренда, строгий DSL, специфическая разметка.</li>
+    <li><b>Узкая задача с большим объёмом:</b> классификация тикетов, извлечение полей, роутинг. Маленькая дообученная модель здесь часто не хуже большой универсальной, а дешевле и быстрее в 10–50 раз.</li>
+    <li><b>Латентность и стоимость:</b> дистилляция поведения большой модели в маленькую, когда промпт с 30 few-shot примерами стоит слишком дорого на миллионах вызовов.</li>
+    <li><b>То, что трудно описать словами,</b> но легко показать примерами: «пиши как наши лучшие операторы поддержки».</li>
+  </ul>
+  <p>Порядок действий всегда один: <b>сначала evals</b> (модуль 6), потом промпт (инструкции, few-shot, structured outputs), потом более сильная модель, RAG, если не хватает знаний, и только затем fine-tuning, если остался измеримый разрыв. Без evals вы не узнаете, помог ли fine-tuning, и не заметите, что он сломал.</p>
+
+  <div class="viz" id="viz-tree">
+    <p class="viz-title">Дерево решений: промпт, RAG или fine-tuning</p>
+    <p class="viz-sub">Отвечайте на вопросы кнопками или кликайте по узлам дерева, чтобы вернуться к любому шагу. Внизу появится рекомендация с обоснованием.</p>
+    <svg id="dt-svg" viewBox="0 0 640 470" role="img" aria-label="Дерево решений выбора между промптом, RAG и fine-tuning"></svg>
+    <div class="btn-row" id="dt-btns"></div>
+    <div class="rec" id="dt-rec"></div>
+  </div>
+
+  <div class="callout tip"><span class="title">Как это звучит на собесе</span>
+    <p>«Мы начали с промпта и eval-набора на 300 примеров: 87% accuracy. Few-shot дал 91%. Ошибки были в формате и редких классах, а не в знаниях, поэтому RAG не помог бы. Дообучили 8B-модель с LoRA на 3000 размеченных примерах: 94% при латентности 80 мс вместо 1.5 с и в 20 раз дешевле. Регрессию отслеживаем тем же eval-набором».</p>
+  </div>
+
+  <h2 id="kinds">Виды дообучения</h2>
+  <table>
+    <tr><th>Метод</th><th>Данные</th><th>Что делает</th><th>Когда</th></tr>
+    <tr><td><b>SFT</b> (supervised fine-tuning)</td><td>Пары «вход → эталонный выход», обычно в формате чата</td><td>Минимизирует cross-entropy на токенах ответа: модель учится воспроизводить эталон</td><td>Формат, стиль, узкая задача. Самый частый вариант</td></tr>
+    <tr><td><b>Preference tuning: DPO</b></td><td>Тройки (prompt, chosen, rejected)</td><td>Напрямую повышает вероятность предпочтительного ответа относительно отвергнутого, без отдельной reward-модели. Параметр β определяет, насколько можно отойти от исходной модели</td><td>Когда «правильного» ответа нет, но есть «лучше/хуже»: тон, краткость, уместность отказов</td></tr>
+    <tr><td><b>RLHF</b></td><td>Сравнения от людей → reward model</td><td>SFT → обучение reward-модели на сравнениях → оптимизация политики через RL (PPO) с KL-штрафом. Так делали InstructGPT и ранние ChatGPT/Claude</td><td>У лабораторий. В прикладной работе редкость: сложно, дорого, нестабильно. DPO и его варианты почти вытеснили его в прикладных задачах</td></tr>
+    <tr><td><b>RL с верифицируемой наградой</b> (RFT)</td><td>Задачи и грейдер: тесты, проверка ответа, скрипт</td><td>Модель генерирует, грейдер ставит оценку, веса сдвигаются к высоко оценённым ответам. Так учат reasoning-модели</td><td>Когда правильность проверяется автоматически (код, математика, извлечение). У некоторых провайдеров доступно как услуга</td></tr>
+    <tr><td><b>Distillation</b></td><td>Ответы сильной модели-учителя на ваших входах</td><td>SFT маленькой модели на выходах большой. В классическом варианте учатся на распределении логитов учителя, через API — только на текстах</td><td>Качество большой модели устраивает, цена и латентность — нет</td></tr>
+  </table>
+  <div class="callout warn"><span class="title">Юридическая деталь дистилляции</span>
+    <p>Условия использования многих провайдеров запрещают обучать на их выходах модели, которые с ними конкурируют. Для внутреннего классификатора это обычно не проблема, для «своей универсальной LLM» — проблема. Перед дистилляцией из API прочитайте ToS или спросите юристов.</p>
+  </div>
+
+  <h2 id="lora">Full fine-tuning, PEFT и LoRA</h2>
+  <p><b>Full fine-tuning</b> обновляет все веса. С AdamW в смешанной точности на каждый параметр приходится ≈16 байт: bf16-веса (2) + градиенты (2) + fp32 мастер-копия (4) + два момента Adam (4 + 4). Для 7B это ~112 ГБ ещё до активаций, то есть несколько GPU по 80 ГБ и шардирование (FSDP или DeepSpeed ZeRO). Результат — полная копия модели на каждую задачу.</p>
+  <p><b>PEFT</b> (parameter-efficient fine-tuning) замораживает базовую модель и обучает небольшое число новых параметров. Самый популярный метод — <b>LoRA</b> (Low-Rank Adaptation).</p>
+  <div class="formula">W' = W + ΔW = W + (α / r) · B · A,   W ∈ ℝ<sup>d×k</sup>,  B ∈ ℝ<sup>d×r</sup>,  A ∈ ℝ<sup>r×k</sup>,  r ≪ min(d, k)</div>
+  <ul>
+    <li><b>Идея.</b> Изменение весов при дообучении имеет низкий «внутренний ранг», поэтому ΔW можно представить произведением двух узких матриц. Вместо d·k параметров обучаются r·(d + k). Для d = k = 4096 и r = 16 это 131 072 вместо 16.7 млн, то есть 0.8% на одну матрицу.</li>
+    <li><b>Инициализация.</b> A случайная, B нулевая, поэтому в начале ΔW = 0 и модель ведёт себя как базовая.</li>
+    <li><b>r (rank)</b> — ёмкость адаптера. Обычно 8–64. Больше r — больше выразительности и риска переобучения. Для формата и стиля хватает 8–16.</li>
+    <li><b>α (alpha)</b> — масштаб: ΔW умножается на α/r. Обычно α = r или 2r. Меняете r — пересматривайте α или learning rate. Вариант rsLoRA масштабирует на α/√r и стабильнее при больших r.</li>
+    <li><b>Какие слои.</b> В исходной статье это только attention (q, v). В QLoRA показано, что адаптеры на <b>все линейные слои</b> (q, k, v, o, gate, up, down) нужны, чтобы догнать full fine-tuning. Сейчас это разумный дефолт: <code>target_modules="all-linear"</code>.</li>
+    <li><b>Инференс.</b> Адаптер можно слить в веса (<code>merge_and_unload</code>), и тогда латентность не меняется. Можно держать отдельно и подгружать на лету: vLLM обслуживает много LoRA-адаптеров поверх одной базовой модели, то есть «модель на тенанта» за копейки.</li>
+    <li><b>Learning rate.</b> Для LoRA выше, чем для full FT: порядка 1e-4–2e-4 против 1e-5–2e-5.</li>
+  </ul>
+  <p><b>QLoRA</b> хранит замороженную базовую модель в 4 битах (тип NF4 плюс double quantization констант), а адаптеры обучает в bf16. Память под базу падает в ~4 раза относительно bf16. Авторы дообучили 65B-модель на одном GPU с 48 ГБ. Платите вы скоростью (деквантизация на лету) и немного качеством, которое обычно близко к 16-битной LoRA.</p>
+
+  <div class="viz" id="viz-lora">
+    <p class="viz-title">LoRA: сколько параметров обучается и сколько нужно памяти</p>
+    <p class="viz-sub">Слева матрица W размера d×d и её низкоранговое обновление B·A в масштабе. Справа память на веса и состояние оптимизатора для full FT, LoRA и QLoRA (шкала логарифмическая, активации не учтены: они зависят от batch и длины последовательности).</p>
+    <div class="controls">
+      <label>d <input type="range" id="lo-d" min="256" max="8192" step="256" value="4096"> <output></output></label>
+      <label>rank r <input type="range" id="lo-r" min="0" max="8" step="1" value="4"> <output></output></label>
+      <span class="seg" id="lo-model"><button type="button" data-v="7" class="on">7B</button><button type="button" data-v="70">70B</button></span>
+      <span class="seg" id="lo-tm"><button type="button" data-v="attn">q,k,v,o</button><button type="button" data-v="all" class="on">all-linear</button></span>
+    </div>
+    <svg id="lora-svg" viewBox="0 0 640 330" role="img" aria-label="Матрицы W, B, A и столбики памяти"></svg>
+    <div class="readout" id="lora-read"></div>
+  </div>
+
+  <div class="callout go"><span class="title">Аналогия из Go</span>
+    <p>LoRA-адаптер похож на middleware поверх неизменяемого <code>http.Handler</code>: базовая модель общая и read-only, а поведение меняет тонкая обёртка, которую можно менять на каждый запрос. Отсюда и multi-LoRA-сервинг, где на одном GPU одна база и десятки адаптеров, выбираемых по полю <code>model</code> в запросе.</p>
+  </div>
+
+  <h2 id="dataset">Подготовка датасета</h2>
+  <p>Качество fine-tuning определяется датасетом. Гиперпараметры дают проценты, данные — десятки процентов.</p>
+  <h3>Формат</h3>
+  <p>Стандарт — JSONL, одна строка на один пример в формате чата: такие же роли, как в инференсе. Тренер применяет chat template модели и считает loss только на ответе ассистента (<code>assistant_only_loss</code> в TRL), иначе модель учится воспроизводить ещё и вопросы пользователей.</p>
+  <pre><code class="lang-python">{"messages": [{"role": "system", "content": "Классифицируй тикет. Ответ: одна метка."},
+              {"role": "user", "content": "Списали деньги дважды за один заказ"},
+              {"role": "assistant", "content": "billing"}]}</code></pre>
+  <p>System prompt в обучении должен совпадать с тем, что будет в проде. Если в инференсе промпт другой, вы получите сдвиг распределения на ровном месте.</p>
+
+  <h3>Качество важнее количества</h3>
+  <ul>
+    <li><b>Сколько нужно.</b> Для формата и стиля 200–500 чистых примеров часто достаточно. Для узкой классификации или извлечения обычный диапазон 500–5000. Статья LIMA показала, что 1000 тщательно отобранных примеров дают сильную инструктивную модель. Удвоение датасета обычно даёт меньше, чем чистка ошибок в имеющемся.</li>
+    <li><b>Консистентность разметки.</b> Если два разметчика ставят разные метки одному тикету, модель выучит шум. Измеряйте согласие разметчиков (Cohen's κ) на 100 общих примерах. Если оно низкое, чините инструкцию для разметки, а не модель.</li>
+    <li><b>Покрытие.</b> Редкие классы, длинные входы, другие языки, пограничные случаи. Модель не обобщит на то, чего не видела.</li>
+    <li><b>Балансировка.</b> При 90% «other» модель научится говорить «other». Помогают oversampling редких классов (осторожно: переобучение на дублях), undersampling частых, веса классов. Но <b>тестовое распределение оставляйте реальным</b>, иначе метрики будут врать.</li>
+  </ul>
+
+  <h3>Дедупликация и утечка теста в трейн</h3>
+  <p>Самый частый способ обмануть себя — дубликаты между train и test. Тикеты из шаблонов, переотправленные письма, один и тот же текст с другим id. Модель запоминает их, test показывает 98%, в проде получается 80%.</p>
+  <ul>
+    <li><b>Точные дубликаты</b> ищутся по хэшу нормализованного текста (нижний регистр, схлопнутые пробелы, без id и дат).</li>
+    <li><b>Почти-дубликаты</b> ищутся через MinHash/LSH по шинглам или cosine similarity embedding'ов > 0.95.</li>
+    <li><b>Групповое разбиение.</b> Все сообщения одного клиента, треда или документа попадают в один сплит (<code>GroupShuffleSplit</code>). Для временных данных делите по времени: train раньше, test позже. Именно так модель будет работать в проде.</li>
+    <li><b>Сначала дедупликация, потом разбиение.</b> Обратный порядок оставит копии по разные стороны.</li>
+  </ul>
+
+  <h3>Синтетические данные от сильной модели</h3>
+  <p>Быстрый способ получить датасет: Opus или Fable генерирует входы и/или разметку, маленькая модель на этом учится. Работает хорошо, но с рисками:</p>
+  <ul>
+    <li><b>Узкое распределение.</b> Синтетика однообразна по стилю и длине, в ней нет опечаток, мата и сумбура реальных пользователей. Смешивайте с реальными данными и варьируйте персоны, длину и сложность в промпте генерации.</li>
+    <li><b>Ошибки учителя становятся потолком.</b> Если сильная модель ошибается в 5% разметки, ученик выучит эти 5% как истину. Проверяйте выборку глазами и фильтруйте LLM-судьёй или согласием нескольких прогонов.</li>
+    <li><b>Утечка eval.</b> Если учитель генерировал и тестовые примеры, вы проверяете модель на её «родном» распределении. Тест должен быть реальным и размеченным людьми.</li>
+    <li><b>ToS</b> провайдера для дистилляции (см. выше).</li>
+  </ul>
+
+  <h2 id="training">Train/val/test и кривые обучения</h2>
+  <p><b>Train</b> — на нём учимся. <b>Validation</b> — по нему выбираем гиперпараметры и момент остановки. <b>Test</b> — трогаем один раз в конце, чтобы честно оценить результат. Если вы смотрели на test и что-то подкручивали, он стал вторым validation, и оценка уже оптимистична. Типичное разбиение 80/10/10, со <b>стратификацией</b> по классу, чтобы редкие классы были во всех частях.</p>
+  <ul>
+    <li><b>Underfitting.</b> Train loss и val loss высокие и близкие. Модели не хватает ёмкости, шагов или слишком сильная регуляризация: увеличьте r, число эпох, learning rate.</li>
+    <li><b>Overfitting.</b> Train loss продолжает падать, а val loss развернулся и растёт. Модель запоминает примеры. Помогают больше данных, меньше эпох, меньше r, dropout, weight decay и early stopping.</li>
+    <li><b>Early stopping.</b> Оценивать val каждые N шагов, сохранять лучший чекпойнт и останавливаться, если улучшения нет <i>patience</i> раз подряд. В HF Trainer это <code>load_best_model_at_end=True</code> и <code>EarlyStoppingCallback</code>.</li>
+  </ul>
+
+  <div class="viz" id="viz-curves">
+    <p class="viz-title">Кривые обучения: где начинается overfitting</p>
+    <p class="viz-sub">Модель игрушечная, но форма кривых реалистична. Маленький датасет с нулевой регуляризацией быстро переобучается, большой датасет отодвигает разворот val loss, а слишком сильная регуляризация даёт underfitting. Маркер показывает, где early stopping (patience = 2 эпохи) остановит обучение и какой чекпойнт вернёт.</p>
+    <div class="controls">
+      <label>размер датасета <input type="range" id="lc-n" min="2" max="4.3" step="0.05" value="2.7"> <output></output></label>
+      <label>эпох <input type="range" id="lc-e" min="1" max="30" step="1" value="15"> <output></output></label>
+      <label>регуляризация <input type="range" id="lc-reg" min="0" max="1" step="0.05" value="0.1"> <output></output></label>
+    </div>
+    <svg id="lc-svg" viewBox="0 0 640 280" role="img" aria-label="Train и validation loss по эпохам"></svg>
+    <div class="legend"><span><i style="background:var(--accent)"></i>train loss</span><span><i style="background:var(--warn)"></i>val loss</span><span><i style="background:var(--ok)"></i>лучший чекпойнт / early stop</span></div>
+    <div class="readout" id="lc-read"></div>
+  </div>
+
+  <div class="callout warn"><span class="title">Loss не равен качеству</span>
+    <p>Val loss — это cross-entropy на токенах эталона. Она полезна, чтобы поймать переобучение, но не говорит, правильно ли модель решает задачу. Модель может чуть хуже предсказывать слово «пожалуйста» и при этом лучше классифицировать. Финальное решение принимайте по <b>task-метрикам на test</b> (accuracy, F1, eval-набор из модуля 6), а loss используйте для диагностики.</p>
+  </div>
+
+  <h2 id="metrics">Метрики классификации</h2>
+  <p>Большая часть задач, где дообучают, — классификация или извлечение. Их метрики нужно знать наизусть, про них спросят.</p>
+  <table>
+    <tr><th></th><th>Предсказано «да»</th><th>Предсказано «нет»</th></tr>
+    <tr><th>На самом деле «да»</th><td>TP — верно нашли</td><td>FN — пропустили</td></tr>
+    <tr><th>На самом деле «нет»</th><td>FP — ложная тревога</td><td>TN — верно отсеяли</td></tr>
+  </table>
+  <ul>
+    <li><b>Precision</b> = TP / (TP + FP): из того, что модель назвала «да», какая доля правда «да». Важна, когда дорога ложная тревога: автоблокировка аккаунта, автоответ клиенту.</li>
+    <li><b>Recall</b> = TP / (TP + FN): какую долю настоящих «да» нашли. Важен, когда дорог пропуск: фрод, эскалация жалобы, токсичный контент.</li>
+    <li><b>F1</b> = 2PR / (P + R), гармоническое среднее. Оно низкое, если низка хотя бы одна из метрик. Для мультикласса: <b>macro-F1</b> (среднее по классам, редкие классы весят столько же) против <b>micro/weighted</b>, где доминируют частые классы.</li>
+    <li><b>Accuracy при дисбалансе ничего не говорит.</b> При 2% фрода модель «всегда нет» даёт 98% accuracy и нулевой recall.</li>
+    <li><b>ROC-AUC</b> — вероятность того, что случайный позитив получит скор выше случайного негатива. При сильном дисбалансе выглядит оптимистично, потому что FPR делится на огромное число негативов. <b>PR-AUC</b> (average precision) честнее для редких классов.</li>
+    <li><b>Порог.</b> Модель выдаёт скор, решение принимает порог. Выбирают его по стоимости ошибок: «precision ≥ 95% при максимальном recall» или минимум <code>cost_FN·FN + cost_FP·FP</code>. Порог подбирается на validation, а не на test.</li>
+  </ul>
+
+  <div class="viz" id="viz-cm">
+    <p class="viz-title">Confusion matrix, порог и PR-кривая</p>
+    <p class="viz-sub">2000 синтетических примеров со скорами классификатора. Двигайте порог и долю позитивов. При 2% позитивов accuracy почти не меняется, а precision обваливается: вот почему accuracy при дисбалансе бесполезна.</p>
+    <div class="controls">
+      <label>порог <input type="range" id="cm-th" min="0.02" max="0.98" step="0.01" value="0.5"> <output></output></label>
+      <label>доля позитивов <input type="range" id="cm-prev" min="0.01" max="0.5" step="0.01" value="0.1"> <output></output></label>
+      <label>разделимость классов <input type="range" id="cm-sep" min="0.05" max="0.6" step="0.01" value="0.3"> <output></output></label>
+    </div>
+    <svg id="cm-svg" viewBox="0 0 640 250" role="img" aria-label="Гистограммы скоров и матрица ошибок"></svg>
+    <svg id="cm-curves" viewBox="0 0 640 230" role="img" aria-label="PR-кривая и ROC-кривая с текущей точкой"></svg>
+    <div class="readout" id="cm-read"></div>
+  </div>
+
+  <div class="callout tip"><span class="title">Откуда брать скор у LLM-классификатора</span>
+    <p>У дообученной open-source модели это вероятность токена метки (logprobs) или отдельная классификационная голова. У API-моделей без logprobs можно голосовать несколькими сэмплами или просить модель вывести уверенность, но такие «уверенности» плохо откалиброваны. Проверяйте калибровку на validation: среди ответов с уверенностью 0.8 доля правильных должна быть около 80%.</p>
+  </div>
+
+  <h2 id="forgetting">Catastrophic forgetting</h2>
+  <p>После дообучения на узкой задаче модель может разучиться тому, что умела: хуже следует общим инструкциям, забывает второй язык, отвечает меткой на любой вопрос. Это <b>catastrophic forgetting</b>: градиенты от вашей задачи переписывают веса, отвечавшие за другое.</p>
+  <ul>
+    <li><b>LoRA забывает меньше</b> full FT (статья «LoRA Learns Less and Forgets Less»): маленький ранг ограничивает, насколько далеко модель уходит от базы. Обратная сторона — задачам, требующим много новых знаний, LoRA учится хуже.</li>
+    <li><b>Replay.</b> Подмешивайте 5–20% общих инструктивных данных к своим.</li>
+    <li><b>Меньше эпох и ниже learning rate.</b> 1–3 эпохи обычно достаточно, 10 эпох почти гарантированно переобучают и заставляют забывать.</li>
+    <li><b>Регрессионный набор.</b> Кроме целевой метрики, прогоняйте небольшой набор общих задач: следование формату, другой язык, отказ на вредный запрос. Дообучение может ослабить и safety-поведение, это отдельный риск.</li>
+    <li><b>Узкая модель для узкой задачи.</b> Дообученную модель используйте только там, где её учили, а для остального оставьте базовую. Адаптеры позволяют держать обе на одном GPU.</li>
+  </ul>
+
+  <h2 id="where">Где тюнить, стоимость и код</h2>
+  <table>
+    <tr><th>Вариант</th><th>Плюсы</th><th>Минусы</th></tr>
+    <tr><td><b>Fine-tuning API провайдера</b> (OpenAI: SFT, DPO, RFT для части моделей; Google Vertex AI; Amazon Bedrock для отдельных семейств)</td><td>Загрузил JSONL и получил эндпоинт. Не нужны GPU и MLOps</td><td>Оплата за обучающие токены плюс, как правило, повышенная цена инференса дообученной модели. Веса не ваши, набор моделей ограничен. У Anthropic на момент написания нет общедоступного self-serve fine-tuning в Claude API (исторически был fine-tuning Claude 3 Haiku через Bedrock), проверьте актуальное состояние</td></tr>
+    <tr><td><b>Платформы для open-source</b> (Together, Fireworks и др.)</td><td>LoRA на Llama, Qwen, Mistral в пару кликов, serverless-инференс адаптеров</td><td>Зависимость от платформы, данные уходят третьей стороне</td></tr>
+    <tr><td><b>Свои GPU или аренда</b></td><td>Полный контроль, приватность, веса ваши, можно сервить через vLLM (модуль 7)</td><td>Нужны MLOps, мониторинг и обслуживание инференса</td></tr>
+  </table>
+  <p><b>Инструменты для своих GPU:</b></p>
+  <ul>
+    <li><b>TRL</b> (Hugging Face): эталонные тренеры SFT, DPO, GRPO/RL поверх Transformers и PEFT. С него стоит начинать, чтобы понимать механику.</li>
+    <li><b>Unsloth:</b> оптимизированные ядра, в разы быстрее и экономнее по памяти на одном GPU. Хорош для QLoRA на ноутбуке с GPU или в Colab.</li>
+    <li><b>Axolotl:</b> обучение, описанное YAML-конфигом, multi-GPU (FSDP, DeepSpeed), много готовых рецептов. Удобен, чтобы воспроизводимо гонять эксперименты.</li>
+  </ul>
+  <div class="callout tip"><span class="title">Цифры для порядка величин</span>
+    <p>LoRA на 8B-модели: 5000 примеров × ~800 токенов × 3 эпохи ≈ 12M обучающих токенов. На одном H100 это десятки минут, то есть единицы-десятки долларов аренды. Дорого обходятся не GPU, а разметка данных (5000 примеров × 30 с работы эксперта ≈ 40 часов) и итерации: обычно нужно 5–15 прогонов, пока датасет и гиперпараметры не устаканятся. Цены провайдеров на обучение — за 1M обучающих токенов, смотрите актуальный прайс.</p>
+  </div>
+
+  <h3 id="code">Код: от JSONL до метрик</h3>
+  <p>Пайплайн: сырые размеченные данные → дедупликация → стратифицированное разбиение → проверка утечки → LoRA-обучение с early stopping → метрики на test с выбором порога на validation. Валидатор JSONL на Go удобно ставить в CI перед каждым запуском обучения.</p>
+
+  <div class="tabs">
+    <div class="tab-panel" data-tab="Python: датасет и сплиты"><pre><code class="lang-python"># pip install scikit-learn pandas
+import hashlib, json, re
+from collections import Counter
+
+import pandas as pd
+from sklearn.model_selection import train_test_split
+
+SYSTEM = "Классифицируй тикет поддержки. Ответ: одна метка из списка: billing, delivery, account, bug, other."
+
+def norm(text: str) -&gt; str:
+    text = re.sub(r"\b(order|заказ)\s*#?\d+", "&lt;ID&gt;", text.lower())   # id не делают тексты разными
+    return re.sub(r"\s+", " ", text).strip()
+
+def to_chat(row) -&gt; dict:
+    return {"messages": [
+        {"role": "system", "content": SYSTEM},          # тот же промпт, что будет в проде
+        {"role": "user", "content": row.text},
+        {"role": "assistant", "content": row.label},
+    ]}
+
+df = pd.read_csv("tickets_labeled.csv")                  # колонки: text, label
+df = df.dropna(subset=["text", "label"])
+df["h"] = df.text.map(lambda t: hashlib.sha256(norm(t).encode()).hexdigest())
+
+# 1) Дедупликация ДО разбиения. Конфликтующие метки у одного текста — сигнал о шуме разметки.
+conflicts = df.groupby("h").label.nunique()
+print("текстов с конфликтующими метками:", int((conflicts &gt; 1).sum()))
+df = df[df.h.isin(conflicts[conflicts == 1].index)].drop_duplicates("h")
+
+# 2) Стратифицированное разбиение 80/10/10: редкие классы есть в каждой части.
+train, rest = train_test_split(df, test_size=0.2, stratify=df.label, random_state=42)
+val, test = train_test_split(rest, test_size=0.5, stratify=rest.label, random_state=42)
+
+# 3) Проверка утечки: ни один нормализованный текст не встречается в двух сплитах.
+assert not (set(train.h) &amp; set(test.h)) and not (set(train.h) &amp; set(val.h)), "утечка!"
+
+for name, part in [("train", train), ("val", val), ("test", test)]:
+    with open(f"{name}.jsonl", "w", encoding="utf-8") as f:
+        for row in part.itertuples():
+            f.write(json.dumps(to_chat(row), ensure_ascii=False) + "\n")
+    print(name, len(part), dict(Counter(part.label)))
+
+# Почти-дубликаты (MinHash/embeddings) и групповое разбиение по клиенту — следующий шаг,
+# если в данных есть шаблонные тексты или несколько сообщений одного треда.</code></pre></div>
+    <div class="tab-panel" data-tab="Python: LoRA (TRL + PEFT)"><pre><code class="lang-python"># pip install "trl&gt;=1.0" peft datasets transformers accelerate  (+ bitsandbytes для QLoRA)
+# Аргументы сверены с документацией TRL v1.x (SFTTrainer / SFTConfig).
+import torch
+from datasets import load_dataset
+from peft import LoraConfig
+from transformers import EarlyStoppingCallback
+from trl import SFTConfig, SFTTrainer
+
+data = load_dataset("json", data_files={"train": "train.jsonl", "validation": "val.jsonl"})
+
+peft_config = LoraConfig(
+    r=16,                        # ёмкость адаптера
+    lora_alpha=32,               # масштаб ΔW = (alpha / r) · B·A
+    lora_dropout=0.05,
+    target_modules="all-linear", # q,k,v,o + MLP: ближе к full FT, чем только attention
+    task_type="CAUSAL_LM",
+)
+
+args = SFTConfig(
+    output_dir="out/ticket-clf-lora",
+    model_init_kwargs={"dtype": torch.bfloat16},  # без этого модель из строки грузится в fp32
+    assistant_only_loss=True,     # loss только на ответе ассистента (нужен chat template с generation-тегами)
+    max_length=1024,              # длинные примеры обрезаются: проверьте, что метки не теряются
+    num_train_epochs=3,
+    learning_rate=1e-4,           # для LoRA выше, чем для full FT
+    per_device_train_batch_size=8,
+    gradient_accumulation_steps=2,
+    eval_strategy="steps", eval_steps=50,
+    save_strategy="steps", save_steps=50, save_total_limit=3,
+    load_best_model_at_end=True, metric_for_best_model="eval_loss", greater_is_better=False,
+    logging_steps=10, report_to="none", seed=42,
+)
+
+trainer = SFTTrainer(
+    model="Qwen/Qwen3-4B",        # строка: тренер сам загрузит модель и токенизатор
+    args=args,
+    train_dataset=data["train"],
+    eval_dataset=data["validation"],
+    peft_config=peft_config,
+    callbacks=[EarlyStoppingCallback(early_stopping_patience=3)],
+    # QLoRA: quantization_config=BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
+    #          bnb_4bit_compute_dtype=torch.bfloat16, bnb_4bit_use_double_quant=True)
+)
+trainer.train()
+trainer.save_model("out/ticket-clf-lora/best")   # сохраняется только адаптер (десятки МБ)
+print(trainer.evaluate())
+# Дальше: vllm serve Qwen/Qwen3-4B --enable-lora --lora-modules clf=out/ticket-clf-lora/best</code></pre></div>
+    <div class="tab-panel" data-tab="Python: метрики и порог"><pre><code class="lang-python"># pip install scikit-learn numpy
+import numpy as np
+from sklearn.metrics import (average_precision_score, classification_report,
+                             confusion_matrix, precision_recall_curve,
+                             precision_recall_fscore_support, roc_auc_score)
+
+def pick_threshold(y_val, s_val, min_precision=0.95):
+    """Порог на VALIDATION: максимальный recall при precision ≥ min_precision."""
+    p, r, t = precision_recall_curve(y_val, s_val)       # len(t) == len(p) - 1
+    ok = np.where(p[:-1] &gt;= min_precision)[0]
+    if len(ok) == 0:
+        raise ValueError(f"precision {min_precision} недостижима: модель или данные слабые")
+    best = ok[np.argmax(r[:-1][ok])]
+    return float(t[best])
+
+def report(y_true, scores, threshold):
+    y_pred = (scores &gt;= threshold).astype(int)
+    p, r, f1, _ = precision_recall_fscore_support(y_true, y_pred, average="binary", zero_division=0)
+    tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
+    print(f"threshold={threshold:.3f}  P={p:.3f} R={r:.3f} F1={f1:.3f}")
+    print(f"TP={tp} FP={fp} FN={fn} TN={tn}  accuracy={(tp + tn) / len(y_true):.3f}"
+          f"  (у «всегда нет»: {1 - y_true.mean():.3f})")
+    print(f"ROC-AUC={roc_auc_score(y_true, scores):.3f}  PR-AUC={average_precision_score(y_true, scores):.3f}")
+
+# y_* — 0/1 (например, «нужна эскалация»), s_* — скор модели (logprob метки, вероятность головы).
+y_val, s_val = np.load("val_y.npy"), np.load("val_scores.npy")
+y_test, s_test = np.load("test_y.npy"), np.load("test_scores.npy")
+
+th = pick_threshold(y_val, s_val, min_precision=0.95)   # выбираем на val…
+report(y_test, s_test, th)                               # …а честную оценку даёт test
+
+# Мультикласс: macro-F1 показывает редкие классы, weighted — «средний» опыт пользователя.
+labels_true = np.load("test_labels.npy", allow_pickle=True)
+labels_pred = np.load("test_pred_labels.npy", allow_pickle=True)
+print(classification_report(labels_true, labels_pred, digits=3, zero_division=0))</code></pre></div>
+    <div class="tab-panel" data-tab="Go: валидатор JSONL"><pre><code class="lang-go">// Валидатор и дедупликатор чат-датасета: go run . -in train.jsonl -out clean.jsonl
+// Падает (exit 1) при ошибках схемы — удобно в CI перед запуском обучения.
+package main
+
+import (
+	"bufio"
+	"crypto/sha256"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"os"
+	"strings"
+)
+
+type Message struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+type Example struct {
+	Messages []Message `json:"messages"`
+}
+
+func validate(ex Example, maxChars int) error {
+	if len(ex.Messages) &lt; 2 {
+		return fmt.Errorf("меньше двух сообщений")
+	}
+	prev, total := "", 0
+	for i, m := range ex.Messages {
+		switch {
+		case m.Role != "system" &amp;&amp; m.Role != "user" &amp;&amp; m.Role != "assistant":
+			return fmt.Errorf("msg %d: неизвестная роль %q", i, m.Role)
+		case m.Role == "system" &amp;&amp; i != 0:
+			return fmt.Errorf("msg %d: system не первым", i)
+		case strings.TrimSpace(m.Content) == "":
+			return fmt.Errorf("msg %d: пустой content", i)
+		case m.Role == prev &amp;&amp; m.Role != "system":
+			return fmt.Errorf("msg %d: роли не чередуются", i)
+		}
+		prev, total = m.Role, total+len([]rune(m.Content))
+	}
+	if last := ex.Messages[len(ex.Messages)-1]; last.Role != "assistant" {
+		return fmt.Errorf("последнее сообщение не assistant: учить нечему")
+	}
+	if total &gt; maxChars { // грубо ~3–4 символа на токен; точнее — токенизатором модели
+		return fmt.Errorf("слишком длинный пример: %d символов", total)
+	}
+	return nil
+}
+
+// key: нормализованный текст всех не-assistant сообщений. Одинаковый вход с разными
+// ответами — это конфликт разметки, его стоит показать человеку, а не молча выбросить.
+func key(ex Example) [32]byte {
+	var b strings.Builder
+	for _, m := range ex.Messages {
+		if m.Role != "assistant" {
+			b.WriteString(strings.Join(strings.Fields(strings.ToLower(m.Content)), " "))
+			b.WriteByte(0)
+		}
+	}
+	return sha256.Sum256([]byte(b.String()))
+}
+
+func main() {
+	in := flag.String("in", "train.jsonl", "входной JSONL")
+	out := flag.String("out", "clean.jsonl", "выход без дубликатов")
+	maxChars := flag.Int("max-chars", 16000, "лимит длины примера")
+	flag.Parse()
+
+	f, err := os.Open(*in)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer f.Close()
+	w, err := os.Create(*out)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer w.Close()
+	bw := bufio.NewWriter(w)
+	defer bw.Flush()
+
+	seen := map[[32]byte]string{} // ключ → ответ ассистента
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 1&lt;&lt;20), 16&lt;&lt;20) // строки JSONL бывают длиннее 64 КБ
+	var line, bad, dups, conflicts int
+	for sc.Scan() {
+		line++
+		var ex Example
+		if err := json.Unmarshal(sc.Bytes(), &amp;ex); err != nil {
+			bad++
+			fmt.Fprintf(os.Stderr, "line %d: невалидный JSON: %v\n", line, err)
+			continue
+		}
+		if err := validate(ex, *maxChars); err != nil {
+			bad++
+			fmt.Fprintf(os.Stderr, "line %d: %v\n", line, err)
+			continue
+		}
+		k, ans := key(ex), ex.Messages[len(ex.Messages)-1].Content
+		if prev, ok := seen[k]; ok {
+			if prev != ans {
+				conflicts++
+				fmt.Fprintf(os.Stderr, "line %d: тот же вход, другой ответ: %q vs %q\n", line, prev, ans)
+			}
+			dups++
+			continue
+		}
+		seen[k] = ans
+		bw.Write(sc.Bytes())
+		bw.WriteByte('\n')
+	}
+	if err := sc.Err(); err != nil {
+		fmt.Fprintln(os.Stderr, "read:", err)
+		os.Exit(1)
+	}
+	fmt.Printf("строк %d, ок %d, ошибок %d, дубликатов %d (конфликтов %d)\n",
+		line, len(seen), bad, dups, conflicts)
+	if bad &gt; 0 {
+		os.Exit(1)
+	}
+}</code></pre></div>
+  </div>
+  <div class="callout tip"><span class="title">Что упрощено</span>
+    <p>Валидатор ищет только точные дубликаты после нормализации. Почти-дубликаты требуют MinHash или embeddings, добавляйте их, когда в данных есть шаблонные тексты. Длина считается в символах. Если лимит жёсткий (<code>max_length</code> в тренере), считайте токенизатором целевой модели в Python-части пайплайна.</p>
+  </div>
+
+  <h2 id="practice">Практика</h2>
+  <div class="task">
+    <h3>Задание 1. Классификатор: промпт против LoRA</h3>
+    <p>Возьмите задачу классификации из своего домена (тикеты, интенты, модерация) или публичный датасет, 3000–5000 примеров, 4–8 классов с дисбалансом. Подготовьте JSONL скриптом выше и прогоните Go-валидатор.</p>
+    <p>Сравните три варианта на <b>одном и том же test</b>: (a) Haiku или Sonnet с zero-shot промптом, (b) тот же промпт с 10–20 few-shot примерами, (c) LoRA на 3–8B open-source модели (Colab или арендованный GPU, Unsloth или TRL).</p>
+    <p><b>Готово, когда:</b> есть таблица macro-F1, per-class recall, латентности p50 и стоимости 1M классификаций для всех трёх вариантов; кривые train/val loss сохранены и показано, где сработал early stopping; написан вывод на 5–7 предложений, какой вариант вы бы выбрали в прод и почему.</p>
+    <label class="check"><input type="checkbox" data-save="m08-t1"> Сделал</label>
+  </div>
+  <div class="task">
+    <h3>Задание 2. Найти утечку</h3>
+    <p>Намеренно оставьте в датасете 10% почти-дубликатов между train и test (перефразы, другой id заказа) и обучите модель. Потом уберите их и обучите заново.</p>
+    <p><b>Готово, когда:</b> вы можете показать, насколько утечка завысила метрику на test, и в пайплайне есть проверка, которая падает при пересечении сплитов.</p>
+    <label class="check"><input type="checkbox" data-save="m08-t2"> Сделал</label>
+  </div>
+  <div class="task">
+    <h3>Задание 3. Порог по бизнес-требованию</h3>
+    <p>Для бинарной задачи «нужна эскалация человеку» подберите порог на validation под требование «recall ≥ 0.9» и под «precision ≥ 0.95». Посчитайте на test, сколько тикетов в день уйдёт людям при 10 000 тикетов в сутки для обоих порогов.</p>
+    <p><b>Готово, когда:</b> есть PR-кривая с двумя отмеченными точками и расчёт нагрузки на операторов, понятный продакт-менеджеру.</p>
+    <label class="check"><input type="checkbox" data-save="m08-t3"> Сделал</label>
+  </div>
+
+  <h2 id="selfcheck">Самопроверка</h2>
+  <details class="q"><summary>Почему fine-tuning — плохой способ «загрузить в модель» базу знаний компании?</summary><div class="a"><p>Дообучение меняет вероятности токенов, а не создаёт надёжно извлекаемую память. Модель выучит стиль и частые формулировки, но точные факты воспроизводит ненадёжно и галлюцинирует правдоподобно. Кроме того, знания устаревают, и каждое обновление требует переобучения. Нет ссылок на источники и нет контроля прав доступа. Для знаний нужен RAG, для поведения — fine-tuning.</p></div></details>
+  <details class="q"><summary>Сколько параметров обучает LoRA с r = 8 на матрице 4096×4096 и какая это доля?</summary><div class="a"><p>r·(d + k) = 8·(4096 + 4096) = 65 536 параметров против 16 777 216, то есть 0.39%.</p></div></details>
+  <details class="q"><summary>Зачем B инициализируют нулями?</summary><div class="a"><p>Чтобы в начале обучения ΔW = B·A = 0 и модель совпадала с базовой. Обучение стартует из известной хорошей точки, а не с добавленного случайного шума.</p></div></details>
+  <details class="q"><summary>Чем QLoRA отличается от LoRA и чем за это платите?</summary><div class="a"><p>Замороженная базовая модель хранится в 4 битах (NF4 плюс double quantization), а адаптеры обучаются в bf16. Память под базу меньше в ~4 раза, так что 65–70B помещается в один GPU на 48–80 ГБ. Платите скоростью (деквантизация на каждом шаге) и небольшой потерей качества относительно 16-битной LoRA.</p></div></details>
+  <details class="q"><summary>Train loss падает, val loss с 3-й эпохи растёт. Что происходит и что делать?</summary><div class="a"><p>Overfitting: модель запоминает train. Можно взять чекпойнт с минимумом val (early stopping), уменьшить число эпох, r и learning rate, добавить dropout или weight decay, увеличить и почистить датасет, проверить дубликаты внутри train. Отдельно стоит проверить task-метрику: иногда val loss немного растёт, а accuracy ещё улучшается.</p></div></details>
+  <details class="q"><summary>Почему дедупликацию делают до разбиения на train/test?</summary><div class="a"><p>Если сначала разбить, копии одного примера окажутся по разные стороны, и тест будет проверять запоминание, а не обобщение. Метрика завышена, в проде провал. По той же причине сообщения одного клиента или треда разбивают группой.</p></div></details>
+  <details class="q"><summary>Модель фрода: accuracy 99.1% при доле фрода 1%. Хорошо это или плохо?</summary><div class="a"><p>Из этой цифры ничего не следует: тривиальная модель «всегда не фрод» даёт 99%. Нужны precision и recall по классу «фрод», PR-AUC и confusion matrix при выбранном пороге.</p></div></details>
+  <details class="q"><summary>Когда лучше macro-F1, а когда weighted-F1?</summary><div class="a"><p>Macro усредняет F1 по классам с равным весом и показывает, как модель работает на редких классах. Он нужен, когда редкие классы важны (жалобы, безопасность). Weighted взвешивает по частоте и отражает средний опыт по всему потоку. Хорошо смотреть на оба вместе с per-class метриками.</p></div></details>
+  <details class="q"><summary>Что такое catastrophic forgetting и как его заметить?</summary><div class="a"><p>Это потеря общих навыков после дообучения на узкой задаче. Заметить можно регрессионным набором общих задач (формат, инструкции, другой язык, safety-отказы), который прогоняется до и после. Лечится меньшим числом эпох, LoRA с небольшим r, подмешиванием общих данных и тем, что дообученную модель используют только по назначению.</p></div></details>
+
+  <h2 id="interview">Вопросы с собеседований</h2>
+  <details class="q interview"><summary>Продакт просит «дообучить GPT/Claude на нашей документации, чтобы бот отвечал правильно». Что ответите?</summary><div class="a">
+    <p>Сначала переформулирую задачу. Здесь проблема в знаниях, и её решает RAG: документация меняется, нужны ссылки на источники и учёт прав, а fine-tuning плохо запоминает факты и склонен к уверенным галлюцинациям.</p>
+    <p>План: eval-набор из 100–200 реальных вопросов с эталонами, RAG с гибридным поиском и reranking, метрики faithfulness и answer relevance. Fine-tuning появляется позже и только если останется проблема <i>поведения</i>: тон бренда, формат ответа, дорогой длинный промпт на большом объёме (дистилляция). И тогда я бы дообучал модель, которая работает <i>поверх</i> RAG, на примерах «контекст + вопрос → хороший ответ».</p>
+    <p>Также упомяну, что у части провайдеров fine-tuning недоступен или ограничен набором моделей, а дообученная модель привязывает вас к версии.</p>
+  </div></details>
+  <details class="q interview"><summary>Объясните LoRA. Почему она работает и какие гиперпараметры вы крутите?</summary><div class="a">
+    <p>Базовые веса W заморожены, а обновление ΔW параметризуется как B·A с рангом r ≪ d и масштабом α/r. Работает это потому, что изменения весов при адаптации к задаче имеют низкий внутренний ранг, и богатая базовая модель требует небольшой «поправки». Обучается 0.1–1% параметров, состояние оптимизатора крошечное, и памяти нужно в разы меньше. Адаптер весит десятки мегабайт, его можно слить в веса (без потерь в латентности) или сервить много адаптеров поверх одной базы.</p>
+    <p>Гиперпараметры: r (8–64), α (r–2r), target modules (all-linear обычно лучше, чем только attention), learning rate (~1e-4–2e-4), число эпох (1–3), dropout. Настраиваю по val loss и task-метрике с early stopping. Ограничение: LoRA хуже учит много нового, но меньше забывает. Для памяти есть QLoRA с 4-битной базой.</p>
+  </div></details>
+  <details class="q interview"><summary>Как вы соберёте датасет для fine-tuning классификатора обращений и как убедитесь, что метрики честные?</summary><div class="a">
+    <p>Источник — реальные обращения с разметкой. Инструкция для разметчиков с примерами пограничных случаев, двойная разметка 10% и Cohen's κ. Если согласие низкое, сначала чиню таксономию классов.</p>
+    <p>Чистка: нормализация, удаление PII, дедупликация (точная и MinHash), разбор конфликтующих меток. Балансировка: oversampling редких классов только в train, test с реальным распределением. Синтетика от сильной модели допустима для train, с проверкой выборки глазами, но не для test.</p>
+    <p>Честность метрик: дедупликация до разбиения, стратификация, групповое разбиение по клиенту или треду, а для данных со временем — разбиение по времени. Порог и гиперпараметры выбираются на validation, test используется один раз. Автоматическая проверка пересечения сплитов в CI. Ключевая метрика — macro-F1 и per-class recall, а не accuracy.</p>
+  </div></details>
+  <details class="q interview"><summary>Модель модерации: как выберете порог и как объясните бизнесу цену ошибок?</summary><div class="a">
+    <p>Сначала переведу ошибки в деньги и риски: FN (пропущенный вредный контент) — репутационный и юридический риск, FP (заблокирован нормальный пользователь) — отток и нагрузка на поддержку. Дальше либо ограничение («recall ≥ 0.95 на категории X»), либо минимизация ожидаемой стоимости <code>c_FN·FN + c_FP·FP</code>.</p>
+    <p>Порог подбираю на validation по PR-кривой и проверяю на test. Показываю бизнесу простыми словами: «при этом пороге из 10 000 постов в день 120 уйдёт на ручную проверку, из них 90 действительно нарушения, и мы пропустим около 5». Часто лучший ответ — три зоны: автоблок при высоком скоре, ручная проверка в серой зоне, пропуск при низком. После запуска слежу за дрейфом: распределение скоров меняется, и порог надо пересматривать.</p>
+  </div></details>
+  <details class="q interview"><summary>Что такое overfitting и как вы его диагностируете при fine-tuning LLM?</summary><div class="a">
+    <p>Модель подстраивается под шум и конкретные примеры train и хуже работает на новых данных. Признаки: train loss падает, val loss развернулся вверх, а на eval-наборе растут шаблонные ответы, модель повторяет формулировки из train и хуже справляется с перефразами.</p>
+    <p>Инструменты: регулярная оценка на validation, early stopping с восстановлением лучшего чекпойнта, мониторинг task-метрик, а не только loss, и ручной просмотр ответов на отложенных примерах. Лечение: больше и разнообразнее данных, меньше эпох, меньше r, ниже learning rate, регуляризация. Дополнительно проверяю catastrophic forgetting на общем регрессионном наборе.</p>
+  </div></details>
+  <details class="q interview"><summary>SFT, DPO и RLHF: в чём разница, и что бы вы использовали в продукте?</summary><div class="a">
+    <p>SFT учит воспроизводить эталонные ответы: нужны пары «вход → правильный выход». DPO учит предпочтениям по парам «лучше/хуже» без reward-модели, напрямую сдвигая вероятности относительно референсной модели. RLHF обучает reward-модель на сравнениях людей, а затем оптимизирует политику через PPO с KL-штрафом. Это мощно, но сложно и нестабильно, и в основном используется лабораториями.</p>
+    <p>В продукте: SFT для формата и задачи, затем, если есть пары «хороший и плохой ответ» (например, из оценок пользователей или правок операторов), DPO для тона и уместности. Если правильность проверяется автоматически, можно RL с верифицируемой наградой через провайдера или TRL. Полноценный RLHF — почти никогда.</p>
+  </div></details>
+  <details class="q interview"><summary>Дистилляция: как вы бы заменили вызов Opus на маленькую модель для задачи извлечения полей из писем?</summary><div class="a">
+    <p>Шаги: (1) eval-набор из 300–500 писем с эталонами, проверенными людьми, и измеренное качество Opus как потолок; (2) прогон 5–20 тысяч реальных писем через Opus со structured outputs, фильтрация по валидности схемы и согласию двух прогонов или LLM-судье; (3) LoRA на 3–8B модели на этих данных плюс исправленные людьми примеры; (4) сравнение на eval: per-field F1, доля валидного JSON, латентность, стоимость; (5) раскатка через shadow-трафик и A/B, с роутингом сложных писем (низкая уверенность, длинные) обратно на Opus.</p>
+    <p>Риски: ошибки учителя становятся потолком ученика, синтетика уже реального распределения, ToS провайдера про обучение на выходах, дрейф входных данных (нужен мониторинг и периодическое переобучение).</p>
+  </div></details>
+
+  <h2 id="links">Источники</h2>
+  <ul>
+    <li><a href="https://arxiv.org/abs/2106.09685" target="_blank" rel="noopener">Hu et al., 2021. LoRA: Low-Rank Adaptation of Large Language Models</a></li>
+    <li><a href="https://arxiv.org/abs/2305.14314" target="_blank" rel="noopener">Dettmers et al., 2023. QLoRA: Efficient Finetuning of Quantized LLMs</a></li>
+    <li><a href="https://arxiv.org/abs/2405.09673" target="_blank" rel="noopener">Biderman et al., 2024. LoRA Learns Less and Forgets Less</a></li>
+    <li><a href="https://arxiv.org/abs/2305.18290" target="_blank" rel="noopener">Rafailov et al., 2023. Direct Preference Optimization</a></li>
+    <li><a href="https://arxiv.org/abs/2203.02155" target="_blank" rel="noopener">Ouyang et al., 2022. Training language models to follow instructions with human feedback (InstructGPT, RLHF)</a></li>
+    <li><a href="https://arxiv.org/abs/2305.11206" target="_blank" rel="noopener">Zhou et al., 2023. LIMA: Less Is More for Alignment</a></li>
+    <li><a href="https://arxiv.org/abs/1503.02531" target="_blank" rel="noopener">Hinton et al., 2015. Distilling the Knowledge in a Neural Network</a></li>
+    <li><a href="https://huggingface.co/docs/trl/sft_trainer" target="_blank" rel="noopener">TRL: SFT Trainer</a>, <a href="https://huggingface.co/docs/peft" target="_blank" rel="noopener">PEFT docs</a></li>
+    <li><a href="https://docs.unsloth.ai/" target="_blank" rel="noopener">Unsloth docs</a>, <a href="https://github.com/axolotl-ai-cloud/axolotl" target="_blank" rel="noopener">Axolotl</a></li>
+    <li><a href="https://platform.openai.com/docs/guides/fine-tuning" target="_blank" rel="noopener">OpenAI: Fine-tuning guide</a></li>
+    <li><a href="https://docs.claude.com/" target="_blank" rel="noopener">Документация Claude</a> (prompt engineering, evals, structured outputs — то, что пробовать до fine-tuning)</li>
+    <li><a href="https://scikit-learn.org/stable/modules/model_evaluation.html" target="_blank" rel="noopener">scikit-learn: Metrics and scoring</a></li>
+    <li><a href="https://developers.google.com/machine-learning/crash-course" target="_blank" rel="noopener">Google Machine Learning Crash Course</a> (overfitting, классификация, ROC/PR)</li>
+  </ul>
+</main>
+<script src="assets/course.js"></script>
+<script>
+/* ---------- 1. Дерево решений ---------- */
+(function () {
+  const svg = document.getElementById('dt-svg');
+  const btns = document.getElementById('dt-btns');
+  const rec = document.getElementById('dt-rec');
+  const S = Course.svg;
+  const N = {
+    q1: { q: 'Не хватает знаний? Факты меняются, нужны источники', yes: 'rag', no: 'q2', y: 40 },
+    q2: { q: 'Есть evals, и промпт уже выжат?', yes: 'q3', no: 'prompt', y: 125 },
+    q3: { q: 'Нестабилен формат, стиль или узкая задача?', yes: 'sft', no: 'q4', y: 210 },
+    q4: { q: 'Качество ок, но дорого или медленно на объёме?', yes: 'distill', no: 'q5', y: 295 },
+    q5: { q: 'Есть пары «лучше/хуже», нужно сдвинуть предпочтения?', yes: 'dpo', no: 'none', y: 380 },
+    rag: { leaf: 'RAG', y: 40, t: 'RAG, а не fine-tuning', d: 'Знания подключаются через retrieval: обновление без переобучения, ссылки на источники, учёт прав доступа. Fine-tuning не запоминает факты надёжно. Если после RAG остаются проблемы формата, можно дообучить модель, работающую поверх него.' },
+    prompt: { leaf: 'Промпт + evals', y: 125, t: 'Сначала промпт и evals', d: 'Соберите 100–300 примеров с эталонами и метрикой. Затем инструкции, few-shot, structured outputs, более сильная модель, effort. Большинство задач решается здесь, а без evals эффект fine-tuning нельзя даже измерить.' },
+    sft: { leaf: 'SFT + LoRA', y: 210, t: 'SFT с LoRA', d: '500–5000 чистых примеров в формате чата, тот же system prompt, что в проде. LoRA r=8–16 на all-linear, 1–3 эпохи, early stopping. Сравнение с промптом на одном и том же test, регрессионный набор против catastrophic forgetting.' },
+    distill: { leaf: 'Дистилляция', y: 295, t: 'Дистилляция в маленькую модель', d: 'Ответы сильной модели на реальных входах → фильтрация → SFT маленькой модели. Выигрыш в 10–50× по цене и латентности. Проверьте ToS провайдера и держите роутинг сложных случаев на большую модель.' },
+    dpo: { leaf: 'DPO', y: 380, t: 'Preference tuning (DPO)', d: 'Тройки (prompt, chosen, rejected), например из правок операторов или оценок пользователей. Обычно поверх SFT. Параметр β ограничивает уход от исходной модели. Полноценный RLHF в прикладной задаче почти никогда не нужен.' },
+    none: { leaf: 'FT не поможет', y: 450, t: 'Цель для fine-tuning не определена', d: 'Нет проблемы в знаниях, формате, стоимости или предпочтениях, поэтому дообучать нечего. Вернитесь к анализу ошибок: какие примеры проваливаются и почему. Возможно, нужна другая декомпозиция задачи (модуль 5) или данные.' },
+  };
+  const QX = 170, LX = 500;
+  let cur = 'q1', path = ['q1'];
+
+  function go(id) { const i = path.indexOf(id); if (i >= 0) path = path.slice(0, i + 1); else path.push(id); cur = id; render(); }
+
+  function wrap(text, max) {
+    const words = text.split(' '), lines = []; let l = '';
+    words.forEach(w => { if ((l + ' ' + w).trim().length > max) { lines.push(l); l = w; } else l = (l + ' ' + w).trim(); });
+    if (l) lines.push(l); return lines;
+  }
+
+  function render() {
+    svg.innerHTML = '';
+    const onPath = new Set(path);
+    const edge = (a, b, label) => {
+      const A = N[a], B = N[b];
+      const active = onPath.has(a) && onPath.has(b);
+      const bx = B.leaf ? LX : QX;
+      let d, lx, ly;
+      if (bx === QX) { d = `M${QX},${A.y + 26} L${QX},${B.y - 26}`; lx = QX + 8; ly = (A.y + B.y) / 2 + 4; }
+      else if (B.y === A.y) { d = `M${QX + 140},${A.y} L${LX - 80},${B.y}`; lx = (QX + 140 + LX - 80) / 2 - 10; ly = A.y - 6; }
+      else { d = `M${QX},${A.y + 26} L${QX},${B.y} L${LX - 80},${B.y}`; lx = QX + 8; ly = B.y - 6; }
+      S('path', { d, fill: 'none', stroke: active ? 'var(--accent)' : 'var(--border)', 'stroke-width': active ? 3 : 1.5 }, svg);
+      S('text', { x: lx, y: ly, 'font-size': 11.5, fill: active ? 'var(--accent)' : 'var(--muted)', 'font-weight': 600 }, svg).textContent = label;
+    };
+    Object.keys(N).forEach(id => { const n = N[id]; if (!n.leaf) { edge(id, n.yes, 'да'); edge(id, n.no, 'нет'); } });
+    Object.keys(N).forEach(id => {
+      const n = N[id];
+      const g = S('g', { class: 'dt-node', tabindex: 0, role: 'button' }, svg);
+      const isCur = id === cur, seen = onPath.has(id);
+      if (n.leaf) {
+        S('rect', { x: LX - 80, y: n.y - 20, width: 160, height: 40, rx: 20, fill: isCur ? 'var(--ok)' : 'var(--ok-soft)', stroke: 'var(--ok)', 'stroke-width': 1.5 }, g);
+        S('text', { x: LX, y: n.y + 5, 'font-size': 13, 'text-anchor': 'middle', 'font-weight': 600, fill: isCur ? 'var(--card)' : 'var(--text)' }, g).textContent = n.leaf;
+      } else {
+        S('rect', { x: QX - 140, y: n.y - 26, width: 280, height: 52, rx: 8, fill: isCur ? 'var(--accent-soft)' : 'var(--card)', stroke: seen ? 'var(--accent)' : 'var(--border)', 'stroke-width': isCur ? 2.5 : 1.5 }, g);
+        const ls = wrap(n.q, 40);
+        ls.forEach((l, i) => { S('text', { x: QX, y: n.y + 4 + (i - (ls.length - 1) / 2) * 15, 'font-size': 12, 'text-anchor': 'middle' }, g).textContent = l; });
+      }
+      g.addEventListener('click', () => { if (onPath.has(id)) go(id); });
+      g.addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && onPath.has(id)) { e.preventDefault(); go(id); } });
+    });
+    const n = N[cur];
+    btns.innerHTML = '';
+    const mk = (label, fn, cls) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'btn ' + (cls || ''); b.textContent = label; b.addEventListener('click', fn); btns.append(b); };
+    if (!n.leaf) { mk('Да', () => go(n.yes), 'primary'); mk('Нет', () => go(n.no)); }
+    if (path.length > 1) mk('↺ Сначала', () => { path = ['q1']; cur = 'q1'; render(); });
+    rec.innerHTML = n.leaf ? `<h4>${n.t}</h4><p>${n.d}</p>` : `<p><b>Вопрос ${path.length}:</b> ${n.q}?</p>`;
+  }
+  render();
+})();
+
+/* ---------- 2. LoRA: параметры и память ---------- */
+(function () {
+  const svg = document.getElementById('lora-svg');
+  const out = document.getElementById('lora-read');
+  const S = Course.svg;
+  const RANKS = [1, 2, 4, 8, 16, 32, 64, 128, 256];
+  const MODELS = {
+    7: { name: '7B (Llama-2-7B-подобная)', P: 6.74e9, d: 4096, L: 32, m: 11008, kv: 4096 },
+    70: { name: '70B (Llama-70B-подобная, GQA)', P: 70.6e9, d: 8192, L: 80, m: 28672, kv: 1024 },
+  };
+  let model = 7, tm = 'all';
+  const fmt = v => v >= 1e9 ? (v / 1e9).toFixed(2) + ' млрд' : v >= 1e6 ? (v / 1e6).toFixed(2) + ' млн' : v >= 1e3 ? (v / 1e3).toFixed(1) + ' тыс' : String(v);
+  const gb = v => v >= 100 ? v.toFixed(0) + ' ГБ' : v.toFixed(1) + ' ГБ';
+
+  function loraParams(M, r) {
+    const attn = r * (M.d + M.d) * 2 + r * (M.d + M.kv) * 2; // q,o + k,v
+    const mlp = tm === 'all' ? 3 * r * (M.d + M.m) : 0;       // gate, up, down
+    return (attn + mlp) * M.L;
+  }
+
+  function draw() {
+    const d = +document.getElementById('lo-d').value;
+    const r = RANKS[+document.getElementById('lo-r').value];
+    svg.innerHTML = '';
+    // Левая часть: W (d×d) и B (d×r) · A (r×d) в одном масштабе.
+    const side = 150, sc = side / d, x0 = 20, y0 = 60;
+    const thin = Math.max(1.5, r * sc);
+    S('text', { x: x0, y: 22, 'font-size': 13, 'font-weight': 600 }, svg).textContent = 'Одна матрица d×d';
+    S('rect', { x: x0, y: y0, width: side, height: side, fill: 'var(--accent-soft)', stroke: 'var(--accent)' }, svg);
+    S('text', { x: x0 + side / 2, y: y0 + side / 2 + 5, 'font-size': 18, 'text-anchor': 'middle', 'font-weight': 700 }, svg).textContent = 'W';
+    S('text', { x: x0 + side / 2, y: y0 - 8, 'font-size': 11, 'text-anchor': 'middle', fill: 'var(--muted)' }, svg).textContent = `${d}×${d} (заморожена)`;
+    S('text', { x: x0 + side + 14, y: y0 + side / 2 + 6, 'font-size': 20 }, svg).textContent = '+';
+    const bx = x0 + side + 36;
+    S('rect', { x: bx, y: y0, width: thin, height: side, fill: 'var(--violet)', opacity: 0.85 }, svg);
+    S('text', { x: bx + thin / 2, y: y0 + side + 16, 'font-size': 12, 'text-anchor': 'middle', 'font-weight': 700 }, svg).textContent = 'B';
+    S('text', { x: bx + thin / 2, y: y0 + side + 30, 'font-size': 10.5, 'text-anchor': 'middle', fill: 'var(--muted)' }, svg).textContent = `${d}×${r}`;
+    S('text', { x: bx + thin + 8, y: y0 + 10, 'font-size': 14 }, svg).textContent = '·';
+    const ax = bx + thin + 20;
+    S('rect', { x: ax, y: y0, width: side, height: thin, fill: 'var(--violet)', opacity: 0.85 }, svg);
+    S('text', { x: ax + side / 2, y: y0 + thin + 16, 'font-size': 12, 'text-anchor': 'middle', 'font-weight': 700 }, svg).textContent = 'A';
+    S('text', { x: ax + side / 2, y: y0 + thin + 30, 'font-size': 10.5, 'text-anchor': 'middle', fill: 'var(--muted)' }, svg).textContent = `${r}×${d}`;
+    const full = d * d, lo = 2 * d * r;
+    const lines = [`полное обновление: d² = ${fmt(full)}`, `LoRA: 2·d·r = ${fmt(lo)}`, `доля: ${(100 * lo / full).toFixed(r * 2 / d < 0.001 ? 3 : 2)}%`];
+    lines.forEach((t, i) => S('text', { x: x0, y: y0 + side + 58 + i * 18, 'font-size': 12.5, 'font-weight': i === 2 ? 700 : 400 }, svg).textContent = t);
+
+    // Правая часть: память для модели, лог-шкала.
+    const M = MODELS[model];
+    const lp = loraParams(M, r);
+    const mem = [
+      { k: 'Full FT (AdamW, bf16 + fp32 состояния)', v: M.P * 16 / 1e9, c: 'bad' },
+      { k: 'LoRA (база bf16 + адаптер)', v: (M.P * 2 + lp * 16) / 1e9, c: 'accent' },
+      { k: 'QLoRA (база NF4 + адаптер)', v: (M.P * 0.516 + lp * 16) / 1e9, c: 'ok' },
+    ];
+    const rx = 370, rw = 250, top = 40;
+    S('text', { x: rx, y: 22, 'font-size': 13, 'font-weight': 600 }, svg).textContent = `Память на ${model}B: веса + оптимизатор`;
+    const lx = v => rx + (Math.log10(v) - 0) / (Math.log10(2000) - 0) * rw; // 1 ГБ … 2 ТБ
+    [24, 80, 640].forEach(g => {
+      S('line', { x1: lx(g), x2: lx(g), y1: top, y2: top + 200, stroke: 'var(--muted)', 'stroke-dasharray': '3 3' }, svg);
+      S('text', { x: lx(g), y: top + 214, 'font-size': 10, 'text-anchor': 'middle', fill: 'var(--muted)' }, svg).textContent = g === 24 ? '24 ГБ' : g === 80 ? '80 ГБ' : '8×80';
+    });
+    mem.forEach((m, i) => {
+      const y = top + 14 + i * 64;
+      S('text', { x: rx, y, 'font-size': 11.5 }, svg).textContent = m.k;
+      S('rect', { x: rx, y: y + 6, width: Math.max(2, lx(m.v) - rx), height: 22, rx: 3, fill: `var(--${m.c})`, opacity: 0.85 }, svg);
+      S('text', { x: Math.min(lx(m.v) + 6, 600), y: y + 22, 'font-size': 12, 'font-weight': 700 }, svg).textContent = gb(m.v);
+    });
+    S('text', { x: rx, y: top + 240, 'font-size': 10.5, fill: 'var(--muted)' }, svg).textContent = 'пунктир: GPU 24 ГБ, 80 ГБ, узел 8×80 · лог.';
+    out.textContent =
+      `${M.name}, rank r=${r}, target: ${tm === 'all' ? 'all-linear (q,k,v,o,gate,up,down)' : 'attention (q,k,v,o)'}\n` +
+      `Обучаемых параметров LoRA: ${fmt(lp)} = ${(100 * lp / M.P).toFixed(3)}% модели; адаптер в bf16 ≈ ${(lp * 2 / 1e6).toFixed(0)} МБ\n` +
+      `Full FT: ${gb(mem[0].v)} · LoRA: ${gb(mem[1].v)} · QLoRA: ${gb(mem[2].v)} (+ активации, зависят от batch × seq_len)`;
+  }
+
+  function seg(id, set) {
+    const el = document.getElementById(id);
+    el.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+      el.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+      set(b.dataset.v); draw();
+    }));
+  }
+  seg('lo-model', v => { model = +v; });
+  seg('lo-tm', v => { tm = v; });
+  Course.bindRange(document.getElementById('lo-d'), v => String(v), draw);
+  Course.bindRange(document.getElementById('lo-r'), v => String(RANKS[v]), draw);
+})();
+
+/* ---------- 3. Кривые обучения ---------- */
+(function () {
+  const svg = document.getElementById('lc-svg');
+  const out = document.getElementById('lc-read');
+  const S = Course.svg;
+  const $ = id => document.getElementById(id);
+
+  function curves(N, E, reg) {
+    const k = 0.35 + 0.22 * Math.log10(N / 100);            // больше данных → больше шагов за эпоху
+    const L0 = 2.4;
+    const trainFloor = 0.08 + 0.12 * Math.log10(N / 100) + 1.1 * reg * reg; // большой датасет труднее запомнить; регуляризация мешает
+    const valFloor = trainFloor + (0.9 / Math.sqrt(N / 100) + 0.3) * (1 - 0.7 * reg); // разрыв обобщения
+    const e0 = (1.5 + 3.5 * Math.log10(N / 100)) * (1 + 2.5 * reg);   // когда начинается переобучение
+    const ovf = 0.05 * Math.pow(1 - reg, 2) / Math.sqrt(N / 300);
+    const tr = [], va = [];
+    for (let e = 0; e <= E; e += 0.25) {
+      tr.push([e, trainFloor + (L0 - trainFloor) * Math.exp(-k * e * 1.15)]);
+      const noise = e > 0 ? 0.012 * Math.sin(e * 3.7 + N) : 0;
+      va.push([e, valFloor + (L0 - valFloor) * Math.exp(-k * e) + ovf * Math.pow(Math.max(0, e - e0), 1.2) + noise]);
+    }
+    return { tr, va };
+  }
+
+  function draw() {
+    const N = Math.round(Math.pow(10, +$('lc-n').value)), E = +$('lc-e').value, reg = +$('lc-reg').value;
+    const { tr, va } = curves(N, E, reg);
+    svg.innerHTML = '';
+    const L = 44, R = 14, T = 14, B = 30, W = 640, H = 280;
+    const ymax = 2.6;
+    const x = e => L + e / E * (W - L - R), y = v => H - B - Math.min(v, ymax) / ymax * (H - B - T);
+    for (let v = 0; v <= 2.5; v += 0.5) { S('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: 'var(--border)' }, svg); S('text', { x: L - 6, y: y(v) + 4, 'font-size': 11, 'text-anchor': 'end' }, svg).textContent = v.toFixed(1); }
+    const step = E <= 10 ? 1 : E <= 20 ? 2 : 5;
+    for (let e = 0; e <= E; e += step) S('text', { x: x(e), y: H - B + 16, 'font-size': 11, 'text-anchor': 'middle' }, svg).textContent = e;
+    S('text', { x: W - R, y: H - 2, 'font-size': 11, 'text-anchor': 'end', fill: 'var(--muted)' }, svg).textContent = 'эпоха →';
+    S('text', { x: 4, y: T + 2, 'font-size': 11, fill: 'var(--muted)' }, svg).textContent = 'loss';
+    // Early stopping: оценка раз в эпоху, patience 2.
+    let best = Infinity, bestE = 0, stopE = null, bad = 0;
+    for (let e = 1; e <= E; e++) {
+      const v = va[e * 4][1];
+      if (v < best - 0.005) { best = v; bestE = e; bad = 0; } else if (++bad >= 2) { stopE = e; break; }
+    }
+    if (stopE !== null) S('rect', { x: x(stopE), y: T, width: x(E) - x(stopE), height: H - B - T, fill: 'var(--bg-soft)', opacity: 0.8 }, svg);
+    S('polyline', { points: tr.map(p => `${x(p[0])},${y(p[1])}`).join(' '), fill: 'none', stroke: 'var(--accent)', 'stroke-width': 2.5 }, svg);
+    S('polyline', { points: va.map(p => `${x(p[0])},${y(p[1])}`).join(' '), fill: 'none', stroke: 'var(--warn)', 'stroke-width': 2.5 }, svg);
+    for (let e = 1; e <= E; e++) S('circle', { cx: x(e), cy: y(va[e * 4][1]), r: 2.5, fill: 'var(--warn)' }, svg);
+    S('line', { x1: x(bestE), x2: x(bestE), y1: T, y2: H - B, stroke: 'var(--ok)', 'stroke-width': 2, 'stroke-dasharray': '5 3' }, svg);
+    S('circle', { cx: x(bestE), cy: y(best), r: 5.5, fill: 'var(--ok)' }, svg);
+    S('text', { x: Math.min(x(bestE) + 6, W - 150), y: T + 12, 'font-size': 11.5, fill: 'var(--ok)', 'font-weight': 600 }, svg).textContent = `лучший чекпойнт: эпоха ${bestE}`;
+    if (stopE !== null) S('text', { x: Math.min(x(stopE) + 6, W - 150), y: T + 28, 'font-size': 11, fill: 'var(--muted)' }, svg).textContent = `early stop на эпохе ${stopE}`;
+
+    const trEnd = tr[tr.length - 1][1], vaEnd = va[va.length - 1][1];
+    let diag;
+    if (best > 1.2 && trEnd > 0.9) diag = 'Underfitting: оба loss высокие. Уменьшите регуляризацию, увеличьте ёмкость (r) или число шагов.';
+    else if (vaEnd - best > 0.08) diag = `Overfitting после эпохи ~${bestE}: train продолжает падать, val растёт. Early stopping вернёт эпоху ${bestE}; лучше добавить данных или регуляризации.`;
+    else diag = 'Кривые сходятся без явного переобучения в этом окне. Проверьте task-метрику на val: loss — не качество.';
+    out.textContent = `датасет: ${N} примеров · эпох: ${E} · регуляризация: ${reg.toFixed(2)}\n` +
+      `min val loss ${best.toFixed(3)} (эпоха ${bestE}) · финальный train ${trEnd.toFixed(3)} · финальный val ${vaEnd.toFixed(3)} · разрыв ${(vaEnd - trEnd).toFixed(3)}\n` + diag;
+  }
+  Course.bindRange($('lc-n'), v => String(Math.round(Math.pow(10, v))), draw);
+  Course.bindRange($('lc-e'), v => String(v), draw);
+  Course.bindRange($('lc-reg'), v => v.toFixed(2), draw);
+})();
+
+/* ---------- 4. Confusion matrix + PR ---------- */
+(function () {
+  const svg = document.getElementById('cm-svg');
+  const cv = document.getElementById('cm-curves');
+  const out = document.getElementById('cm-read');
+  const S = Course.svg;
+  const $ = id => document.getElementById(id);
+  const TOTAL = 2000;
+
+  function rng(seed) { return function () { seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+  let data = null, key = '';
+  function gen(prev, sep) {
+    const k = prev + '|' + sep;
+    if (k === key) return data;
+    const rnd = rng(3);
+    const g = () => { let u = 0; while (!u) u = rnd(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rnd()); };
+    const nPos = Math.max(1, Math.round(TOTAL * prev));
+    const pts = [];
+    for (let i = 0; i < TOTAL; i++) {
+      const pos = i < nPos;
+      const mu = pos ? 0.5 + sep / 2 : 0.5 - sep / 2;
+      pts.push({ y: pos ? 1 : 0, s: Math.min(0.999, Math.max(0.001, mu + g() * 0.15)) });
+    }
+    // Кривые PR/ROC по всем порогам.
+    const sorted = pts.slice().sort((a, b) => b.s - a.s);
+    let tp = 0, fp = 0; const pr = [], roc = [[0, 0]];
+    sorted.forEach(p => { if (p.y) tp++; else fp++; pr.push([tp / nPos, tp / (tp + fp)]); roc.push([fp / (TOTAL - nPos), tp / nPos]); });
+    let ap = 0, prevR = 0; pr.forEach(([r, p]) => { ap += (r - prevR) * p; prevR = r; });
+    let auc = 0; for (let i = 1; i < roc.length; i++) auc += (roc[i][0] - roc[i - 1][0]) * (roc[i][1] + roc[i - 1][1]) / 2;
+    data = { pts, nPos, pr, roc, ap, auc }; key = k;
+    return data;
+  }
+
+  function draw() {
+    const th = +$('cm-th').value, prev = +$('cm-prev').value, sep = +$('cm-sep').value;
+    const D = gen(prev, sep);
+    let TP = 0, FP = 0, FN = 0, TN = 0;
+    D.pts.forEach(p => { const yhat = p.s >= th; if (p.y && yhat) TP++; else if (p.y) FN++; else if (yhat) FP++; else TN++; });
+    const P = TP + FP ? TP / (TP + FP) : 1, Rc = TP / (TP + FN), F1 = P + Rc ? 2 * P * Rc / (P + Rc) : 0, Acc = (TP + TN) / TOTAL;
+
+    // Гистограммы: негативы сверху, позитивы снизу, каждая нормирована на свой максимум.
+    svg.innerHTML = '';
+    const hx = 30, hw = 330, bins = 40;
+    const hist = cls => { const h = new Array(bins).fill(0); D.pts.forEach(p => { if (p.y === cls) h[Math.min(bins - 1, Math.floor(p.s * bins))]++; }); return h; };
+    const rows = [{ cls: 0, y: 20, name: `негативы (${TOTAL - D.nPos})`, col: 'muted' }, { cls: 1, y: 120, name: `позитивы (${D.nPos})`, col: 'accent' }];
+    rows.forEach(rw => {
+      const h = hist(rw.cls), mx = Math.max(1, ...h);
+      S('text', { x: hx, y: rw.y + 8, 'font-size': 11.5, fill: 'var(--muted)' }, svg).textContent = rw.name;
+      h.forEach((c, i) => {
+        if (!c) return;
+        const bh = c / mx * 75, bx = hx + i / bins * hw, center = (i + 0.5) / bins;
+        const predPos = center >= th;
+        const col = rw.cls === 1 ? (predPos ? 'ok' : 'warn') : (predPos ? 'bad' : 'muted');
+        S('rect', { x: bx, y: rw.y + 90 - bh, width: hw / bins - 1, height: bh, fill: `var(--${col})`, opacity: 0.85 }, svg);
+      });
+      S('line', { x1: hx, x2: hx + hw, y1: rw.y + 90, y2: rw.y + 90, stroke: 'var(--border)' }, svg);
+    });
+    [0, 0.5, 1].forEach(v => S('text', { x: hx + v * hw, y: 226, 'font-size': 10.5, 'text-anchor': 'middle' }, svg).textContent = v);
+    S('text', { x: hx + hw / 2, y: 242, 'font-size': 10.5, 'text-anchor': 'middle', fill: 'var(--muted)' }, svg).textContent = 'скор классификатора';
+    S('line', { x1: hx + th * hw, x2: hx + th * hw, y1: 14, y2: 214, stroke: 'var(--text)', 'stroke-width': 2, 'stroke-dasharray': '5 3' }, svg);
+
+    // Матрица.
+    const mx0 = 420, my0 = 50, c = 92;
+    S('text', { x: mx0 + c, y: 20, 'font-size': 11.5, 'text-anchor': 'middle', fill: 'var(--muted)' }, svg).textContent = 'предсказание';
+    S('text', { x: mx0 + c / 2, y: 40, 'font-size': 11, 'text-anchor': 'middle' }, svg).textContent = '«да»';
+    S('text', { x: mx0 + 1.5 * c, y: 40, 'font-size': 11, 'text-anchor': 'middle' }, svg).textContent = '«нет»';
+    S('text', { x: mx0 - 8, y: my0 + c / 2 + 4, 'font-size': 11, 'text-anchor': 'end' }, svg).textContent = 'да';
+    S('text', { x: mx0 - 8, y: my0 + 1.5 * c + 4, 'font-size': 11, 'text-anchor': 'end' }, svg).textContent = 'нет';
+    const cells = [[0, 0, 'TP', TP, 'ok'], [1, 0, 'FN', FN, 'warn'], [0, 1, 'FP', FP, 'bad'], [1, 1, 'TN', TN, 'muted']];
+    cells.forEach(([cx, cy, lab, v, col]) => {
+      S('rect', { x: mx0 + cx * c, y: my0 + cy * c, width: c - 4, height: c - 4, rx: 6, fill: col === 'muted' ? 'var(--bg-soft)' : `var(--${col}-soft)`, stroke: `var(--${col})` }, svg);
+      S('text', { x: mx0 + cx * c + c / 2 - 2, y: my0 + cy * c + 34, 'font-size': 12, 'text-anchor': 'middle', fill: 'var(--muted)' }, svg).textContent = lab;
+      S('text', { x: mx0 + cx * c + c / 2 - 2, y: my0 + cy * c + 58, 'font-size': 20, 'text-anchor': 'middle', 'font-weight': 700 }, svg).textContent = v;
+    });
+
+    // PR и ROC.
+    cv.innerHTML = '';
+    const panel = (px, title, pts, curX, curY, xl, yl, diag) => {
+      const w = 270, h = 170, top = 22;
+      const X = v => px + 30 + v * w, Y = v => top + h - v * h;
+      S('text', { x: px + 30, y: 14, 'font-size': 12, 'font-weight': 600 }, cv).textContent = title;
+      S('rect', { x: X(0), y: Y(1), width: w, height: h, fill: 'none', stroke: 'var(--border)' }, cv);
+      if (diag) S('line', { x1: X(0), y1: Y(0), x2: X(1), y2: Y(1), stroke: 'var(--border)', 'stroke-dasharray': '4 3' }, cv);
+      else S('line', { x1: X(0), y1: Y(prev), x2: X(1), y2: Y(prev), stroke: 'var(--border)', 'stroke-dasharray': '4 3' }, cv);
+      const step = Math.max(1, Math.floor(pts.length / 400));
+      S('polyline', { points: pts.filter((_, i) => i % step === 0 || i === pts.length - 1).map(p => `${X(p[0])},${Y(p[1])}`).join(' '), fill: 'none', stroke: 'var(--accent)', 'stroke-width': 2 }, cv);
+      S('circle', { cx: X(curX), cy: Y(curY), r: 6, fill: 'var(--bad)', stroke: 'var(--card)', 'stroke-width': 2 }, cv);
+      S('text', { x: X(0.5), y: top + h + 16, 'font-size': 10.5, 'text-anchor': 'middle', fill: 'var(--muted)' }, cv).textContent = xl;
+      const t = S('text', { x: px + 14, y: Y(0.5), 'font-size': 10.5, 'text-anchor': 'middle', fill: 'var(--muted)', transform: `rotate(-90 ${px + 14} ${Y(0.5)})` }, cv); t.textContent = yl;
+    };
+    panel(0, `PR-кривая · AP = ${D.ap.toFixed(3)}`, D.pr, Rc, P, 'recall', 'precision', false);
+    panel(320, `ROC · AUC = ${D.auc.toFixed(3)}`, D.roc, FP / (TOTAL - D.nPos), Rc, 'FPR', 'TPR (recall)', true);
+
+    out.textContent =
+      `порог ${th.toFixed(2)} · позитивов ${D.nPos} из ${TOTAL} (${(prev * 100).toFixed(0)}%)\n` +
+      `precision ${P.toFixed(3)} · recall ${Rc.toFixed(3)} · F1 ${F1.toFixed(3)} · accuracy ${Acc.toFixed(3)}  (у «всегда нет»: ${(1 - D.nPos / TOTAL).toFixed(3)})\n` +
+      `пунктир на PR — precision случайного классификатора = доля позитивов; на ROC — диагональ случайного.`;
+  }
+  Course.bindRange($('cm-th'), v => v.toFixed(2), draw);
+  Course.bindRange($('cm-prev'), v => Math.round(v * 100) + '%', draw);
+  Course.bindRange($('cm-sep'), v => v.toFixed(2), draw);
+})();
+</script>
+</body>
+</html>

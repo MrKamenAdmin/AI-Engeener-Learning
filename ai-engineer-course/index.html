@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Engineer: курс</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="index.html">AI Engineer · курс</a>
+  <span class="spacer"></span>
+  <button class="btn" data-theme-btn></button>
+</header>
+<main class="content" style="margin:0 auto">
+  <section class="hero">
+    <div class="module-hero"><div class="eyebrow">Курс для Go-разработчика</div></div>
+    <h1>Прикладной AI engineer: до уровня сеньора</h1>
+    <p class="lead muted">Как строить продукты поверх готовых LLM: API, RAG, агенты, evals и продакшн. Без исследовательской математики, но с компромиссами, режимами отказов, цифрами по стоимости и латентности и вопросами с собеседований. Примеры кода на Go, а там, где экосистема живёт в Python, на Python.</p>
+    <div class="progress-big"><i></i></div>
+    <p class="muted" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><span id="progress-text"></span> <button class="btn" id="progress-reset" type="button">Сбросить прогресс</button></p>
+  </section>
+
+  <h2 id="modules">Модули</h2>
+  <div class="module-list" id="module-list"></div>
+
+  <h2 id="how">Как проходить</h2>
+  <div class="grid">
+    <div class="card"><h4>Структура модуля</h4><p>Теория, интерактивные схемы, код на Go/Python, практическое задание, вопросы для самопроверки (ответы под спойлером) и вопросы с собеседований.</p></div>
+    <div class="card"><h4>Темп</h4><p>Около 12 недель по 8–10 часов. Модули 0–2 идут за 1–2 недели, RAG, агенты и evals занимают по 1–2 недели каждый, параллельно с ними идут сквозные проекты.</p></div>
+    <div class="card"><h4>Прогресс</h4><p>Отметки «пройден» и чекбоксы заданий хранятся в localStorage этого браузера. Если очистить данные сайта, они пропадут.</p></div>
+    <div class="card"><h4>Цены и модели</h4><p>Цифры по моделям и тарифам указаны на момент написания (сентябрь 2026). Перед решениями сверяйтесь с документацией провайдера: цены меняются часто.</p></div>
+  </div>
+
+  <h2 id="map">Карта курса</h2>
+  <div class="viz">
+    <p class="viz-title">Как модули связаны между собой</p>
+    <p class="viz-sub">Стрелка «A → B» означает, что B опирается на A.</p>
+    <svg viewBox="0 0 860 300" role="img" aria-label="Граф зависимостей модулей">
+      <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="var(--muted)"/></marker></defs>
+      <g stroke="var(--muted)" stroke-width="1.5" fill="none" marker-end="url(#arr)">
+        <path d="M110,150 L170,150"/><path d="M290,150 L350,95"/><path d="M290,150 L350,205"/>
+        <path d="M470,95 L530,60"/><path d="M470,95 L530,150"/><path d="M470,205 L530,150"/><path d="M470,205 L530,245"/>
+        <path d="M650,60 L710,150"/><path d="M650,150 L710,150"/><path d="M650,245 L710,150"/>
+      </g>
+      <g font-size="13" text-anchor="middle">
+        <rect x="10" y="125" width="100" height="50" rx="8" fill="var(--teal-soft)" stroke="var(--teal)"/><text x="60" y="155">0 · Go → AI</text>
+        <rect x="170" y="125" width="120" height="50" rx="8" fill="var(--accent-soft)" stroke="var(--accent)"/><text x="230" y="147">1 · LLM внутри</text><text x="230" y="164">2 · API</text>
+        <rect x="350" y="70" width="120" height="50" rx="8" fill="var(--accent-soft)" stroke="var(--accent)"/><text x="410" y="100">3 · Промпты</text>
+        <rect x="350" y="180" width="120" height="50" rx="8" fill="var(--accent-soft)" stroke="var(--accent)"/><text x="410" y="202">9 · Инструменты</text><text x="410" y="219">8 · ML-основы</text>
+        <rect x="530" y="35" width="120" height="50" rx="8" fill="var(--violet-soft)" stroke="var(--violet)"/><text x="590" y="65">4 · RAG</text>
+        <rect x="530" y="125" width="120" height="50" rx="8" fill="var(--violet-soft)" stroke="var(--violet)"/><text x="590" y="147">5 · Агенты</text><text x="590" y="164">6 · Evals</text>
+        <rect x="530" y="220" width="120" height="50" rx="8" fill="var(--violet-soft)" stroke="var(--violet)"/><text x="590" y="250">7 · Продакшн</text>
+        <rect x="710" y="115" width="140" height="70" rx="8" fill="var(--ok-soft)" stroke="var(--ok)"/><text x="780" y="143">10 · System design</text><text x="780" y="162">11 · Собеседование</text>
+      </g>
+    </svg>
+  </div>
+</main>
+<script src="assets/course.js"></script>
+</body>
+</html>

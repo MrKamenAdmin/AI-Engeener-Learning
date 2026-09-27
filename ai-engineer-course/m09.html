@@ -1,0 +1,792 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>9 · Инструменты</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  .tr-filter { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+  .tr-filter .btn { font-size: 13px; padding: 4px 10px; }
+  .tr-filter .btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  #tr-table td code { white-space: pre-wrap; }
+  #tr-table td:nth-child(1) { color: var(--muted); font-size: 13px; }
+  #tr-table { font-size: 13.5px; }
+  .ev-code { margin-top: 10px; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .seg button { font: inherit; font-size: 13px; border: 0; background: var(--card); color: var(--text); padding: 5px 10px; cursor: pointer; }
+  .seg button + button { border-left: 1px solid var(--border); }
+  .seg button.active { background: var(--accent); color: #fff; }
+</style>
+</head>
+<body data-module="m09">
+<main class="content">
+  <div class="module-hero">
+    <div class="eyebrow">Модуль 9</div>
+    <h1>Инструменты</h1>
+    <p class="lead">Python для Go-разработчика без вводного курса: соответствия конструкций, окружение на uv, pydantic, async. Затем рабочие инструменты AI engineer: FastAPI-обёртка со стримингом, pandas для анализа evals, SDK провайдеров, фреймворки (LangChain, LlamaIndex, LangGraph) с честным разбором минусов и Jupyter — где он уместен, а где нет.</p>
+    <div class="meta-row"><span class="chip">≈ 6 часов</span><span class="chip">Python + Go</span><span class="chip">3 визуализации</span><span class="chip">актуально на сентябрь 2026</span></div>
+  </div>
+
+  <h2 id="why">Зачем Go-разработчику Python</h2>
+  <p>Прод-сервис вокруг LLM вполне можно и стоит писать на Go: вызов API, стриминг, лимиты, очереди, RAG на pgvector — всё это Go делает отлично, и у Anthropic есть официальный Go SDK. Но часть работы живёт в Python, и притворяться, что её нет, дорого:</p>
+  <ul>
+    <li><b>Evals и анализ.</b> Разметка, подсчёт метрик по срезам, сравнение версий промпта, графики. pandas и Jupyter здесь стандарт, и коллеги-ML будут ждать от вас <code>.ipynb</code> или скрипт, а не Go-бинарь.</li>
+    <li><b>Новые возможности приходят в Python SDK первыми</b> или одновременно с TypeScript; примеры в документации провайдеров — в первую очередь на Python.</li>
+    <li><b>Экосистема:</b> fine-tuning (модуль 8), эмбеддинг-модели и rerankers локально, парсинг PDF, токенизаторы, фреймворки для агентов и RAG.</li>
+    <li><b>Собеседования.</b> Live-coding на AI engineer часто на Python: «напиши функцию, которая вызывает модель и парсит ответ», «посчитай precision по этому DataFrame».</li>
+  </ul>
+  <p>Рабочая стратегия: сервисы на Go, эксперименты, evals и анализ — на Python. Цель модуля — чтобы Python не тормозил вас: читать чужой код, писать скрипты и небольшие сервисы идиоматично, знать, где подвохи для человека с Go-рефлексами.</p>
+
+  <h2 id="cheatsheet">Шпаргалка Go ↔ Python</h2>
+  <p>Фильтруйте по разделу или ищите по слову. Колонка «Подвох» — то, на чём спотыкаются именно Go-разработчики.</p>
+
+  <div class="viz" id="viz-tr">
+    <p class="viz-title">Переводчик Go → Python</p>
+    <p class="viz-sub">Поиск работает по всем колонкам: попробуйте «error», «struct», «канал», «venv».</p>
+    <input type="text" id="tr-q" placeholder="поиск: goroutine, defer, map, json…" aria-label="Поиск по шпаргалке">
+    <div class="tr-filter" id="tr-cats"></div>
+    <table id="tr-table"><thead><tr><th>Раздел</th><th>Go</th><th>Python</th><th>Подвох</th></tr></thead><tbody></tbody></table>
+    <div class="readout" id="tr-count"></div>
+  </div>
+
+  <h3>Модули и пакеты</h3>
+  <p>В Go пакет = директория, модуль = <code>go.mod</code>. В Python модуль = файл <code>.py</code>, пакет = директория (исторически с <code>__init__.py</code>), а «проект» описывается <code>pyproject.toml</code>. Импорты разрешаются через <code>sys.path</code>, а не через путь модуля, поэтому классическая боль — «работает из корня, не работает из поддиректории». Лечится src-layout и установкой проекта в окружение в editable-режиме (uv делает это сам). Экспорт не по регистру, а по соглашению: <code>_name</code> — «приватное», но доступно всем.</p>
+
+  <h3>Типы и dataclass vs struct</h3>
+  <p>Python динамически типизирован, аннотации (<code>def f(x: int) -&gt; str</code>) интерпретатор <b>не проверяет</b>. Проверку делает внешний тайпчекер (mypy, pyright), и в команде с Go-культурой его стоит включить в CI со строгим режимом. <code>@dataclass</code> — ближайший аналог struct: поля, конструктор, сравнение. Но он не валидирует значения: <code>User(age="десять")</code> создастся спокойно. Для данных с границы доверия (JSON от клиента, ответ модели) нужен pydantic.</p>
+
+  <h3>Исключения vs error</h3>
+  <p>Нет <code>if err != nil</code>, ошибки летят исключениями вверх по стеку, пока их не поймают. Для Go-разработчика это ощущается как паника, которую принято ловить. Правила хорошего тона: ловить конкретные классы (<code>except anthropic.RateLimitError</code>), а не голый <code>except Exception</code>; не глотать молча; оборачивать с сохранением причины: <code>raise MyError("…") from e</code> (аналог <code>fmt.Errorf("…: %w", err)</code>, цепочка видна в traceback). Ресурсы закрывает <code>with</code> (context manager) — это <code>defer</code>, привязанный к блоку, а не к функции.</p>
+
+  <h2 id="env">Окружение: uv, venv, pyproject</h2>
+  <p>Главная боль Python для гоферов — окружения. В Go зависимости изолированы модулем и собираются в бинарь. В Python пакеты ставятся в интерпретатор, поэтому на каждый проект нужен venv (virtual environment — отдельная директория с копией/ссылкой на интерпретатор и своими site-packages). Исторический зоопарк: pip, virtualenv, pip-tools, poetry, pipenv, conda, pyenv. В 2026 году разумный дефолт один — <b>uv</b> от Astral: менеджер версий Python, venv, зависимостей и lock-файла в одном быстром бинаре (он написан на Rust).</p>
+
+  <table>
+    <tr><th>Go</th><th>uv</th><th>Что делает</th></tr>
+    <tr><td><code>go mod init</code></td><td><code>uv init</code></td><td>Создаёт <code>pyproject.toml</code>, <code>.python-version</code></td></tr>
+    <tr><td><code>go get pkg</code></td><td><code>uv add anthropic pandas</code></td><td>Добавляет зависимость, обновляет <code>uv.lock</code>, ставит в <code>.venv</code></td></tr>
+    <tr><td><code>go.sum</code></td><td><code>uv.lock</code></td><td>Точные версии и хеши; коммитить</td></tr>
+    <tr><td><code>go run .</code></td><td><code>uv run python main.py</code></td><td>Запуск в окружении проекта, синхронизирует его перед запуском</td></tr>
+    <tr><td>—</td><td><code>uv python install 3.13</code></td><td>Ставит нужную версию интерпретатора</td></tr>
+    <tr><td><code>go install tool@v</code></td><td><code>uv tool install ruff</code> / <code>uvx ruff</code></td><td>CLI-инструменты в изолированных окружениях</td></tr>
+    <tr><td><code>gofmt</code>, <code>go vet</code></td><td><code>ruff format</code>, <code>ruff check</code>, <code>mypy</code>/<code>pyright</code></td><td>Форматирование, линтер, типы</td></tr>
+  </table>
+
+  <div class="callout tip"><span class="title">Скрипты без проекта: PEP 723</span>
+    <p>Для одноразового скрипта (прогнать eval, выгрузить данные) проект не нужен. Зависимости объявляются в комментарии в начале файла, и <code>uv run script.py</code> сам создаст временное окружение. Это ближе всего к опыту «один файл → <code>go run</code>».</p>
+  </div>
+
+  <h2 id="async">async/await vs goroutines</h2>
+  <p>Самое важное концептуальное различие. В Go конкурентность прозрачна: любая функция может быть запущена в горутине, рантайм сам переключает их на блокирующих вызовах, горутины реально работают параллельно на всех ядрах. В Python asyncio — <b>кооперативная</b> многозадачность в одном потоке:</p>
+  <ul>
+    <li>Функция должна быть объявлена <code>async def</code>, и вызывать её нужно через <code>await</code>. Это «окрашивание функций»: async заражает весь стек вызовов вверх.</li>
+    <li>Переключение происходит только в точках <code>await</code>. Синхронный блокирующий вызов внутри корутины (<code>requests.get</code>, <code>time.sleep</code>, синхронный клиент БД, тяжёлый CPU-код) <b>останавливает весь event loop</b>: все остальные запросы сервиса ждут. Это самая частая прод-ошибка в FastAPI-сервисах.</li>
+    <li>Параллелизма на CPU нет из-за GIL (Global Interpreter Lock). Для I/O-bound LLM-вызовов это не важно: тысячи одновременных запросов в одном потоке — нормально. Для CPU-задач — процессы (<code>ProcessPoolExecutor</code>) или нативные библиотеки (numpy, pandas отпускают GIL внутри). Free-threaded сборка CPython без GIL существует с 3.13, но экосистема к ней ещё привыкает.</li>
+    <li>Каналов как примитива языка нет; есть <code>asyncio.Queue</code>. Отмена — не context, а <code>task.cancel()</code>, которое бросает <code>CancelledError</code> в точке <code>await</code>; таймаут — <code>asyncio.timeout()</code>.</li>
+  </ul>
+
+  <div class="tabs">
+    <div class="tab-panel" data-tab="Python"><pre><code class="lang-python">import asyncio
+import anthropic
+
+client = anthropic.AsyncAnthropic()  # у SDK есть sync и async клиенты — в async-коде только async
+
+async def classify(ticket: str) -&gt; str:
+    resp = await client.messages.create(
+        model="claude-haiku-4-5",
+        max_tokens=16,
+        system="Ответь одним словом: billing, tech, refund или other.",
+        messages=[{"role": "user", "content": ticket}],
+    )
+    return resp.content[0].text.strip()
+
+async def main(tickets: list[str]) -&gt; list[str | BaseException]:
+    sem = asyncio.Semaphore(10)
+
+    async def guarded(t: str) -&gt; str:
+        async with sem:
+            return await classify(t)
+
+    # gather(return_exceptions=True) ≈ errgroup без fail-fast: ошибки возвращаются значениями
+    return await asyncio.gather(*(guarded(t) for t in tickets), return_exceptions=True)
+
+# Ошибка, которую ловят на ревью:
+async def bad_handler() -&gt; None:
+    import time
+    time.sleep(2)             # блокирует ВЕСЬ event loop на 2 с
+    await asyncio.sleep(2)    # правильно: отдаёт управление другим задачам
+    # синхронную библиотеку без async-версии — в поток:
+    # result = await asyncio.to_thread(sync_call, arg)
+
+if __name__ == "__main__":
+    print(asyncio.run(main(["Не прошла оплата картой", "Приложение падает при входе"])))
+</code></pre></div>
+    <div class="tab-panel" data-tab="Go"><pre><code class="lang-go">// То же на Go: никакой «окраски» функций, блокирующий вызов блокирует только свою горутину.
+func classifyAll(ctx context.Context, client *anthropic.Client, tickets []string) ([]string, []error) {
+	out := make([]string, len(tickets))
+	errs := make([]error, len(tickets))
+	var g errgroup.Group
+	g.SetLimit(10)
+	for i, t := range tickets {
+		g.Go(func() error {
+			resp, err := client.Messages.New(ctx, anthropic.MessageNewParams{
+				Model:     "claude-haiku-4-5",
+				MaxTokens: 16,
+				System:    []anthropic.TextBlockParam{{Text: "Ответь одним словом: billing, tech, refund или other."}},
+				Messages:  []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(t))},
+			})
+			if err != nil {
+				errs[i] = err // без fail-fast, как gather(return_exceptions=True)
+				return nil
+			}
+			for _, b := range resp.Content {
+				if tb, ok := b.AsAny().(anthropic.TextBlock); ok {
+					out[i] = strings.TrimSpace(tb.Text)
+				}
+			}
+			return nil
+		})
+	}
+	_ = g.Wait()
+	return out, errs
+}
+</code></pre></div>
+  </div>
+
+  <div class="callout go"><span class="title">Аналогии, которые работают</span>
+    <p><code>asyncio.TaskGroup</code> (3.11+) ≈ <code>errgroup.WithContext</code>: первая ошибка отменяет остальные задачи, выход из блока ждёт всех. <code>asyncio.gather(..., return_exceptions=True)</code> ≈ errgroup, где горутины пишут ошибку в срез и возвращают nil. <code>asyncio.Semaphore</code> ≈ <code>semaphore.Weighted</code> с весом 1. <code>asyncio.timeout(s)</code> ≈ <code>context.WithTimeout</code>, только область действия — блок <code>async with</code>, а не переданный вниз объект.</p>
+  </div>
+
+  <h2 id="pydantic">Pydantic: типы на границе доверия</h2>
+  <p>Pydantic — библиотека моделей данных с валидацией в рантайме. Для AI engineering это центральный инструмент: FastAPI строит на нём валидацию запросов и OpenAPI, а для LLM он делает три вещи — описывает схему ожидаемого ответа, генерирует из неё JSON Schema для structured outputs и валидирует то, что модель вернула. В Go ближайший аналог — struct с тегами <code>json</code> + <code>validate</code> плюс генерация схемы через <code>invopop/jsonschema</code>; в Python это одна библиотека.</p>
+
+  <pre><code class="lang-python">from typing import Literal
+import anthropic
+from pydantic import BaseModel, Field, ValidationError
+
+class TicketTriage(BaseModel):
+    category: Literal["billing", "tech", "refund", "other"]
+    urgency: int = Field(ge=1, le=5, description="1 — не срочно, 5 — всё горит")
+    summary: str = Field(max_length=200)
+    needs_human: bool
+
+client = anthropic.Anthropic()
+
+def triage(ticket: str) -&gt; TicketTriage:
+    resp = client.messages.create(
+        model="claude-sonnet-5",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": f"Разбери тикет поддержки:\n\n{ticket}"}],
+        # structured outputs: модель обязана вернуть JSON по схеме.
+        # В старых версиях SDK параметр передаётся через extra_body={"output_config": ...}
+        output_config={"format": {"type": "json_schema", "schema": TicketTriage.model_json_schema()}},
+    )
+    if resp.stop_reason == "max_tokens":
+        raise RuntimeError("ответ обрезан, JSON неполный")
+    raw = "".join(b.text for b in resp.content if b.type == "text")
+    try:
+        # схему гарантирует API, но бизнес-ограничения (ge/le, max_length) проверяем сами
+        return TicketTriage.model_validate_json(raw)
+    except ValidationError as e:
+        raise ValueError(f"модель вернула невалидный triage: {e.error_count()} ошибок") from e
+</code></pre>
+  <div class="callout warn"><span class="title">Подвохи</span>
+    <ul>
+      <li>Не все ограничения JSON Schema поддерживаются провайдером в structured outputs (часто не поддерживаются числовые границы, длины строк, сложные паттерны). Схему, которую сгенерировал pydantic, иногда надо упростить, а проверку ограничений оставить на валидацию после ответа.</li>
+      <li><code>description</code> у полей уходит в схему и работает как часть промпта. Это полезно, но значит, что правка docstring меняет поведение модели — версионируйте модели данных, как промпты.</li>
+      <li>Pydantic v1 и v2 несовместимы по API (<code>.dict()</code> → <code>.model_dump()</code>, <code>parse_raw</code> → <code>model_validate_json</code>). В старых туториалах и библиотеках встречается v1.</li>
+    </ul>
+  </div>
+
+  <h2 id="scripts">Скрипты для экспериментов</h2>
+  <p>Типичный скрипт AI engineer: прочитать набор примеров, прогнать через модель конкурентно, сохранить результаты с метаданными (версия промпта, модель, токены, латентность) для анализа в pandas. Пример ниже самодостаточен: зависимости в PEP 723-заголовке, запуск <code>uv run run_eval.py --prompt v3 cases.jsonl</code>.</p>
+
+  <pre><code class="lang-python"># /// script
+# requires-python = "&gt;=3.12"
+# dependencies = ["anthropic&gt;=0.60", "pandas&gt;=2.2", "pyarrow"]
+# ///
+import argparse, asyncio, json, time
+from pathlib import Path
+import anthropic
+import pandas as pd
+
+PROMPTS = {
+    "v2": "Классифицируй тикет. Ответь одним словом: billing, tech, refund, smalltalk.",
+    "v3": Path("prompts/classify_v3.txt").read_text() if Path("prompts/classify_v3.txt").exists() else "",
+}
+client = anthropic.AsyncAnthropic(max_retries=4)  # ретраи 429/5xx с backoff — встроены в SDK
+
+async def run_case(sem: asyncio.Semaphore, version: str, case: dict) -&gt; dict:
+    async with sem:
+        t0 = time.perf_counter()
+        try:
+            resp = await client.messages.create(
+                model="claude-haiku-4-5", max_tokens=16, system=PROMPTS[version],
+                messages=[{"role": "user", "content": case["text"]}],
+            )
+            got = resp.content[0].text.strip().lower()
+            usage = (resp.usage.input_tokens, resp.usage.output_tokens)
+            err = None
+        except anthropic.APIError as e:  # не роняем весь прогон из-за одного примера
+            got, usage, err = None, (0, 0), type(e).__name__
+    return {
+        "example_id": case["id"], "category": case["category"], "prompt_version": version,
+        "expected": case["label"], "got": got, "passed": int(got == case["label"]),
+        "latency_ms": round((time.perf_counter() - t0) * 1000),
+        "input_tokens": usage[0], "output_tokens": usage[1], "error": err,
+    }
+
+async def main() -&gt; None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("cases", type=Path)
+    ap.add_argument("--prompt", required=True, choices=PROMPTS)
+    ap.add_argument("--concurrency", type=int, default=8)
+    args = ap.parse_args()
+    cases = [json.loads(line) for line in args.cases.read_text().splitlines() if line.strip()]
+    sem = asyncio.Semaphore(args.concurrency)
+    rows = await asyncio.gather(*(run_case(sem, args.prompt, c) for c in cases))
+    df = pd.DataFrame(rows)
+    df.to_parquet(f"results_{args.prompt}_{int(time.time())}.parquet")
+    ok = df[df.error.isna()]
+    print(f"pass_rate={ok.passed.mean():.3f} n={len(ok)} errors={df.error.notna().sum()}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+</code></pre>
+  <p>Обратите внимание: ошибки инфраструктуры (429 после всех ретраев) записываются отдельно и <b>не считаются</b> провалом модели. Смешать их — классическая ошибка, из-за которой «новый промпт стал хуже» в день, когда у провайдера была перегрузка.</p>
+
+  <h2 id="fastapi">FastAPI: сервис-обёртка над LLM</h2>
+  <p>FastAPI — де-факто стандарт для Python-сервисов вокруг моделей: async из коробки, валидация через pydantic, автоматическая OpenAPI-документация. Для Go-разработчика: это <code>net/http</code> + роутер + <code>encoding/json</code> + валидатор + swagger-генератор в одном, с объявлением через аннотации типов. Запускается ASGI-сервером (uvicorn) — это аналог <code>http.Server</code>.</p>
+
+  <pre><code class="lang-python">import json
+import anthropic
+from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+
+app = FastAPI()
+client = anthropic.AsyncAnthropic()  # один клиент на процесс: пул соединений переиспользуется
+
+class AskRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=8000)  # граница доверия: режем заранее
+    max_tokens: int = Field(default=1024, ge=1, le=4096)
+
+def sse(event: str, data: dict) -&gt; str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+@app.post("/v1/ask/stream")
+async def ask_stream(req: AskRequest, request: Request) -&gt; StreamingResponse:
+    async def events():
+        try:
+            async with client.messages.stream(
+                model="claude-opus-5",
+                max_tokens=req.max_tokens,
+                system="Ты ассистент поддержки. Отвечай кратко.",
+                messages=[{"role": "user", "content": req.question}],
+            ) as stream:
+                async for text in stream.text_stream:
+                    if await request.is_disconnected():
+                        return  # выход из async with закрывает соединение с провайдером
+                    yield sse("delta", {"text": text})
+                msg = await stream.get_final_message()
+            yield sse("done", {
+                "stop_reason": msg.stop_reason,
+                "input_tokens": msg.usage.input_tokens,
+                "output_tokens": msg.usage.output_tokens,
+            })
+        except anthropic.APIStatusError as e:  # в т.ч. ошибка, пришедшая посреди стрима
+            yield sse("error", {"status": e.status_code})
+
+    return StreamingResponse(events(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+@app.get("/healthz")
+async def healthz() -&gt; dict:
+    return {"ok": True}
+
+# uv run uvicorn app:app --host 0.0.0.0 --port 8000 --workers 2
+</code></pre>
+
+  <div class="callout warn"><span class="title">Как это ломается в проде</span>
+    <ul>
+      <li><b>Синхронный вызов в async-хендлере.</b> <code>anthropic.Anthropic()</code> (sync) внутри <code>async def</code> блокирует event loop: один медленный запрос — и весь воркер стоит. Либо async-клиент, либо хендлер объявить обычным <code>def</code> (FastAPI выполнит его в пуле потоков).</li>
+      <li><b>Воркеры.</b> Один процесс uvicorn = один event loop = одно ядро. Для CPU-части (токенизация, парсинг) нужны несколько воркеров. Для чистого I/O одного процесса хватает на сотни одновременных стримов.</li>
+      <li><b>Ошибка после 200.</b> Статус и заголовки уже отправлены, когда начался стрим. Ошибку можно передать только событием внутри потока — клиент должен это обрабатывать.</li>
+      <li><b>Клиент на каждый запрос.</b> Создание <code>AsyncAnthropic()</code> в хендлере — новый пул соединений и TLS-рукопожатие каждый раз. Клиент — синглтон, как <code>http.Client</code> в Go.</li>
+    </ul>
+  </div>
+
+  <h2 id="pandas">pandas для анализа evals</h2>
+  <p>pandas — таблицы в памяти (DataFrame) с векторными операциями. Для Go-разработчика это «SQL поверх слайса структур без циклов»: <code>groupby</code> — GROUP BY, <code>merge</code> — JOIN, <code>pivot_table</code> — сводная таблица, <code>query</code> — WHERE. Главная ментальная перестройка: не писать циклы по строкам (<code>iterrows</code> медленный и неидиоматичный), а оперировать колонками целиком.</p>
+
+  <p>Ниже — 72 результата eval-прогона классификатора тикетов: три версии промпта × четыре категории × 6 примеров. Сгруппируйте по-разному и посмотрите, как меняются выводы. Усы на графике pass rate — 95% доверительный интервал Уилсона.</p>
+
+  <div class="viz" id="viz-ev">
+    <p class="viz-title">Мини-анализ evals: как это выглядит в pandas</p>
+    <p class="viz-sub">Выберите группировку и метрику. Справа внизу — эквивалентный pandas-код и то, что он напечатает.</p>
+    <div class="controls">
+      <span class="seg" id="ev-group"><button type="button" data-v="prompt_version" class="active">по версии промпта</button><button type="button" data-v="category">по категории</button><button type="button" data-v="pivot">версия × категория</button></span>
+      <span class="seg" id="ev-metric"><button type="button" data-v="passed" class="active">pass rate</button><button type="button" data-v="latency_ms">латентность</button><button type="button" data-v="output_tokens">токены вывода</button></span>
+    </div>
+    <svg id="ev-svg" viewBox="0 0 640 300" role="img" aria-label="Столбчатая диаграмма результатов evals"></svg>
+    <div class="legend" id="ev-legend"></div>
+    <pre class="ev-code"><code id="ev-code"></code></pre>
+    <div class="readout" id="ev-out"></div>
+  </div>
+
+  <p>Что стоит заметить на этих данных. По версиям v3 выглядит лучше всех, но в разрезе «версия × категория» видно, что v3 просела на billing (3 из 6 против 5 и 4 у v1 и v2) — при n = 6 на ячейку это может быть и шум, и реальная регрессия, интервалы огромные. v3 также медленнее и расходует больше выходных токенов. Решение «катим v3» требует больше данных по billing и оценки стоимости, а не одного числа в сводке. Именно это — работа AI engineer с evals.</p>
+
+  <pre><code class="lang-python">import pandas as pd
+
+df = pd.concat(pd.read_parquet(p) for p in ["results_v1.parquet", "results_v2.parquet", "results_v3.parquet"])
+df = df[df.error.isna()]  # инфраструктурные ошибки — отдельно, не в качестве
+
+# 1. Сводка по версиям: качество, латентность, стоимость
+PRICE_IN, PRICE_OUT = 1 / 1e6, 5 / 1e6  # Haiku 4.5, $ за токен (на момент написания)
+df["cost_usd"] = df.input_tokens * PRICE_IN + df.output_tokens * PRICE_OUT
+summary = df.groupby("prompt_version").agg(
+    pass_rate=("passed", "mean"),
+    n=("passed", "size"),
+    p50_ms=("latency_ms", "median"),
+    p95_ms=("latency_ms", lambda s: s.quantile(0.95)),
+    cost_per_1k=("cost_usd", lambda s: s.mean() * 1000),
+)
+
+# 2. Срезы: где именно выросло или упало
+pivot = df.pivot_table(index="category", columns="prompt_version",
+                       values="passed", aggfunc="mean").round(2)
+pivot["delta_v3_v2"] = pivot["v3"] - pivot["v2"]
+
+# 3. Парное сравнение на одних и тех же примерах: смотрим только расхождения
+wide = df.pivot_table(index="example_id", columns="prompt_version", values="passed")
+fixed = ((wide.v2 == 0) &amp; (wide.v3 == 1)).sum()
+broken = ((wide.v2 == 1) &amp; (wide.v3 == 0)).sum()
+print(f"v3 починил {fixed}, сломал {broken}")  # для McNemar важны только эти два числа
+
+# 4. Провалы глазами: самое полезное действие в анализе evals
+print(df.query("prompt_version == 'v3' and passed == 0")[["example_id", "category", "expected", "got"]])
+</code></pre>
+
+  <div class="callout go"><span class="title">SQL-аналогии</span>
+    <p><code>df.groupby("v").agg(...)</code> = <code>SELECT v, avg(passed), count(*) … GROUP BY v</code>. <code>df.merge(other, on="example_id", how="left")</code> = <code>LEFT JOIN … USING (example_id)</code>. <code>pivot_table</code> = <code>GROUP BY category, version</code>, развёрнутый в колонки. Если привычнее SQL, есть DuckDB: <code>duckdb.sql("select … from df")</code> работает прямо по DataFrame. Для больших данных (десятки миллионов строк) смотрят в сторону Polars — колоночный движок на Rust с ленивым API.</p>
+  </div>
+
+  <h2 id="sdk">SDK провайдеров</h2>
+  <p>Официальные SDK Anthropic и OpenAI генерируются из OpenAPI-спецификаций и устроены похоже: типизированные запросы и ответы, sync и async клиенты, встроенные ретраи (у Anthropic по умолчанию 2 повтора на 408/409/429/5xx), таймауты, стриминг, пагинация. Всегда используйте их вместо ручного HTTP — кроме случаев, когда нужно понять протокол или SDK нет для вашего языка.</p>
+
+  <div class="tabs">
+    <div class="tab-panel" data-tab="Anthropic"><pre><code class="lang-python">import anthropic
+
+client = anthropic.Anthropic()  # ANTHROPIC_API_KEY из окружения
+
+resp = client.messages.create(
+    model="claude-opus-5",
+    max_tokens=2048,                     # обязателен
+    system="Отвечай по-русски, кратко.",  # system — параметр верхнего уровня, не роль
+    messages=[{"role": "user", "content": "Чем HNSW лучше IVF?"}],
+)
+text = "".join(b.text for b in resp.content if b.type == "text")  # ответ — список блоков
+print(resp.stop_reason, resp.usage.input_tokens, resp.usage.output_tokens)
+
+# Стриминг с помощником, собирающим итоговое сообщение
+with client.messages.stream(model="claude-opus-5", max_tokens=2048,
+                            messages=[{"role": "user", "content": "Расскажи про BM25"}]) as s:
+    for chunk in s.text_stream:
+        print(chunk, end="", flush=True)
+    final = s.get_final_message()
+
+# Ошибки — иерархия исключений
+try:
+    client.messages.create(model="claude-opus-5", max_tokens=10, messages=[])
+except anthropic.BadRequestError as e:      # 400 — не ретраить
+    print("bad request:", e.message)
+except anthropic.RateLimitError:            # 429 — SDK уже ретраил max_retries раз
+    raise
+except anthropic.APIStatusError as e:       # остальные HTTP-ошибки
+    print(e.status_code)
+</code></pre></div>
+    <div class="tab-panel" data-tab="OpenAI"><pre><code class="lang-python">from openai import OpenAI
+
+client = OpenAI()  # OPENAI_API_KEY из окружения
+MODEL = "..."      # актуальное имя модели — из документации OpenAI
+
+# Responses API — основной интерфейс OpenAI; Chat Completions остаётся для совместимости
+resp = client.responses.create(
+    model=MODEL,
+    instructions="Отвечай по-русски, кратко.",  # аналог system
+    input="Чем HNSW лучше IVF?",
+)
+print(resp.output_text)                          # хелпер: склеенный текст ответа
+print(resp.usage.input_tokens, resp.usage.output_tokens)
+
+# Старый стиль, который встретится в чужом коде и во многих совместимых API (vLLM, Ollama):
+chat = client.chat.completions.create(
+    model=MODEL,
+    messages=[{"role": "system", "content": "Кратко."},
+              {"role": "user", "content": "Что такое BM25?"}],
+)
+print(chat.choices[0].message.content, chat.choices[0].finish_reason,
+      chat.usage.prompt_tokens, chat.usage.completion_tokens)
+</code></pre></div>
+  </div>
+
+  <table>
+    <tr><th>Аспект</th><th>Anthropic Messages</th><th>OpenAI (Responses / Chat Completions)</th></tr>
+    <tr><td>System prompt</td><td>Параметр <code>system</code></td><td><code>instructions</code> / сообщение с ролью <code>system</code> (<code>developer</code>)</td></tr>
+    <tr><td>max tokens</td><td>Обязателен</td><td>Опционален</td></tr>
+    <tr><td>Ответ</td><td>Список content blocks: text, tool_use, thinking</td><td>Список output items / <code>choices[0].message</code></td></tr>
+    <tr><td>Причина остановки</td><td><code>stop_reason</code>: end_turn, max_tokens, tool_use, stop_sequence, pause_turn, refusal</td><td><code>status</code> + детали / <code>finish_reason</code>: stop, length, tool_calls, content_filter</td></tr>
+    <tr><td>Usage</td><td><code>input_tokens</code>, <code>output_tokens</code>, <code>cache_read_input_tokens</code>, <code>cache_creation_input_tokens</code></td><td><code>input_tokens</code>/<code>output_tokens</code> (Responses), <code>prompt_tokens</code>/<code>completion_tokens</code> (Chat)</td></tr>
+    <tr><td>Кэширование промпта</td><td>Явные <code>cache_control</code> breakpoints (до 4)</td><td>В основном автоматическое по префиксу</td></tr>
+    <tr><td>Сэмплинг</td><td>На новейших моделях temperature/top_p удалены, управление через <code>effort</code></td><td>Зависит от модели: у reasoning-моделей часть параметров не поддерживается</td></tr>
+  </table>
+
+  <div class="callout"><span class="title">OpenAI-совместимый API как lingua franca</span>
+    <p>Формат Chat Completions стал де-факто стандартом: его отдают vLLM, Ollama, многие облака и gateway'и. Соблазн — писать всё под него и менять только <code>base_url</code>. Цена — потеря специфичных возможностей (явный prompt caching, thinking-блоки, особенности tool use), а они часто и есть основная экономия. Разумный компромисс — собственный тонкий интерфейс в коде (<code>Generate(ctx, req) (Resp, error)</code>) с адаптером на каждого провайдера, а не «наименьший общий знаменатель» на уровне протокола.</p>
+  </div>
+
+  <h2 id="frameworks">LangChain, LlamaIndex, LangGraph</h2>
+  <p>Фреймворки — самая спорная тема в прикладном AI. На собеседовании ждут не «я знаю LangChain», а взвешенного мнения: что он даёт, чем платите, когда брать.</p>
+
+  <div class="grid">
+    <div class="card"><h4>LangChain</h4><p>Общий слой абстракций: единый интерфейс chat-моделей разных провайдеров, шаблоны промптов, парсеры вывода, сотни интеграций (векторные БД, загрузчики документов, инструменты), композиция цепочек. Сильная сторона — скорость прототипа и интеграции. Слабая — много слоёв поверх простого HTTP-вызова.</p></div>
+    <div class="card"><h4>LlamaIndex</h4><p>Фокус на данных и RAG: коннекторы к источникам, парсинг документов, стратегии чанкинга, индексы, query engines, reranking, оценка retrieval. Хорош, чтобы за день собрать RAG над корпусом и сравнить стратегии. Прод-логику retrieval часто потом переписывают под свои данные.</p></div>
+    <div class="card"><h4>LangGraph</h4><p>Низкоуровневая библиотека для агентов как графа состояний: узлы — шаги, рёбра — переходы (в т.ч. условные), общее состояние, checkpointing (сохранение состояния между шагами), human-in-the-loop, возобновление после сбоя. Меньше «магии», чем LangChain; по сути — движок конечного автомата с персистентностью.</p></div>
+  </div>
+
+  <p>Чем платите — список, который стоит уметь назвать:</p>
+  <ul>
+    <li><b>Скрытые промпты.</b> Готовые цепочки и агенты содержат свои системные промпты и шаблоны. Вы не видите, что уходит в модель, пока не включите трейсинг. Anthropic в «Building effective agents» прямо советует начинать с прямых вызовов API: фреймворки добавляют слои, скрывающие реальные промпты и ответы, и провоцируют лишнюю сложность.</li>
+    <li><b>Отладка.</b> Стектрейс на 40 фреймов через generic-обёртки, callbacks и runnable-протоколы. Ошибка формата ответа модели выглядит как исключение глубоко внутри парсера.</li>
+    <li><b>Версии.</b> Экосистема быстро меняет API; мажорные переходы ломали импорты и паттерны, туториалы годичной давности часто не работают. Пинить версии и закладывать время на миграции.</li>
+    <li><b>Отставание от провайдера.</b> Новая возможность API (новый параметр, тип блока, режим кэширования) появляется в SDK провайдера в день релиза, во фреймворке — позже, а в «универсальной» абстракции может не появиться вовсе.</li>
+    <li><b>Наименьший общий знаменатель.</b> Абстракция «chat model» сглаживает различия провайдеров, в том числе полезные.</li>
+    <li><b>Зависимости.</b> Десятки транзитивных пакетов, конфликты версий с вашим pydantic или numpy.</li>
+  </ul>
+
+  <div class="viz" id="viz-fw">
+    <p class="viz-title">Фреймворк или свой код?</p>
+    <p class="viz-sub">Эвристика, а не закон. Двигайте сложность оркестрации (сколько шагов, ветвлений, состояния) и требования к контролю (прод-нагрузка, аудит, стоимость, отладка). Тип задачи уточняет, какой именно фреймворк.</p>
+    <div class="controls">
+      <label>сложность <input type="range" id="fw-c" min="1" max="10" step="1" value="6"> <output></output></label>
+      <label>контроль <input type="range" id="fw-k" min="1" max="10" step="1" value="3"> <output></output></label>
+      <span class="seg" id="fw-task"><button type="button" data-v="chain" class="active">цепочка</button><button type="button" data-v="rag">RAG</button><button type="button" data-v="agent">агент</button></span>
+      <label><input type="checkbox" id="fw-proto"> это прототип на неделю</label>
+    </div>
+    <svg id="fw-svg" viewBox="0 0 640 330" role="img" aria-label="Карта решений: фреймворк или свой код"></svg>
+    <div class="readout" id="fw-out"></div>
+  </div>
+
+  <div class="callout go"><span class="title">А в Go?</span>
+    <p>Экосистема меньше: есть langchaingo (порт LangChain от сообщества), Eino от CloudWeGo, Genkit с поддержкой Go. Но в Go культура «тонкие библиотеки + свой код» и так сильнее, и это совпадает с советом Anthropic: SDK провайдера, свой агентный цикл на 100–200 строк, pgvector, OpenTelemetry. Агентный цикл — это <code>for</code> с <code>switch resp.StopReason</code>; граф состояний — таблица переходов и состояние в Postgres. Фреймворк здесь чаще мешает, чем помогает.</p>
+  </div>
+
+  <h2 id="jupyter">Jupyter: для экспериментов, не для прода</h2>
+  <p>Jupyter notebook — документ из ячеек кода и текста, которые выполняются в живом процессе (kernel) по одной. Для работы с LLM это идеальная лаборатория: поправил промпт, перезапустил одну ячейку, посмотрел пять ответов рядом, построил график по результатам evals, записал выводы тут же. Состояние (загруженный датасет, клиент) живёт между ячейками, не нужно перезапускать всё.</p>
+  <p>Ровно это же делает его непригодным для прода:</p>
+  <ul>
+    <li><b>Скрытое состояние.</b> Ячейки выполняются в любом порядке, переменная могла быть определена в удалённой ячейке. Ноутбук «работает у меня» и не воспроизводится после Restart &amp; Run All.</li>
+    <li><b>Нет тестов, типов, ревью.</b> Файл <code>.ipynb</code> — JSON с выводами и картинками в base64; диффы в git нечитаемы. Помогают <code>nbstripout</code> (очистка выводов), jupytext (парный <code>.py</code>), или marimo — реактивные ноутбуки, хранящиеся как обычный <code>.py</code>.</li>
+    <li><b>Утечки.</b> Выводы ячеек сохраняются в файле: ответы модели с ПДн, случайно напечатанный ключ API уезжают в репозиторий.</li>
+    <li><b>Нет жизненного цикла сервиса:</b> ни graceful shutdown, ни лимитов, ни наблюдаемости.</li>
+  </ul>
+  <p>Нормальный путь: ноутбук → код, который доказал ценность, выносится в модуль с функциями → скрипт с аргументами (PEP 723) → тесты и CI → при необходимости сервис (FastAPI или Go). Ноутбук остаётся как отчёт об эксперименте, импортирующий этот модуль.</p>
+
+  <h2 id="practice">Практика</h2>
+  <div class="task">
+    <h3>Задание 1: Python-окружение и eval-скрипт</h3>
+    <p>Поставьте uv, создайте проект, напишите скрипт прогона классификатора (как в разделе «Скрипты») на 60–100 своих примерах для двух версий промпта. Сохраните результаты в parquet.</p>
+    <label class="check"><input type="checkbox" data-save="m09-t1"> Проект на uv с <code>uv.lock</code>, ruff и mypy/pyright проходят без ошибок</label>
+    <label class="check"><input type="checkbox" data-save="m09-t2"> Инфраструктурные ошибки пишутся отдельной колонкой и не считаются провалами модели</label>
+    <label class="check"><input type="checkbox" data-save="m09-t3"> В pandas: сводка по версиям (pass rate, p95 латентности, стоимость на 1000 запросов), pivot по категориям, число «починенных» и «сломанных» примеров при парном сравнении</label>
+  </div>
+  <div class="task">
+    <h3>Задание 2: FastAPI vs Go</h3>
+    <p>Реализуйте один и тот же эндпоинт стриминга ответа (SSE) на FastAPI и на Go <code>net/http</code> (код из модуля 0). Нагрузите оба 100 одновременными стримами (например, <code>k6</code> или <code>hey</code> против мок-сервера провайдера, отдающего токены с задержкой).</p>
+    <label class="check"><input type="checkbox" data-save="m09-t4"> Закрытие клиента прерывает запрос к провайдеру в обеих реализациях (проверено по логам мок-сервера)</label>
+    <label class="check"><input type="checkbox" data-save="m09-t5"> Намеренно вставили <code>time.sleep(1)</code> в async-хендлер FastAPI и измерили, как упала пропускная способность; объяснили почему</label>
+    <label class="check"><input type="checkbox" data-save="m09-t6"> Записали 5 пунктов: что было проще в Python, что в Go</label>
+  </div>
+  <div class="task">
+    <h3>Задание 3: фреймворк на вкус</h3>
+    <p>Соберите RAG над 20 документами двумя способами: на LlamaIndex (или LangChain) и на «голом» SDK + простом векторном поиске. Включите трейсинг и найдите все промпты, которые фреймворк отправил в модель.</p>
+    <label class="check"><input type="checkbox" data-save="m09-t7"> Выписаны скрытые промпты фреймворка; сравнены токены на запрос в обоих вариантах</label>
+    <label class="check"><input type="checkbox" data-save="m09-t8"> Сформулировано своё правило: когда вы возьмёте фреймворк, а когда нет</label>
+  </div>
+
+  <h2 id="selfcheck">Самопроверка</h2>
+  <details class="q"><summary>Почему <code>time.sleep(2)</code> внутри <code>async def</code>-хендлера FastAPI — серьёзная ошибка, а в Go <code>time.Sleep</code> в хендлере — нет?</summary><div class="a"><p>asyncio кооперативный и однопоточный: переключение задач происходит только на <code>await</code>. Синхронный sleep блокирует event loop, и все остальные запросы этого воркера ждут. В Go рантайм паркует только текущую горутину, остальные продолжают работать на других потоках.</p></div></details>
+  <details class="q"><summary>Чем dataclass отличается от pydantic BaseModel и когда что брать?</summary><div class="a"><p>dataclass — контейнер с генерацией конструктора, без валидации значений в рантайме. BaseModel валидирует и приводит типы, парсит JSON, генерирует JSON Schema. Для внутренних структур — dataclass (быстро, просто), для данных с границы доверия (HTTP-запросы, ответы модели, конфиги) — pydantic.</p></div></details>
+  <details class="q"><summary>Какой аналог <code>fmt.Errorf("…: %w", err)</code> в Python?</summary><div class="a"><p><code>raise NewError("…") from err</code>. Исходное исключение сохраняется в <code>__cause__</code> и печатается в traceback. Проверка типа в цепочке делается через <code>except</code> по классу, аналога <code>errors.Is</code> по всей цепочке из коробки нет — обычно ловят на нужном уровне.</p></div></details>
+  <details class="q"><summary>Зачем нужен venv и почему uv его не отменяет?</summary><div class="a"><p>Python ставит пакеты в окружение интерпретатора, и без изоляции проекты конфликтуют версиями зависимостей. venv — отдельное окружение на проект. uv не отменяет venv, а управляет им: создаёт <code>.venv</code>, синхронизирует с lock-файлом, ставит нужную версию Python.</p></div></details>
+  <details class="q"><summary>Что делает <code>df.pivot_table(index="category", columns="prompt_version", values="passed", aggfunc="mean")</code>?</summary><div class="a"><p>Группирует по паре (категория, версия), считает среднее passed (то есть pass rate) и раскладывает версии по колонкам: строки — категории, колонки — версии, в ячейках — pass rate. Аналог GROUP BY по двум полям с последующим разворотом.</p></div></details>
+  <details class="q"><summary>Почему при сравнении двух промптов на одном наборе полезно смотреть на «починенные» и «сломанные» примеры, а не только на разницу pass rate?</summary><div class="a"><p>Одинаковая разница может получиться из «починил 5, сломал 0» и из «починил 25, сломал 20». Второй случай — нестабильный промпт, который меняет поведение на половине набора. Парный тест McNemar использует только эти два числа и чувствительнее сравнения двух независимых долей.</p></div></details>
+  <details class="q"><summary>Назовите три конкретных минуса LangChain в проде.</summary><div class="a"><p>Скрытые промпты и шаблоны внутри цепочек, которые влияют на поведение и стоимость; тяжёлая отладка через многослойные абстракции; нестабильность API между версиями и отставание от новых возможностей провайдеров. Плюс транзитивные зависимости и «наименьший общий знаменатель» в абстракции моделей.</p></div></details>
+  <details class="q"><summary>Что не так с ноутбуком, который «работает у меня»?</summary><div class="a"><p>Ячейки могли выполняться не по порядку, а часть состояния — прийти из удалённых ячеек. Проверка: Restart &amp; Run All. Для воспроизводимости код выносится в модули, ноутбук только импортирует и визуализирует.</p></div></details>
+
+  <h2 id="interview">Вопросы с собеседований</h2>
+  <details class="q interview"><summary>Вы бы взяли LangChain для нового продукта?</summary><div class="a">
+    <p>Зависит от стадии и формы задачи, и я бы так и ответил, с критериями. Для прототипа или внутреннего инструмента с кучей интеграций — возможно, это ускоряет первую неделю. Для прод-системы с жёсткими требованиями к стоимости, латентности и отладке я начну с SDK провайдера и тонкого своего слоя: агентный цикл и RAG-пайплайн — это сотни строк, зато я вижу каждый промпт, могу использовать prompt caching и новые возможности API в день релиза, а трейсинг и evals настраиваю под себя. Для агента со сложным состоянием, human-in-the-loop и долгими сессиями рассмотрю LangGraph как движок персистентного графа, а не как набор готовых агентов. Главный аргумент против «всё на фреймворке» — скрытые промпты и отладка; главный аргумент «за» — не писать двадцатый загрузчик PDF. Совет Anthropic в «Building effective agents»: начинать с прямых вызовов API.</p>
+  </div></details>
+  <details class="q interview"><summary>Почему FastAPI-сервис с LLM под нагрузкой отвечает всё медленнее, хотя провайдер отвечает стабильно?</summary><div class="a">
+    <p>Первое, что проверю: блокирующие вызовы в async-хендлерах — синхронный клиент LLM или БД, <code>requests</code>, тяжёлый CPU (токенизация, парсинг JSON мегабайтных ответов). Они блокируют event loop, и латентность всех запросов воркера растёт. Диагностика — debug-режим asyncio (предупреждения о медленных колбэках), py-spy. Второе: клиент создаётся на каждый запрос — нет переиспользования соединений. Третье: лимиты пула соединений HTTP-клиента меньше, чем одновременных стримов. Четвёртое: один воркер на CPU-bound работе. Лечение: async-клиенты везде, <code>asyncio.to_thread</code> для синхронных библиотек, пул процессов для CPU, несколько воркеров uvicorn, синглтон клиента с настроенным пулом.</p>
+  </div></details>
+  <details class="q interview"><summary>Как вы анализируете результаты eval-прогона? Покажите на pandas.</summary><div class="a">
+    <p>Загружаю результаты в DataFrame, отделяю инфраструктурные ошибки. Сводка по версиям через <code>groupby().agg()</code>: pass rate, n, p50/p95 латентности, стоимость. Срезы через <code>pivot_table</code> по категории и версии — ищу, где регрессия прячется за общим ростом. Парное сравнение по <code>example_id</code>: сколько починено и сколько сломано, McNemar для значимости. Доверительные интервалы (Уилсон или bootstrap), решение по нижней границе. И обязательно глазами смотрю на провалы — <code>df.query("passed == 0")</code> — потому что метрика говорит «сколько», а не «почему». Ошибки judge-модели тоже проверяю выборочно.</p>
+  </div></details>
+  <details class="q interview"><summary>Сервис на Go или на Python? Как бы вы выбрали для LLM-продукта?</summary><div class="a">
+    <p>Сервисный слой — на том, на чём сильна команда и инфраструктура: вызов API, стриминг, лимиты, очереди — это I/O, и Go здесь даёт простую конкурентность, предсказуемую память, один бинарь и строгую типизацию. Python нужен там, где экосистема: evals, анализ, fine-tuning, локальные модели, сложный парсинг документов. Частая здравая архитектура — Go-сервисы плюс Python-воркеры или офлайн-пайплайны, связь через очередь или HTTP. Против Python-сервиса по умолчанию: GIL и async-подвохи, упаковка и зависимости. За: скорость итерации, если команда — ML/DS. Выбор фиксирую в ADR, а не спорю о вкусах.</p>
+  </div></details>
+  <details class="q interview"><summary>Зачем абстрагировать провайдера LLM и как не переусердствовать?</summary><div class="a">
+    <p>Нужно для fallback между моделями и провайдерами, A/B-тестов, тестов с фейковым клиентом и защиты от vendor lock-in. Переусердствовать — значит свести всё к наименьшему общему знаменателю и потерять prompt caching, thinking, особенности tool use, которые дают основную экономию и качество. Решение: узкий интерфейс под задачи продукта (генерация, стриминг, tool-цикл) с явными опциями, которые адаптер провайдера поддерживает или игнорирует; провайдер-специфичные возможности доступны через расширения. И evals на каждого провайдера — переключение без них опасно, промпты не переносятся один в один.</p>
+  </div></details>
+  <details class="q interview"><summary>Чем asyncio отличается от горутин, и что вы бы сказали, если бы вас спросили, «что лучше для LLM-сервиса»?</summary><div class="a">
+    <p>asyncio — кооперативная многозадачность в одном потоке, переключение только в <code>await</code>, функции «окрашены» (async заражает стек), CPU-параллелизма нет из-за GIL. Горутины — вытесняющий планировщик M:N на всех ядрах, любая функция может быть конкурентной, блокирующий вызов не мешает другим. Для I/O-bound нагрузки LLM-сервиса оба справляются с тысячами одновременных запросов. Разница в надёжности: в Python одна синхронная библиотека способна положить воркер, и это надо контролировать ревью и линтерами; в Go такой класс ошибок отсутствует. Для CPU-частей (токенизация, обработка документов) у Go преимущество без дополнительных процессов.</p>
+  </div></details>
+  <details class="q interview"><summary>Как вы используете Jupyter в работе и как код из ноутбука попадает в прод?</summary><div class="a">
+    <p>Ноутбук — для исследований: итерации над промптами на небольших выборках, анализ evals, графики, разбор провалов. Правила: выводы очищаются перед коммитом (nbstripout) или используется jupytext/marimo, секреты только из окружения, данные с ПДн не сохраняются в выводах. Как только код нужен повторно, он переезжает в модуль с тестами, ноутбук его импортирует. Прод-код — модули, скрипты с CLI и сервисы, с CI, типами и наблюдаемостью. Ноутбук никогда не запускается «по крону».</p>
+  </div></details>
+
+  <h2 id="links">Источники</h2>
+  <ul>
+    <li><a href="https://docs.astral.sh/uv/" target="_blank" rel="noopener">uv — документация</a>; <a href="https://peps.python.org/pep-0723/" target="_blank" rel="noopener">PEP 723 — inline script metadata</a></li>
+    <li><a href="https://docs.python.org/3/library/asyncio.html" target="_blank" rel="noopener">Python — asyncio</a> (TaskGroup, timeout, to_thread)</li>
+    <li><a href="https://docs.pydantic.dev/latest/" target="_blank" rel="noopener">Pydantic v2</a></li>
+    <li><a href="https://fastapi.tiangolo.com/" target="_blank" rel="noopener">FastAPI</a> (async, StreamingResponse)</li>
+    <li><a href="https://pandas.pydata.org/docs/" target="_blank" rel="noopener">pandas — документация</a>; <a href="https://duckdb.org/docs/" target="_blank" rel="noopener">DuckDB</a>; <a href="https://docs.pola.rs/" target="_blank" rel="noopener">Polars</a></li>
+    <li><a href="https://github.com/anthropics/anthropic-sdk-python" target="_blank" rel="noopener">anthropic-sdk-python</a>; <a href="https://docs.anthropic.com/" target="_blank" rel="noopener">документация Anthropic</a></li>
+    <li><a href="https://github.com/openai/openai-python" target="_blank" rel="noopener">openai-python</a>; <a href="https://platform.openai.com/docs" target="_blank" rel="noopener">документация OpenAI</a></li>
+    <li><a href="https://www.anthropic.com/engineering/building-effective-agents" target="_blank" rel="noopener">Anthropic — Building effective agents</a> (раздел о фреймворках)</li>
+    <li><a href="https://python.langchain.com/" target="_blank" rel="noopener">LangChain</a>, <a href="https://langchain-ai.github.io/langgraph/" target="_blank" rel="noopener">LangGraph</a>, <a href="https://docs.llamaindex.ai/" target="_blank" rel="noopener">LlamaIndex</a></li>
+    <li><a href="https://github.com/tmc/langchaingo" target="_blank" rel="noopener">langchaingo</a>, <a href="https://github.com/cloudwego/eino" target="_blank" rel="noopener">Eino</a></li>
+    <li><a href="https://jupyter.org/" target="_blank" rel="noopener">Jupyter</a>, <a href="https://marimo.io/" target="_blank" rel="noopener">marimo</a>, <a href="https://github.com/kynan/nbstripout" target="_blank" rel="noopener">nbstripout</a></li>
+    <li><a href="https://hamel.dev/blog/posts/evals/" target="_blank" rel="noopener">Hamel Husain — Your AI Product Needs Evals</a> (анализ ошибок глазами)</li>
+  </ul>
+</main>
+<script src="assets/course.js"></script>
+<script>
+// ---------- Переводчик Go ↔ Python ----------
+(function () {
+  const ROWS = [
+    ['Модули', 'go.mod, модуль', 'pyproject.toml, проект', 'Модуль в Python — это один .py-файл'],
+    ['Модули', 'пакет = директория', 'пакет = директория (с __init__.py)', 'Импорт по sys.path, а не по пути модуля: запуск из другой папки ломает импорты'],
+    ['Модули', 'import "github.com/x/y"', 'import y / from y import Z', 'Имя для import может не совпадать с именем пакета в PyPI (pip install pyyaml → import yaml)'],
+    ['Модули', 'Экспорт с заглавной буквы', '_name — соглашение о приватности', 'Ничего не скрыто по-настоящему'],
+    ['Окружение', 'go get', 'uv add pkg', 'Без venv пакеты ставятся глобально и конфликтуют'],
+    ['Окружение', 'go.sum', 'uv.lock', 'requirements.txt без хешей — не lock-файл'],
+    ['Окружение', 'go run .', 'uv run python main.py', 'python из системы ≠ python из .venv'],
+    ['Окружение', 'gofmt / go vet', 'ruff format / ruff check', 'Типы проверяет отдельно mypy или pyright'],
+    ['Типы', 'var x int', 'x: int = 0', 'Аннотации не проверяются в рантайме'],
+    ['Типы', 'interface{} / any', 'Any / object', 'Any выключает проверку типов, object — нет'],
+    ['Типы', 'интерфейс (неявный)', 'typing.Protocol', 'ABC требует явного наследования, Protocol — структурный, как в Go'],
+    ['Типы', '*T может быть nil', 'T | None', 'Нет nil-разыменования на компиляции: AttributeError в рантайме'],
+    ['Типы', 'дженерики [T any]', 'def f[T](x: T) -> T (3.12+)', 'Только для тайпчекера'],
+    ['Структуры', 'type User struct{…}', '@dataclass class User: …', 'Нет валидации значений'],
+    ['Структуры', 'struct + json-теги + validate', 'pydantic BaseModel', 'v1 и v2 несовместимы по API'],
+    ['Структуры', 'методы с receiver', 'методы с self', 'self явный параметр, как receiver'],
+    ['Структуры', 'встраивание (embedding)', 'наследование / композиция', 'Наследование реальное, с MRO; предпочитайте композицию'],
+    ['Ошибки', 'if err != nil { return err }', 'исключение летит само', 'Ошибка невидима в сигнатуре функции'],
+    ['Ошибки', 'fmt.Errorf("…: %w", err)', 'raise E("…") from err', 'Без from цепочка теряет причину'],
+    ['Ошибки', 'errors.As(err, &target)', 'except anthropic.RateLimitError as e:', 'Порядок except важен: сначала узкие классы'],
+    ['Ошибки', 'panic / recover', 'raise / except BaseException', 'Не ловите BaseException: там KeyboardInterrupt и CancelledError'],
+    ['Ошибки', 'defer f.Close()', 'with open(p) as f:', 'with привязан к блоку, а не к функции'],
+    ['Конкурентность', 'go f()', 'asyncio.create_task(f())', 'Задачу надо сохранить в переменную, иначе её может собрать GC'],
+    ['Конкурентность', 'errgroup.WithContext', 'asyncio.TaskGroup', 'Первая ошибка отменяет остальные; ошибки — ExceptionGroup'],
+    ['Конкурентность', 'errgroup без fail-fast', 'asyncio.gather(..., return_exceptions=True)', 'Ошибки приходят значениями в списке'],
+    ['Конкурентность', 'semaphore.Weighted', 'asyncio.Semaphore', ''],
+    ['Конкурентность', 'context.WithTimeout', 'async with asyncio.timeout(s):', 'Таймаут — область блока, не объект, передаваемый вниз'],
+    ['Конкурентность', 'канал chan T', 'asyncio.Queue', 'Нет select; есть asyncio.wait(FIRST_COMPLETED)'],
+    ['Конкурентность', 'горутины на всех ядрах', 'один поток + GIL', 'Блокирующий вызов в async def останавливает всё; CPU — в процессы'],
+    ['Конкурентность', 'sync.Mutex', 'asyncio.Lock / threading.Lock', 'Между await гонок нет, но между await — есть'],
+    ['Коллекции', '[]T', 'list[T]', 'Срезы копируют: a[1:3] — новый список, не view'],
+    ['Коллекции', 'map[K]V', 'dict[K, V]', 'dict сохраняет порядок вставки; d[k] бросает KeyError, d.get(k) — None'],
+    ['Коллекции', 'for i, v := range xs', 'for i, v in enumerate(xs):', ''],
+    ['Коллекции', 'цикл с append', 'list comprehension [f(x) for x in xs]', 'Идиоматично и быстрее цикла'],
+    ['Коллекции', 'map[T]struct{}', 'set[T]', ''],
+    ['Строки', 'fmt.Sprintf("%s=%d", k, v)', 'f"{k}={v}"', ''],
+    ['Строки', 'string — байты UTF-8', 'str — код-поинты Unicode', 'len("привет") == 6 в Python и 12 в Go'],
+    ['JSON', 'json.Unmarshal(b, &v)', 'json.loads(s) / Model.model_validate_json(s)', 'json.loads даёт dict без проверки схемы'],
+    ['HTTP', 'net/http + роутер', 'FastAPI (ASGI) + uvicorn', 'async def-хендлер с sync-вызовом блокирует воркер'],
+    ['HTTP', 'http.Client (синглтон)', 'httpx.AsyncClient / SDK-клиент (синглтон)', 'requests — синхронный, в async-коде нельзя'],
+    ['Тесты', 'go test, table-driven', 'pytest + @pytest.mark.parametrize', 'Фикстуры pytest — DI через имена аргументов'],
+    ['Тесты', 'httptest.Server', 'respx / pytest-httpx, TestClient FastAPI', ''],
+    ['Данные', 'цикл по []struct', 'pandas DataFrame', 'Не итерируйте строки: операции по колонкам'],
+  ];
+  const cats = ['Все', ...new Set(ROWS.map(r => r[0]))];
+  let cat = 'Все', q = '';
+  const tbody = document.querySelector('#tr-table tbody'), cnt = document.getElementById('tr-count');
+  const box = document.getElementById('tr-cats');
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  cats.forEach(c => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'btn' + (c === cat ? ' active' : ''); b.textContent = c;
+    b.onclick = () => { cat = c; box.querySelectorAll('.btn').forEach(x => x.classList.toggle('active', x === b)); render(); };
+    box.append(b);
+  });
+  function render() {
+    const needle = q.trim().toLowerCase();
+    const rows = ROWS.filter(r => (cat === 'Все' || r[0] === cat) && (!needle || r.join(' ').toLowerCase().includes(needle)));
+    tbody.innerHTML = rows.map(r => `<tr><td>${esc(r[0])}</td><td><code>${esc(r[1])}</code></td><td><code>${esc(r[2])}</code></td><td>${esc(r[3])}</td></tr>`).join('');
+    cnt.textContent = `Показано ${rows.length} из ${ROWS.length}` + (rows.length ? '' : ' — ничего не нашлось, попробуйте другое слово');
+  }
+  document.getElementById('tr-q').addEventListener('input', e => { q = e.target.value; render(); });
+  render();
+})();
+
+// ---------- Фреймворк vs свой код ----------
+(function () {
+  const svg = document.getElementById('fw-svg'), out = document.getElementById('fw-out');
+  let C = 6, K = 3, task = 'chain', proto = false;
+  const X0 = 60, X1 = 620, Y0 = 20, Y1 = 280;
+  const sx = v => X0 + (v - 1) / 9 * (X1 - X0), sy = v => Y1 - (v - 1) / 9 * (Y1 - Y0);
+  const FW = { chain: 'LangChain', rag: 'LlamaIndex', agent: 'LangGraph' };
+  function zone(c, k) {
+    const kk = proto ? k - 3 : k; // прототип терпит меньше контроля
+    if (c <= 3) return 'sdk';
+    if (kk <= 4) return 'fw';
+    if (c >= 7 && task === 'agent') return 'graph';
+    return 'own';
+  }
+  const INFO = {
+    sdk: { name: 'SDK провайдера + свой код', color: 'var(--ok)', text: () =>
+      'Задача простая: один-два вызова, парсинг, ретраи. Фреймворк добавит слои и скрытые промпты, не сэкономив ни строки по существу.\nПлюсы: видно каждый промпт, новые фичи API сразу, prompt caching под контролем.\nМинусы: интеграции (загрузчики, векторные БД) пишете сами — при простой задаче их мало.' },
+    fw: { name: () => FW[task] + ' (как ускоритель)', color: 'var(--accent)', text: () =>
+      `Сложность есть, а требования к контролю низкие${proto ? ' (прототип)' : ''}: фреймворк окупается готовыми интеграциями и примерами.\n` +
+      ({ chain: 'LangChain: единый интерфейс моделей, шаблоны, парсеры, сотни интеграций.', rag: 'LlamaIndex: загрузка и парсинг документов, чанкинг, индексы, query engines — RAG за день, удобно сравнивать стратегии.', agent: 'LangGraph: граф состояний, checkpointing, human-in-the-loop из коробки.' })[task] +
+      '\nЦена: включите трейсинг с первого дня, пиньте версии, закладывайте переписывание горячих путей, если прототип выживет.' },
+    graph: { name: 'LangGraph или свой граф состояний', color: 'var(--violet)', text: () =>
+      'Сложный агент с высокими требованиями к контролю: нужны персистентность шагов, возобновление, human-in-the-loop, аудит.\nLangGraph — низкоуровневый движок графа, «магии» мало, это приемлемо в проде, если команда на Python.\nАльтернатива — свой конечный автомат: таблица переходов, состояние в Postgres, OTel-спаны на каждый шаг. На Go это обычно проще, чем кажется.' },
+    own: { name: 'Свой код + тонкие библиотеки', color: 'var(--warn)', text: () =>
+      'Контроль важнее скорости старта: прод-нагрузка, стоимость, аудит, отладка инцидентов.\nSDK провайдера, свой агентный цикл / RAG-пайплайн, pgvector или векторная БД через её клиент, OpenTelemetry, свои evals.\nФреймворк можно использовать точечно (например, парсеры документов из LlamaIndex), но не как каркас приложения.' }
+  };
+  function draw() {
+    svg.innerHTML = '';
+    // Зоны: сетка 10×10 клеток, цвет по зоне
+    for (let c = 1; c <= 10; c++) for (let k = 1; k <= 10; k++) {
+      const z = zone(c, k);
+      Course.svg('rect', { x: sx(c - 0.5 < 1 ? 1 : c - 0.5), y: sy(Math.min(10, k + 0.5)), width: sx(Math.min(10, c + 0.5)) - sx(Math.max(1, c - 0.5)), height: sy(Math.max(1, k - 0.5)) - sy(Math.min(10, k + 0.5)), fill: INFO[z].color, opacity: 0.13 }, svg);
+    }
+    Course.svg('rect', { x: X0, y: Y0, width: X1 - X0, height: Y1 - Y0, fill: 'none', stroke: 'var(--border)' }, svg);
+    const T = (x, y, s, a) => { const e = Course.svg('text', Object.assign({ x, y, 'font-size': 12.5 }, a || {}), svg); e.textContent = s; return e; };
+    T((X0 + X1) / 2, 312, 'сложность оркестрации →', { 'text-anchor': 'middle', fill: 'var(--muted)' });
+    T(18, (Y0 + Y1) / 2, 'контроль →', { 'text-anchor': 'middle', fill: 'var(--muted)', transform: `rotate(-90 18 ${(Y0 + Y1) / 2})` });
+    [1, 5, 10].forEach(v => { T(sx(v), 296, v, { 'text-anchor': 'middle', 'font-size': 11, fill: 'var(--muted)' }); T(X0 - 8, sy(v) + 4, v, { 'text-anchor': 'end', 'font-size': 11, fill: 'var(--muted)' }); });
+    // подписи зон — в центре масс каждой зоны
+    const acc = {};
+    for (let c = 1; c <= 10; c++) for (let k = 1; k <= 10; k++) { const z = zone(c, k); (acc[z] = acc[z] || [0, 0, 0]); acc[z][0] += c; acc[z][1] += k; acc[z][2]++; }
+    const short = { sdk: 'SDK + свой код', fw: FW[task], graph: 'LangGraph / свой граф', own: 'свой код' };
+    for (const z in acc) {
+      const [c, k, n] = acc[z];
+      T(sx(c / n), sy(k / n), short[z], { 'text-anchor': 'middle', 'font-weight': 700, fill: INFO[z].color, 'font-size': 14 });
+    }
+    // точка
+    const z = zone(C, K), px = sx(C), py = sy(K);
+    Course.svg('circle', { cx: px, cy: py, r: 11, fill: INFO[z].color, stroke: 'var(--card)', 'stroke-width': 3 }, svg);
+    Course.svg('circle', { cx: px, cy: py, r: 17, fill: 'none', stroke: INFO[z].color, 'stroke-width': 1.5, opacity: 0.6 }, svg);
+    const nm = typeof INFO[z].name === 'function' ? INFO[z].name() : INFO[z].name;
+    out.textContent = `Рекомендация: ${nm}\n\n${INFO[z].text()}`;
+  }
+  Course.bindRange(document.getElementById('fw-c'), v => v + '/10', v => { C = v; draw(); });
+  Course.bindRange(document.getElementById('fw-k'), v => v + '/10', v => { K = v; draw(); });
+  const seg = document.getElementById('fw-task');
+  seg.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; task = b.dataset.v; seg.querySelectorAll('button').forEach(x => x.classList.toggle('active', x === b)); draw(); });
+  document.getElementById('fw-proto').addEventListener('change', e => { proto = e.target.checked; draw(); });
+  draw();
+})();
+
+// ---------- Мини-анализ evals ----------
+(function () {
+  // [prompt_version, category, passed, latency_ms, output_tokens] — 72 строки
+  const DATA = [["v1","billing",1,2570,367],["v1","billing",1,2260,428],["v1","billing",1,2300,484],["v1","billing",1,2190,454],["v1","billing",0,1470,388],["v1","billing",1,2210,308],["v1","tech",0,1840,526],["v1","tech",0,1280,423],["v1","tech",0,2200,456],["v1","tech",0,2560,523],["v1","tech",1,1620,505],["v1","tech",1,1330,369],["v1","refund",1,1560,530],["v1","refund",1,2260,515],["v1","refund",1,1520,435],["v1","refund",1,1760,343],["v1","refund",0,1170,386],["v1","refund",1,2160,527],["v1","smalltalk",1,1350,396],["v1","smalltalk",1,1670,401],["v1","smalltalk",1,1940,449],["v1","smalltalk",1,2550,409],["v1","smalltalk",1,2110,454],["v1","smalltalk",1,1900,468],["v2","billing",0,2200,686],["v2","billing",1,2590,555],["v2","billing",1,2190,718],["v2","billing",0,1610,727],["v2","billing",1,2220,483],["v2","billing",1,3440,508],["v2","tech",0,1680,594],["v2","tech",1,1670,764],["v2","tech",0,3220,751],["v2","tech",0,2960,528],["v2","tech",1,1890,455],["v2","tech",1,2660,512],["v2","refund",0,2390,679],["v2","refund",1,3210,513],["v2","refund",1,3230,470],["v2","refund",1,1390,761],["v2","refund",1,3290,435],["v2","refund",0,1770,782],["v2","smalltalk",1,2790,524],["v2","smalltalk",1,1810,634],["v2","smalltalk",1,2970,683],["v2","smalltalk",1,2410,439],["v2","smalltalk",1,3280,475],["v2","smalltalk",1,3230,441],["v3","billing",0,3990,1011],["v3","billing",0,3740,742],["v3","billing",1,3640,959],["v3","billing",1,2350,735],["v3","billing",0,3200,710],["v3","billing",1,3660,703],["v3","tech",1,2840,639],["v3","tech",1,4310,1011],["v3","tech",1,4020,976],["v3","tech",1,3420,609],["v3","tech",1,3190,907],["v3","tech",0,3000,634],["v3","refund",1,2170,856],["v3","refund",1,3210,783],["v3","refund",1,2690,897],["v3","refund",1,2520,800],["v3","refund",1,3630,682],["v3","refund",1,3460,747],["v3","smalltalk",1,3760,931],["v3","smalltalk",1,4120,865],["v3","smalltalk",1,1810,903],["v3","smalltalk",1,3630,966],["v3","smalltalk",1,2090,584],["v3","smalltalk",1,1960,550]];
+  const COLS = ['prompt_version', 'category', 'passed', 'latency_ms', 'output_tokens'];
+  const rows = DATA.map(r => Object.fromEntries(COLS.map((c, i) => [c, r[i]])));
+  const VERS = ['v1', 'v2', 'v3'], CATS = ['billing', 'tech', 'refund', 'smalltalk'];
+  const VCOL = { v1: 'var(--muted)', v2: 'var(--accent)', v3: 'var(--violet)' };
+  const svg = document.getElementById('ev-svg'), code = document.getElementById('ev-code'), outEl = document.getElementById('ev-out'), leg = document.getElementById('ev-legend');
+  let group = 'prompt_version', metric = 'passed';
+  const MNAME = { passed: 'pass rate', latency_ms: 'латентность, мс', output_tokens: 'токены вывода' };
+
+  function wilson(p, n, z = 1.96) {
+    const d = 1 + z * z / n, c = (p + z * z / (2 * n)) / d, h = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d;
+    return [Math.max(0, c - h), Math.min(1, c + h)];
+  }
+  function stats(sub) {
+    const v = sub.map(r => r[metric]), n = v.length, m = v.reduce((a, b) => a + b, 0) / n;
+    let lo, hi;
+    if (metric === 'passed') [lo, hi] = wilson(m, n);
+    else { const sd = Math.sqrt(v.reduce((a, b) => a + (b - m) ** 2, 0) / (n - 1)); lo = m - 1.96 * sd / Math.sqrt(n); hi = m + 1.96 * sd / Math.sqrt(n); }
+    return { m, n, lo, hi };
+  }
+  function groups() {
+    if (group === 'pivot') return CATS.map(c => ({ label: c, bars: VERS.map(v => ({ key: v, s: stats(rows.filter(r => r.category === c && r.prompt_version === v)) })) }));
+    const keys = group === 'prompt_version' ? VERS : CATS;
+    return keys.map(k => ({ label: k, bars: [{ key: group === 'prompt_version' ? k : 'all', s: stats(rows.filter(r => r[group] === k)) }] }));
+  }
+  const fmt = v => metric === 'passed' ? v.toFixed(2) : Math.round(v).toString();
+  function draw() {
+    svg.innerHTML = '';
+    const G = groups();
+    const X0 = 56, X1 = 628, Y0 = 16, Y1 = 250;
+    const maxV = metric === 'passed' ? 1 : Math.max(...G.flatMap(g => g.bars.map(b => b.s.hi))) * 1.08;
+    const sy = v => Y1 - v / maxV * (Y1 - Y0);
+    const T = (x, y, s, a) => { const e = Course.svg('text', Object.assign({ x, y, 'font-size': 12 }, a || {}), svg); e.textContent = s; return e; };
+    for (let i = 0; i <= 4; i++) {
+      const v = maxV * i / 4, y = sy(v);
+      Course.svg('line', { x1: X0, x2: X1, y1: y, y2: y, stroke: 'var(--border)', 'stroke-dasharray': i ? '2 4' : '' }, svg);
+      T(X0 - 6, y + 4, metric === 'passed' ? (v * 100).toFixed(0) + '%' : Math.round(v), { 'text-anchor': 'end', fill: 'var(--muted)', 'font-size': 11 });
+    }
+    const gw = (X1 - X0) / G.length;
+    G.forEach((g, gi) => {
+      const nb = g.bars.length, bw = Math.min(70, (gw - 24) / nb);
+      const start = X0 + gi * gw + (gw - bw * nb) / 2;
+      g.bars.forEach((b, bi) => {
+        const x = start + bi * bw, y = sy(b.s.m);
+        const fill = group === 'category' ? 'var(--teal)' : VCOL[b.key];
+        Course.svg('rect', { x: x + 2, y, width: bw - 4, height: Y1 - y, rx: 3, fill, opacity: 0.85 }, svg);
+        const cx = x + bw / 2;
+        Course.svg('line', { x1: cx, x2: cx, y1: sy(Math.min(maxV, b.s.hi)), y2: sy(Math.max(0, b.s.lo)), stroke: 'var(--text)', 'stroke-width': 1.3 }, svg);
+        [b.s.hi, b.s.lo].forEach(v => Course.svg('line', { x1: cx - 5, x2: cx + 5, y1: sy(Math.min(maxV, Math.max(0, v))), y2: sy(Math.min(maxV, Math.max(0, v))), stroke: 'var(--text)', 'stroke-width': 1.3 }, svg));
+        if (bw > 30) T(cx, sy(Math.min(maxV, b.s.hi)) - 5, fmt(b.s.m), { 'text-anchor': 'middle', 'font-size': 11, 'font-weight': 600 });
+      });
+      T(X0 + gi * gw + gw / 2, Y1 + 18, g.label, { 'text-anchor': 'middle', 'font-size': 13 });
+      T(X0 + gi * gw + gw / 2, Y1 + 34, 'n=' + g.bars.map(b => b.s.n).join('/'), { 'text-anchor': 'middle', 'font-size': 11, fill: 'var(--muted)' });
+    });
+    leg.innerHTML = group === 'category' ? '<span><i style="background:var(--teal)"></i>все версии вместе</span>'
+      : VERS.map(v => `<span><i style="background:${VCOL[v]}"></i>${v}</span>`).join('') ;
+    leg.innerHTML += '<span>усы — 95% CI' + (metric === 'passed' ? ' (Уилсон)' : ' (±1.96·sd/√n)') + '</span>';
+
+    // pandas-код и «вывод»
+    const agg = metric === 'passed' ? '["mean", "count"]' : '["mean", "std", "count"]';
+    if (group === 'pivot') {
+      code.textContent =
+`df.pivot_table(index="category", columns="prompt_version",
+               values="${metric}", aggfunc="mean").round(${metric === 'passed' ? 2 : 0})`;
+      let s = 'prompt_version' + VERS.map(v => v.padStart(9)).join('') + '\ncategory\n';
+      G.forEach(g => { s += g.label.padEnd(14) + g.bars.map(b => fmt(b.s.m).padStart(9)).join('') + '\n'; });
+      outEl.textContent = s + (metric === 'passed' ? '\nn = 6 на ячейку: 95% CI шириной ±30–40 п.п. Регрессия v3 на billing — повод добрать данные, а не вывод.' : '');
+    } else {
+      code.textContent = `df.groupby("${group}")["${metric}"].agg(${agg})`;
+      let s = ' '.repeat(14) + (metric === 'passed' ? '    mean  count' : '    mean      std  count') + '\n' + group + '\n';
+      G.forEach(g => {
+        const sub = rows.filter(r => r[group] === g.label).map(r => r[metric]), n = sub.length, m = sub.reduce((a, b) => a + b, 0) / n;
+        const sd = Math.sqrt(sub.reduce((a, b) => a + (b - m) ** 2, 0) / (n - 1));
+        s += g.label.padEnd(14) + (metric === 'passed' ? m.toFixed(3).padStart(8) : m.toFixed(1).padStart(8) + sd.toFixed(1).padStart(9)) + String(n).padStart(7) + '\n';
+      });
+      const note = group === 'prompt_version' && metric === 'passed' ? '\nv3 впереди, но интервалы v2 и v3 перекрываются; смотрите срез «версия × категория».'
+        : group === 'category' && metric === 'passed' ? '\nСмешение версий: tech проседает в основном из-за v1 и v2 — без разбивки по версии вывод неверен.'
+        : metric !== 'passed' ? '\nv3 медленнее и многословнее: цена роста качества — латентность и выходные токены (×5 дороже входных).' : '';
+      outEl.textContent = s + note;
+    }
+  }
+  function seg(id, set) {
+    const el = document.getElementById(id);
+    el.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; set(b.dataset.v); el.querySelectorAll('button').forEach(x => x.classList.toggle('active', x === b)); draw(); });
+  }
+  seg('ev-group', v => group = v);
+  seg('ev-metric', v => metric = v);
+  draw();
+})();
+</script>
+</body>
+</html>

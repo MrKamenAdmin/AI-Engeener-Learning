@@ -1,0 +1,1241 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2 · LLM API</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 640px) { .two-col { grid-template-columns: 1fr; } }
+.sse-log { font: 12px/1.45 var(--mono); background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px; height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-all; }
+.sse-text { font-size: 15px; background: var(--bg-soft); border: 1px solid var(--border); border-radius: 6px; padding: 10px; height: 260px; overflow: auto; }
+.sse-log .ev { font-weight: 700; }
+.pane-h { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 4px 0; }
+.block-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+.block-btns .btn { font-size: 13px; padding: 4px 9px; }
+.btn.on { border-color: var(--accent); color: var(--accent); }
+</style>
+</head>
+<body data-module="m02">
+<main class="content">
+  <div class="module-hero">
+    <div class="eyebrow">Модуль 2</div>
+    <h1>LLM API</h1>
+    <p class="lead">Как устроен разговор с моделью по HTTP: messages и роли, стриминг SSE, структурированный вывод, tool use, prompt caching, batch, выбор модели и ошибки. Всё с кодом на Go, который не стыдно отнести в прод, и с цифрами, которые спросят на собесе.</p>
+    <div class="meta-row"><span class="chip">≈ 10 часов</span><span class="chip">Go + Python</span><span class="chip">4 визуализации</span><span class="chip">цены на сентябрь 2026</span></div>
+  </div>
+
+  <h2 id="messages">Messages API и stateless</h2>
+  <p>Почти все современные LLM API сводятся к одной операции: «вот история диалога, продолжи её». У Anthropic это <code>POST https://api.anthropic.com/v1/messages</code>. Запрос содержит:</p>
+  <ul>
+    <li><code>model</code> — идентификатор модели, например <code>claude-opus-5</code>;</li>
+    <li><code>max_tokens</code> — жёсткий потолок на длину ответа (не «желаемая длина»: при упоре ответ обрезается и приходит <code>stop_reason: "max_tokens"</code>);</li>
+    <li><code>system</code> — системный промпт: роль, правила, контекст. Отдельное поле, а не сообщение в списке;</li>
+    <li><code>messages</code> — массив сообщений с ролями <code>user</code> и <code>assistant</code>. Первое — всегда <code>user</code>, роли чередуются;</li>
+    <li>опционально <code>tools</code>, <code>tool_choice</code>, <code>thinking</code>, <code>output_config</code>, <code>metadata</code>, <code>stream</code>.</li>
+  </ul>
+  <p>Каждое сообщение — это не строка, а список <b>content blocks</b>: <code>text</code>, <code>image</code>, <code>document</code>, <code>tool_use</code>, <code>tool_result</code>, <code>thinking</code>. Ответ модели — тоже список блоков плюс <code>stop_reason</code> и <code>usage</code> (сколько токенов на входе, выходе, прочитано и записано в кэш). Эту структуру нужно держать в голове: почти все баги интеграции — это «я думал, что там строка, а там блоки».</p>
+
+  <h3>API не помнит ничего</h3>
+  <p>Messages API <b>stateless</b>: сервер не хранит диалог между вызовами. Хочешь третью реплику — отправляешь все предыдущие заново. Отсюда следствия, которые определяют архитектуру любого чата:</p>
+  <ul>
+    <li><b>История живёт у вас</b> — в Postgres/Redis, с id сессии. Вы решаете, что в неё попадает, и отвечаете за её обрезку.</li>
+    <li><b>Каждый ход дороже предыдущего</b>: платите за всю историю на входе. Диалог из 30 ходов по 1 000 токенов — это не 30K, а ≈ 465K входных токенов суммарно (1+2+…+30 тыс.). Лечится prompt caching (ниже) и компакцией истории.</li>
+    <li><b>Историю можно редактировать</b>: выкинуть старые tool_result, заменить хвост суммаризацией. Но любая правка префикса ломает кэш.</li>
+    <li><b>Горизонтальное масштабирование бесплатно</b>: любой инстанс вашего сервиса может продолжить любой диалог, если достал историю из хранилища.</li>
+  </ul>
+  <div class="callout go"><span class="title">Аналогия из Go</span>Это как HTTP-хэндлер без сессий: всё состояние приходит в запросе или лежит в вашей БД. Модель — чистая функция <code>f(system, tools, messages) → message</code> (с поправкой на недетерминизм). Никаких «соединений с памятью», как у <code>database/sql</code> транзакции.</div>
+
+  <div class="tabs">
+    <div class="tab-panel" data-tab="Go"><pre><code class="lang-go">// Минимальный чат: история на клиенте, каждый ход — полный список сообщений.
+package chat
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/anthropics/anthropic-sdk-go"
+)
+
+type Session struct {
+	client  anthropic.Client
+	system  string
+	history []anthropic.MessageParam // в проде — в БД, по session_id
+}
+
+func NewSession(system string) *Session {
+	return &amp;Session{client: anthropic.NewClient(), system: system} // ключ из ANTHROPIC_API_KEY
+}
+
+func (s *Session) Ask(ctx context.Context, userText string) (string, error) {
+	s.history = append(s.history, anthropic.NewUserMessage(anthropic.NewTextBlock(userText)))
+	resp, err := s.client.Messages.New(ctx, anthropic.MessageNewParams{
+		Model:     "claude-opus-5",
+		MaxTokens: 16000,
+		System:    []anthropic.TextBlockParam{{Text: s.system}},
+		Messages:  s.history,
+	})
+	if err != nil {
+		s.history = s.history[:len(s.history)-1] // не оставляем «висящий» user-ход
+		return "", fmt.Errorf("messages.new: %w", err)
+	}
+	s.history = append(s.history, resp.ToParam()) // ответ целиком, со всеми блоками
+
+	var b strings.Builder
+	for _, block := range resp.Content {
+		if t, ok := block.AsAny().(anthropic.TextBlock); ok {
+			b.WriteString(t.Text)
+		}
+	}
+	if resp.StopReason == anthropic.StopReasonMaxTokens {
+		return b.String(), fmt.Errorf("ответ обрезан по max_tokens")
+	}
+	return b.String(), nil
+}
+</code></pre></div>
+    <div class="tab-panel" data-tab="Python"><pre><code class="lang-python">import anthropic
+
+client = anthropic.Anthropic()  # ANTHROPIC_API_KEY из окружения
+history = []
+
+def ask(text: str) -&gt; str:
+    history.append({"role": "user", "content": text})
+    resp = client.messages.create(
+        model="claude-opus-5",
+        max_tokens=16000,
+        system="Ты — ассистент поддержки. Отвечай кратко.",
+        messages=history,
+    )
+    history.append({"role": "assistant", "content": resp.content})
+    return "".join(b.text for b in resp.content if b.type == "text")
+</code></pre></div>
+  </div>
+
+  <h3>Роли, system prompt и stop_reason</h3>
+  <p><b>System prompt</b> задаёт «кто ты и по каким правилам работаешь»; модели обучены придавать ему больший вес, чем user-сообщениям, но это <i>приоритет, а не граница безопасности</i> — об этом в модуле 3. В system кладут стабильное (роль, политика, формат), в messages — изменчивое (вопрос, документы конкретного запроса, текущая дата). Это важно и для кэша: всё динамическое в system убивает prompt caching.</p>
+  <table>
+    <tr><th>stop_reason</th><th>Что значит</th><th>Что делать клиенту</th></tr>
+    <tr><td><code>end_turn</code></td><td>Модель закончила</td><td>Отдать ответ</td></tr>
+    <tr><td><code>max_tokens</code></td><td>Упёрлись в потолок</td><td>Не парсить как готовый JSON; поднять лимит или попросить продолжить</td></tr>
+    <tr><td><code>tool_use</code></td><td>Модель просит вызвать инструменты</td><td>Выполнить, вернуть <code>tool_result</code>, продолжить цикл</td></tr>
+    <tr><td><code>stop_sequence</code></td><td>Встретилась ваша стоп-последовательность</td><td>Смотреть <code>stop_sequence</code></td></tr>
+    <tr><td><code>pause_turn</code></td><td>Серверный инструмент (web search и т.п.) поставил ход на паузу</td><td>Отправить ответ обратно как есть, чтобы модель продолжила</td></tr>
+    <tr><td><code>refusal</code></td><td>Модель отказалась по политике безопасности</td><td>Не исполнять недописанные tool_use; показать пользователю корректное сообщение</td></tr>
+  </table>
+  <div class="callout warn"><span class="title">Изменения в новых моделях (на момент написания, сентябрь 2026)</span>
+    <ul>
+      <li><b>Prefill</b> (последнее сообщение <code>assistant</code> с началом ответа, трюк «начни с <code>{</code>») на новых моделях Claude возвращает 400. Для формата — structured outputs.</li>
+      <li><code>temperature</code>/<code>top_p</code>/<code>top_k</code> на Opus 4.7+, Sonnet 5, Fable удалены (400). Глубину и стоимость рассуждения регулируют <code>thinking: {type: "adaptive"}</code> и <code>output_config: {effort: "low|medium|high|xhigh|max"}</code>. На других провайдерах и open-source (vLLM, Ollama) sampling-параметры по-прежнему работают.</li>
+      <li>Старый <code>thinking.budget_tokens</code> на новых моделях отклоняется (400).</li>
+    </ul>
+  </div>
+
+  <h2 id="streaming">Стриминг SSE</h2>
+  <p>Без стриминга пользователь смотрит на спиннер, пока модель не допишет весь ответ: при 80 токенах/с ответ на 800 токенов — это 10 секунд тишины. Со стримингом первые слова появляются через <b>TTFT</b> (time to first token — время до первого токена, обычно сотни миллисекунд – пара секунд; с thinking — дольше, потому что сначала идёт рассуждение). Воспринимаемая скорость определяется TTFT, а не полным временем.</p>
+  <p>При <code>"stream": true</code> ответ приходит как <b>Server-Sent Events</b>: текстовый поток <code>text/event-stream</code>, где каждое событие — строки <code>event: …</code> и <code>data: {json}</code>, разделённые пустой строкой. Последовательность событий у Anthropic:</p>
+  <pre><code class="lang-bash">event: message_start
+data: {"type":"message_start","message":{"id":"msg_01…","role":"assistant","content":[],"usage":{"input_tokens":412,"output_tokens":1}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+event: ping
+data: {"type":"ping"}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Привет"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":57}}
+
+event: message_stop
+data: {"type":"message_stop"}
+</code></pre>
+  <ul>
+    <li><code>content_block_delta</code> бывает трёх видов: <code>text_delta</code> (текст), <code>input_json_delta</code> (кусок JSON аргументов tool_use — копить строку и парсить на <code>content_block_stop</code>), <code>thinking_delta</code>.</li>
+    <li><code>message_delta</code> несёт финальные <code>stop_reason</code> и <code>usage.output_tokens</code> — метрики стоимости берите отсюда.</li>
+    <li><code>ping</code> — keepalive, игнорировать. <code>error</code> — ошибка <b>посреди</b> стрима (например <code>overloaded_error</code>) при уже отданном HTTP 200. Статус-код не спасёт, обрабатывайте событие.</li>
+  </ul>
+
+  <div class="viz" id="viz-sse">
+    <p class="viz-title">Поток SSE-событий в реальном времени</p>
+    <p class="viz-sub">Нажмите «Запустить»: события приходят по одному, справа собирается текст. Отметка TTFT — первый <code>text_delta</code>. Попробуйте оборвать соединение или отменить запрос на середине.</p>
+    <div class="controls">
+      <button class="btn primary" id="sse-run" type="button">▶ Запустить</button>
+      <button class="btn" id="sse-drop" type="button">⚡ Оборвать соединение</button>
+      <button class="btn" id="sse-cancel" type="button">✕ Отмена (ctx cancel)</button>
+      <label>скорость <input type="range" id="sse-speed" min="0.25" max="3" step="0.25" value="1"> <output></output></label>
+    </div>
+    <svg id="sse-svg" viewBox="0 0 640 96" role="img" aria-label="Временная шкала SSE-событий"></svg>
+    <div class="two-col">
+      <div><div class="pane-h">сырые события</div><div class="sse-log" id="sse-log" aria-live="off"></div></div>
+      <div><div class="pane-h">что видит пользователь</div><div class="sse-text" id="sse-text"></div></div>
+    </div>
+    <div class="readout" id="sse-readout">Ожидание запуска.</div>
+  </div>
+
+  <h3>Отмена и обрыв соединения</h3>
+  <ul>
+    <li><b>Отмена пользователем</b> (закрыл вкладку, нажал «стоп») — закрываете HTTP-соединение, в Go это отмена <code>context</code>. Генерация на стороне API останавливается, но уже сгенерированные выходные токены закладывайте в стоимость. Прокиньте <code>r.Context()</code> из вашего хэндлера до клиента LLM — иначе ушедший пользователь продолжает жечь деньги.</li>
+    <li><b>Обрыв посреди ответа</b> — поток закончился без <code>message_stop</code>. Это неполный ответ, даже если текст «выглядит законченным». Докачать стрим с места нельзя, а prefill на новых моделях недоступен, так что стратегия одна — повторить запрос целиком (для UI — «перегенерировать»), а частичный текст пометить как оборванный.</li>
+    <li><b>Прокси и балансировщики</b>: nginx по умолчанию буферизует ответ (<code>proxy_buffering off</code> или заголовок <code>X-Accel-Buffering: no</code>), у ALB/Cloudflare есть idle timeout. Длинный thinking без токенов — ровно тот случай, когда соединение «молчит» и его убивают; <code>ping</code> помогает, но проверьте таймауты по всей цепочке.</li>
+    <li><b>Большие <code>max_tokens</code></b>: SDK отказываются делать нестриминговые запросы, которые могут длиться дольше ~10 минут; для топовых моделей с выводом до 128K токенов стриминг фактически обязателен.</li>
+  </ul>
+
+  <h3>Стриминг через Go SDK</h3>
+  <div class="tabs">
+    <div class="tab-panel" data-tab="Go (SDK)"><pre><code class="lang-go">// StreamAnswer пишет текст в w по мере генерации, возвращает собранное сообщение.
+func StreamAnswer(ctx context.Context, client anthropic.Client, prompt string, w io.Writer) (anthropic.Message, error) {
+	start := time.Now()
+	var ttft time.Duration
+
+	stream := client.Messages.NewStreaming(ctx, anthropic.MessageNewParams{
+		Model:     "claude-opus-5",
+		MaxTokens: 64000,
+		Messages:  []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(prompt))},
+	})
+	defer stream.Close()
+
+	msg := anthropic.Message{} // у Go-стрима нет GetFinalMessage — аккумулируем сами
+	for stream.Next() {
+		ev := stream.Current()
+		if err := msg.Accumulate(ev); err != nil {
+			return msg, fmt.Errorf("accumulate: %w", err)
+		}
+		if d, ok := ev.AsAny().(anthropic.ContentBlockDeltaEvent); ok {
+			if t, ok := d.Delta.AsAny().(anthropic.TextDelta); ok {
+				if ttft == 0 {
+					ttft = time.Since(start)
+				}
+				if _, err := io.WriteString(w, t.Text); err != nil {
+					return msg, err // клиент ушёл — выходим, defer закроет стрим
+				}
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+			}
+		}
+	}
+	if err := stream.Err(); err != nil { // сюда же попадает event: error и обрыв
+		return msg, fmt.Errorf("stream: %w", err)
+	}
+	slog.InfoContext(ctx, "llm stream done",
+		"ttft_ms", ttft.Milliseconds(), "total_ms", time.Since(start).Milliseconds(),
+		"stop_reason", msg.StopReason, "out_tokens", msg.Usage.OutputTokens)
+	return msg, nil
+}
+</code></pre></div>
+    <div class="tab-panel" data-tab="Python"><pre><code class="lang-python">import time, anthropic
+
+client = anthropic.Anthropic()
+
+def stream_answer(prompt: str) -&gt; anthropic.types.Message:
+    start, ttft = time.monotonic(), None
+    with client.messages.stream(
+        model="claude-opus-5",
+        max_tokens=64000,
+        messages=[{"role": "user", "content": prompt}],
+    ) as stream:
+        for text in stream.text_stream:
+            if ttft is None:
+                ttft = time.monotonic() - start
+            print(text, end="", flush=True)
+        msg = stream.get_final_message()
+    print(f"\nTTFT={ttft:.2f}s stop={msg.stop_reason} out={msg.usage.output_tokens}")
+    return msg
+</code></pre></div>
+  </div>
+
+  <h3>Учебный разбор SSE руками: net/http + bufio</h3>
+  <p>В проде берите SDK. Но один раз написать парсер стоит: станет понятно, что SSE — это просто строки, почему нужен большой буфер у <code>bufio.Scanner</code> и как отличить нормальное завершение от обрыва.</p>
+  <pre><code class="lang-go">// Учебный SSE-клиент для /v1/messages. В проде используйте SDK.
+func RawStream(ctx context.Context, apiKey, prompt string, onText func(string)) (stopReason string, err error) {
+	body, _ := json.Marshal(map[string]any{
+		"model": "claude-opus-5", "max_tokens": 4096, "stream": true,
+		"messages": []map[string]any{{"role": "user", "content": prompt}},
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.anthropic.com/v1/messages", bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("x-api-key", apiKey)
+	req.Header.Set("anthropic-version", "2023-06-01")
+	req.Header.Set("content-type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req) // без Timeout: время ограничивает ctx
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", fmt.Errorf("status %d (retry-after=%q): %s", resp.StatusCode, resp.Header.Get("retry-after"), b)
+	}
+
+	sc := bufio.NewScanner(resp.Body)
+	sc.Buffer(make([]byte, 64*1024), 4*1024*1024) // строка data: может быть длинной
+	var event string
+	gotStop := false
+	for sc.Scan() {
+		line := sc.Text()
+		switch {
+		case strings.HasPrefix(line, "event: "):
+			event = strings.TrimPrefix(line, "event: ")
+		case strings.HasPrefix(line, "data: "):
+			var d struct {
+				Delta struct {
+					Type       string `json:"type"`
+					Text       string `json:"text"`
+					StopReason string `json:"stop_reason"`
+				} `json:"delta"`
+				Error struct {
+					Type    string `json:"type"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal([]byte(line[6:]), &amp;d); err != nil {
+				return "", fmt.Errorf("bad data for %s: %w", event, err)
+			}
+			switch event {
+			case "content_block_delta":
+				if d.Delta.Type == "text_delta" {
+					onText(d.Delta.Text)
+				}
+			case "message_delta":
+				stopReason = d.Delta.StopReason
+			case "message_stop":
+				gotStop = true
+			case "error":
+				return stopReason, fmt.Errorf("stream error %s: %s", d.Error.Type, d.Error.Message)
+			}
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return stopReason, err // включая context.Canceled
+	}
+	if !gotStop {
+		return stopReason, io.ErrUnexpectedEOF // поток кончился без message_stop — ответ неполный
+	}
+	return stopReason, nil
+}
+</code></pre>
+  <div class="callout tip"><span class="title">Метрики стриминга, которые стоит писать</span>TTFT, общее время, выходные токены/сек (<code>output_tokens / (total − ttft)</code>), <code>stop_reason</code>, число оборванных стримов. TTFT растёт с длиной входа (prefill — обработка промпта) и падает при попадании в prompt cache: это одна из главных причин кэшировать.</div>
+
+  <h2 id="structured">Structured output</h2>
+  <p>LLM отдаёт текст, а вашему коду нужна структура. Эволюция подходов, от худшего к лучшему:</p>
+  <ol>
+    <li><b>«Ответь в JSON»</b> в промпте + парсинг. Работает в 95–99% случаев, и эти 1–5% — markdown-обёртка <code>```json</code>, пояснение перед JSON, лишняя запятая, обрезка по max_tokens.</li>
+    <li><b>Prefill</b> (начать ответ за модель с <code>{</code>). На новых моделях Claude запрещён — 400.</li>
+    <li><b>Tool use как экстрактор</b>: описать инструмент <code>record_ticket</code> со схемой и попросить модель его вызвать. Аргументы — JSON по схеме.</li>
+    <li><b>Structured outputs</b> — constrained decoding: сервер ограничивает генерацию так, что невалидный по схеме JSON просто не может быть сгенерирован. У Anthropic: <code>output_config: {format: {type: "json_schema", schema: {…}}}</code> для ответа и <code>strict: true</code> у инструмента для аргументов tool_use.</li>
+  </ol>
+  <p>Нюансы structured outputs, которые отличают сеньора:</p>
+  <ul>
+    <li><b>Схема ограничена</b>: поддерживаются базовые типы, <code>enum</code>, <code>const</code>, <code>anyOf</code>, <code>$ref</code>, форматы строк (<code>date</code>, <code>email</code>, <code>uuid</code>…), обязательный <code>additionalProperties: false</code>. <b>Не</b> поддерживаются рекурсивные схемы, <code>minimum</code>/<code>maximum</code>, <code>minLength</code>/<code>maxLength</code>. Python/TS SDK выкидывают неподдерживаемые ограничения из схемы и проверяют их на клиенте; в Go это ваша работа.</li>
+    <li><b>Гарантия синтаксиса ≠ гарантия смысла</b>. Схема обещает, что <code>priority</code> — один из <code>p1|p2|p3</code>, но не то, что он выбран правильно. Бизнес-валидацию (сумма ≥ 0, дата не в будущем, id существует в БД) делаете сами.</li>
+    <li><b>Исключения</b>: при <code>stop_reason: "max_tokens"</code> JSON обрезан, при <code>"refusal"</code> может не соответствовать схеме. Проверяйте stop_reason <i>до</i> парсинга.</li>
+    <li><b>Первый запрос с новой схемой медленнее</b> — схема компилируется в грамматику, дальше кэшируется (порядка суток). Не генерируйте схему динамически на каждый запрос.</li>
+    <li>Несовместимо с prefill и citations; совместимо с batch, стримингом, thinking.</li>
+  </ul>
+  <p>Паттерн «валидация + повтор с ошибкой»: если ответ не прошёл бизнес-валидацию, добавьте ответ модели в историю и следующим user-сообщением отдайте текст ошибки. Модель чинит конкретную проблему лучше, чем при слепом повторе. Лимит — 2–3 попытки, дальше ошибка наверх и метрика.</p>
+
+  <div class="tabs">
+    <div class="tab-panel" data-tab="Go"><pre><code class="lang-go">type Ticket struct {
+	Category string `json:"category"`
+	Priority string `json:"priority"`
+	Summary  string `json:"summary"`
+	OrderID  string `json:"order_id"`
+}
+
+var ticketSchema = map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"category": map[string]any{"type": "string", "enum": []string{"billing", "bug", "delivery", "other"}},
+		"priority": map[string]any{"type": "string", "enum": []string{"p1", "p2", "p3"}},
+		"summary":  map[string]any{"type": "string"},
+		"order_id": map[string]any{"type": "string"},
+	},
+	"required":             []string{"category", "priority", "summary", "order_id"},
+	"additionalProperties": false,
+}
+
+var orderRe = regexp.MustCompile(`^(ORD-\d{6})?$`)
+
+// Validate — то, что схема выразить не может (maxLength, формат id, бизнес-правила).
+func (t Ticket) Validate() error {
+	if n := utf8.RuneCountInString(t.Summary); n == 0 || n &gt; 200 {
+		return fmt.Errorf("summary: длина %d, нужно 1..200 символов", n)
+	}
+	if !orderRe.MatchString(t.OrderID) {
+		return fmt.Errorf("order_id %q: ожидается ORD-NNNNNN или пустая строка", t.OrderID)
+	}
+	return nil
+}
+
+func ExtractTicket(ctx context.Context, c anthropic.Client, text string) (Ticket, error) {
+	msgs := []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(
+		"Разбери обращение клиента в тикет.\n&lt;message&gt;\n" + text + "\n&lt;/message&gt;"))}
+	var lastErr error
+	for attempt := 0; attempt &lt; 3; attempt++ {
+		resp, err := c.Messages.New(ctx, anthropic.MessageNewParams{
+			Model: "claude-sonnet-5", MaxTokens: 1024, Messages: msgs,
+			OutputConfig: anthropic.OutputConfigParam{
+				Format: anthropic.JSONOutputFormatParam{Schema: ticketSchema},
+			},
+		})
+		if err != nil {
+			return Ticket{}, err // сетевые/429 ретраит слой ниже, здесь — только логика
+		}
+		switch resp.StopReason {
+		case anthropic.StopReasonMaxTokens, anthropic.StopReasonRefusal:
+			return Ticket{}, fmt.Errorf("no valid output: stop_reason=%s", resp.StopReason)
+		}
+		var raw strings.Builder
+		for _, b := range resp.Content {
+			if t, ok := b.AsAny().(anthropic.TextBlock); ok {
+				raw.WriteString(t.Text)
+			}
+		}
+		var t Ticket
+		if lastErr = json.Unmarshal([]byte(raw.String()), &amp;t); lastErr == nil {
+			if lastErr = t.Validate(); lastErr == nil {
+				return t, nil
+			}
+		}
+		// Повтор с конкретной ошибкой: модель видит свой ответ и что в нём не так.
+		msgs = append(msgs, resp.ToParam(), anthropic.NewUserMessage(anthropic.NewTextBlock(
+			"Ответ не прошёл валидацию: "+lastErr.Error()+". Верни исправленный JSON целиком.")))
+	}
+	return Ticket{}, fmt.Errorf("ticket invalid after retries: %w", lastErr)
+}
+</code></pre></div>
+    <div class="tab-panel" data-tab="Python"><pre><code class="lang-python">from typing import Literal
+from pydantic import BaseModel, Field
+import anthropic
+
+class Ticket(BaseModel):
+    category: Literal["billing", "bug", "delivery", "other"]
+    priority: Literal["p1", "p2", "p3"]
+    summary: str = Field(max_length=200)        # SDK проверит на клиенте
+    order_id: str = Field(pattern=r"^(ORD-\d{6})?$")
+
+client = anthropic.Anthropic()
+
+resp = client.messages.parse(
+    model="claude-sonnet-5",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": f"Разбери обращение в тикет.\n&lt;message&gt;\n{text}\n&lt;/message&gt;"}],
+    output_format=Ticket,
+)
+ticket: Ticket = resp.parsed_output  # уже провалидированный объект
+</code></pre></div>
+  </div>
+  <div class="callout go"><span class="title">Аналогия из Go</span>Structured outputs — это как <code>json.Decoder.DisallowUnknownFields()</code> плюс enum-типы на стороне генератора: синтаксис и форма гарантированы, а <code>Validate()</code> на доменной структуре всё равно нужен — ровно как после <code>json.Unmarshal</code> входящего HTTP-запроса.</div>
+
+  <h2 id="tools">Tool use</h2>
+  <p><b>Tool use</b> (он же function calling) — модель не выполняет код, она <i>просит</i> вас выполнить функцию. Вы передаёте в <code>tools</code> описания: имя, текстовое описание, JSON Schema входа. Модель отвечает блоками <code>tool_use</code> (<code>id</code>, <code>name</code>, <code>input</code>) и <code>stop_reason: "tool_use"</code>. Вы исполняете, кладёте результаты в <b>user</b>-сообщение блоками <code>tool_result</code> с тем же <code>tool_use_id</code> и снова зовёте API. Цикл продолжается до <code>end_turn</code>.</p>
+  <ul>
+    <li><b>Параллельные вызовы</b>: в одном ответе может быть несколько <code>tool_use</code>. Выполняйте их конкурентно и возвращайте <b>все</b> результаты <b>одним</b> user-сообщением. Разнести их по нескольким сообщениям — частая ошибка, которая приучает модель вызывать по одному инструменту за ход (медленнее) или ломает валидацию.</li>
+    <li><b>Ошибки инструмента</b> — это данные, а не исключения: <code>tool_result</code> с <code>is_error: true</code> и понятным текстом («заказ не найден», «таймаут, попробуйте через минуту»). Модель адаптируется: переформулирует запрос, спросит пользователя. Падать всем циклом из-за одного инструмента — плохо.</li>
+    <li><b>Защита цикла</b>: лимит итераций, общий дедлайн через <code>context</code>, таймаут на инструмент, лимит размера результата (100 КБ логов в tool_result — это деньги и деградация внимания).</li>
+    <li><b><code>tool_choice</code></b>: <code>auto</code> (по умолчанию), <code>none</code>, <code>any</code>/<code>tool</code> (принудительный вызов). На Fable 5.1 и Opus 5.5 принудительные режимы возвращают 400 — используйте <code>auto</code> + явную инструкцию в промпте + <code>strict: true</code>, либо structured outputs, если вызов был нужен только ради JSON.</li>
+    <li>Перед исполнением проверяйте <code>stop_reason</code>: при <code>max_tokens</code> аргументы могут быть обрезанным, но синтаксически валидным JSON; при <code>refusal</code> не исполняйте инструменты этого хода.</li>
+  </ul>
+
+  <div class="viz" id="viz-tools">
+    <p class="viz-title">Цикл tool calling по шагам</p>
+    <p class="viz-sub">Клиент ↔ модель ↔ инструменты. Запрос «Погода в Берлине и Париже и есть ли билеты на завтра?» — три параллельных вызова, один из них падает по таймауту, модель переспрашивает инструмент с другими параметрами.</p>
+    <div class="controls">
+      <button class="btn" id="tool-prev" type="button">← Шаг назад</button>
+      <button class="btn primary" id="tool-next" type="button">Шаг вперёд →</button>
+      <button class="btn" id="tool-reset" type="button">↺ Сначала</button>
+      <span class="muted" id="tool-step"></span>
+    </div>
+    <svg id="tool-svg" viewBox="0 0 640 520" role="img" aria-label="Диаграмма последовательности вызовов инструментов"></svg>
+    <div class="readout" id="tool-readout"></div>
+  </div>
+
+  <h3>Проектирование описаний инструментов</h3>
+  <p>Модель выбирает инструмент и заполняет аргументы <b>только по описанию</b>. Описание инструмента — это промпт, и к нему применимы все правила промпт-инжиниринга:</p>
+  <ul>
+    <li><b>Имя — глагол + объект</b>: <code>search_orders</code>, а не <code>orders</code> или <code>tool1</code>.</li>
+    <li><b>Описание на 3–5 предложений</b>: что делает, <i>когда</i> вызывать и когда <i>не</i> вызывать, что возвращает, ограничения («ищет только за последние 90 дней»).</li>
+    <li><b>Описания полей</b> с форматом и примером: <code>"date": "YYYY-MM-DD, по часовому поясу пользователя"</code>. Enum вместо свободной строки, где возможно.</li>
+    <li><b>Меньше, но крупнее</b>: 5 хорошо различимых инструментов лучше 40 пересекающихся. Два инструмента с похожими описаниями — источник случайного выбора. При десятках инструментов — tool search или маршрутизация по подмножествам.</li>
+    <li><b>Результат — для модели, а не для машины</b>: верните компактный, читаемый текст/JSON с нужными полями, а не сырой ответ внутреннего API на 5 000 токенов. Ошибки — с подсказкой, что делать дальше.</li>
+    <li><b>Идемпотентность и подтверждение</b>: инструменты с побочными эффектами (оплата, отправка письма) — с ключом идемпотентности и, для рискованных, подтверждением человеком. Модель может повторить вызов.</li>
+  </ul>
+
+  <h3>Tool loop с параллельным выполнением на errgroup</h3>
+  <p>В Go SDK есть бета <code>toolrunner</code> (<code>client.Beta.Messages.NewToolRunner</code>), который крутит цикл сам. Ручной цикл нужен, когда хотите контроль: параллельность, таймауты по инструменту, аудит, human-in-the-loop. Вот он:</p>
+  <div class="tabs">
+    <div class="tab-panel" data-tab="Go"><pre><code class="lang-go">type ToolFunc func(ctx context.Context, input json.RawMessage) (string, error)
+
+func RunTools(ctx context.Context, c anthropic.Client, tools []anthropic.ToolUnionParam,
+	impl map[string]ToolFunc, msgs []anthropic.MessageParam) (string, error) {
+
+	for turn := 0; turn &lt; 10; turn++ { // лимит итераций — защита от зацикливания
+		resp, err := c.Messages.New(ctx, anthropic.MessageNewParams{
+			Model: "claude-opus-5", MaxTokens: 16000, Tools: tools, Messages: msgs,
+		})
+		if err != nil {
+			return "", err
+		}
+		msgs = append(msgs, resp.ToParam()) // ответ модели — в историю ДО tool_result
+
+		if resp.StopReason != anthropic.StopReasonToolUse {
+			var sb strings.Builder
+			for _, b := range resp.Content {
+				if t, ok := b.AsAny().(anthropic.TextBlock); ok {
+					sb.WriteString(t.Text)
+				}
+			}
+			return sb.String(), nil
+		}
+
+		var calls []anthropic.ToolUseBlock
+		for _, b := range resp.Content {
+			if tu, ok := b.AsAny().(anthropic.ToolUseBlock); ok {
+				calls = append(calls, tu)
+			}
+		}
+		results := make([]anthropic.ContentBlockParamUnion, len(calls)) // порядок = порядок вызовов
+		g, gctx := errgroup.WithContext(ctx)
+		g.SetLimit(4) // не больше 4 инструментов одновременно
+		for i, call := range calls {
+			g.Go(func() error {
+				out, err := runOne(gctx, impl, call)
+				if err != nil { // ошибка инструмента — данные для модели, а не падение цикла
+					results[i] = anthropic.NewToolResultBlock(call.ID, "error: "+err.Error(), true)
+					return nil
+				}
+				results[i] = anthropic.NewToolResultBlock(call.ID, out, false)
+				return nil
+			})
+		}
+		_ = g.Wait() // горутины всегда возвращают nil; отмену ctx поймает следующий Messages.New
+		msgs = append(msgs, anthropic.NewUserMessage(results...)) // ВСЕ результаты одним сообщением
+	}
+	return "", errors.New("tool loop: превышен лимит итераций")
+}
+
+func runOne(ctx context.Context, impl map[string]ToolFunc, call anthropic.ToolUseBlock) (string, error) {
+	fn, ok := impl[call.Name]
+	if !ok {
+		return "", fmt.Errorf("неизвестный инструмент %q", call.Name)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	out, err := fn(ctx, json.RawMessage(call.JSON.Input.Raw()))
+	if len(out) &gt; 20_000 { // ponytail: обрезка по байтам; лучше — суммаризация/пагинация в самом инструменте
+		out = out[:20_000] + "\n…[обрезано]"
+	}
+	return out, err
+}
+</code></pre></div>
+    <div class="tab-panel" data-tab="Python"><pre><code class="lang-python">import asyncio, json, anthropic
+
+client = anthropic.AsyncAnthropic()
+
+async def run_tools(tools, impl, messages):
+    for _ in range(10):
+        resp = await client.messages.create(
+            model="claude-opus-5", max_tokens=16000, tools=tools, messages=messages)
+        messages.append({"role": "assistant", "content": resp.content})
+        if resp.stop_reason != "tool_use":
+            return "".join(b.text for b in resp.content if b.type == "text")
+
+        calls = [b for b in resp.content if b.type == "tool_use"]
+
+        async def one(call):
+            try:
+                out = await asyncio.wait_for(impl[call.name](**call.input), timeout=15)
+                return {"type": "tool_result", "tool_use_id": call.id, "content": str(out)}
+            except Exception as e:  # ошибка — модели, а не наверх
+                return {"type": "tool_result", "tool_use_id": call.id,
+                        "content": f"error: {e}", "is_error": True}
+
+        results = await asyncio.gather(*(one(c) for c in calls))
+        messages.append({"role": "user", "content": list(results)})
+    raise RuntimeError("tool loop: превышен лимит итераций")
+</code></pre></div>
+  </div>
+  <div class="callout go"><span class="title">Почему errgroup, а ошибки не возвращаем</span><code>errgroup.WithContext</code> отменяет контекст при первой ошибке — это правильно для «всё или ничего», но не для инструментов: таймаут погоды не должен убивать поиск билетов. Поэтому горутины возвращают <code>nil</code>, а ошибку кладут в <code>tool_result</code> с <code>is_error</code>. От errgroup остаются <code>SetLimit</code> (семафор) и аккуратный <code>Wait</code>. Запись в <code>results[i]</code> по индексу без мьютекса безопасна: каждая горутина пишет в свою ячейку.</div>
+
+  <h2 id="caching">Prompt caching</h2>
+  <p>Большая часть входа повторяется между запросами: одни и те же tools, system prompt, документы, растущая история диалога. <b>Prompt caching</b> позволяет не обрабатывать этот префикс заново: сервер сохраняет вычисленное состояние (KV-cache из модуля 1) и при следующем запросе с тем же префиксом читает его.</p>
+  <ul>
+    <li><b>Это совпадение префикса байт</b> в порядке <code>tools → system → messages</code>. Любое изменение в позиции N инвалидирует всё после N.</li>
+    <li><b>Breakpoints</b>: <code>cache_control: {type: "ephemeral"}</code> на блоке помечает «закэшируй префикс до этого места». До 4 breakpoint'ов на запрос. Есть и автоматический вариант — top-level <code>cache_control</code>, который ставит маркер на последний кэшируемый блок.</li>
+    <li><b>Экономика</b> (на момент написания): чтение ≈ 0.1× цены input; запись 1.25× (TTL 5 минут) или 2× (TTL 1 час). Запись с 5-минутным TTL окупается уже на первом попадании: 1.25 + 0.1 &lt; 2. TTL продлевается при каждом чтении.</li>
+    <li><b>Латентность</b>: попадание в кэш сокращает TTFT на длинных промптах в разы — prefill 100K токенов не бесплатен.</li>
+    <li><b>Минимальный размер префикса</b> зависит от модели (512–4096 токенов). Короче — кэш молча не создаётся, без ошибки: <code>cache_creation_input_tokens: 0</code>.</li>
+    <li><b>Проверка</b>: <code>usage.cache_read_input_tokens</code> и <code>usage.cache_creation_input_tokens</code>. Если чтения нулевые при одинаковых запросах — где-то тихий инвалидатор.</li>
+  </ul>
+  <div class="viz" id="viz-cache">
+    <p class="viz-title">Визуализатор prompt caching</p>
+    <p class="viz-sub">Запрос — это последовательность блоков. Флажки между блоками — breakpoints (клик по флажку включает/выключает). «Изменить» имитирует правку блока относительно прошлого запроса: всё после неё перезаписывается. Зелёное — чтение кэша, оранжевое — запись, серое — обычный input.</p>
+    <div class="controls">
+      <label>модель <select id="cache-model"></select></label>
+      <label>TTL записи <select id="cache-ttl"><option value="1.25">5 минут (1.25×)</option><option value="2">1 час (2×)</option></select></label>
+      <button class="btn" id="cache-cold" type="button">❄ Холодный старт</button>
+      <button class="btn" id="cache-reset" type="button">↺ Тёплый кэш, без изменений</button>
+    </div>
+    <svg id="cache-svg" viewBox="0 0 640 170" role="img" aria-label="Блоки запроса и состояние кэша"></svg>
+    <div class="block-btns" id="cache-btns"></div>
+    <div class="readout" id="cache-readout"></div>
+  </div>
+
+  <h3>Типичные инвалидаторы</h3>
+  <table>
+    <tr><th>Что в коде</th><th>Почему ломает кэш</th><th>Как чинить</th></tr>
+    <tr><td><code>time.Now()</code> / дата в system prompt</td><td>Префикс меняется каждый запрос</td><td>Дату — в конец, в user-сообщение</td></tr>
+    <tr><td>Request ID, UUID в начале контента</td><td>Каждый запрос уникален</td><td>Убрать или перенести после последнего breakpoint</td></tr>
+    <tr><td>Сериализация <code>map</code> в JSON с недетерминированным порядком</td><td>Байты префикса различаются</td><td>В Go <code>encoding/json</code> сортирует ключи map — но ваш собственный рендер через <code>range</code> по map нет</td></tr>
+    <tr><td>Набор tools зависит от пользователя/режима</td><td>Tools в позиции 0 — не кэшируется ничего</td><td>Стабильный набор, отсортированный по имени; режим передавать в messages</td></tr>
+    <tr><td>Условные секции в system (<code>if flag { system += … }</code>)</td><td>Каждая комбинация флагов — отдельный префикс</td><td>Меньше вариантов или флаги в messages</td></tr>
+    <tr><td>Смена модели, thinking/effort между запросами</td><td>Кэш привязан к модели; thinking/effort инвалидируют кэш сообщений</td><td>Фиксировать настройки на маршрут</td></tr>
+    <tr><td>Редактирование старой истории (удалили tool_result на 5-м ходу)</td><td>Всё после правки — промах</td><td>Append-only история, компакция реже и крупными шагами</td></tr>
+  </table>
+  <div class="tabs">
+    <div class="tab-panel" data-tab="Go"><pre><code class="lang-go">resp, err := client.Messages.New(ctx, anthropic.MessageNewParams{
+	Model:     "claude-opus-5",
+	MaxTokens: 4096,
+	Tools:     tools, // стабильный набор, отсортирован по имени
+	System: []anthropic.TextBlockParam{{
+		Text:         policyAndCatalog, // 20K токенов, не меняется
+		CacheControl: anthropic.NewCacheControlEphemeralParam(), // breakpoint #1: tools + system
+	}},
+	Messages: history, // на последнем блоке истории — breakpoint #2 (или top-level CacheControl)
+})
+if err != nil {
+	return err
+}
+u := resp.Usage
+slog.Info("cache", "read", u.CacheReadInputTokens, "write", u.CacheCreationInputTokens, "uncached", u.InputTokens)
+</code></pre></div>
+    <div class="tab-panel" data-tab="Python"><pre><code class="lang-python">resp = client.messages.create(
+    model="claude-opus-5",
+    max_tokens=4096,
+    tools=tools,
+    system=[{"type": "text", "text": policy_and_catalog,
+             "cache_control": {"type": "ephemeral"}}],   # или {"type": "ephemeral", "ttl": "1h"}
+    messages=history,
+)
+u = resp.usage
+print(u.cache_read_input_tokens, u.cache_creation_input_tokens, u.input_tokens)
+</code></pre></div>
+  </div>
+  <div class="callout warn"><span class="title">Режим отказа</span>Кэш изолирован по workspace (на Claude API) и никогда не шарится между организациями. Трафик одного промпта, размазанный по двум workspace, пишет два разных кэша. А на запрос из батча попадание в кэш — best effort: запросы батча обрабатываются в произвольном порядке и времени.</div>
+
+  <h2 id="batch">Batch API</h2>
+  <p><b>Message Batches</b> (<code>/v1/messages/batches</code>) — асинхронная обработка пачки запросов со скидкой <b>50%</b>. Вы отправляете до десятков тысяч запросов, каждый с вашим <code>custom_id</code>; обработка занимает до 24 часов (обычно заметно быстрее); результаты приходят <b>в произвольном порядке</b> — матчите по <code>custom_id</code>, не по индексу.</p>
+  <ul>
+    <li><b>Когда</b>: всё, где пользователь не ждёт — ночная разметка, прогон evals, обогащение каталога, генерация эмбеддинг-описаний, переобработка архива после смены промпта.</li>
+    <li><b>Когда нет</b>: интерактив, цепочки, где следующий шаг зависит от предыдущего (каждый шаг — отдельный батч и сутки ожидания в худшем случае).</li>
+    <li><b>Частичные сбои</b>: у каждого результата свой статус (<code>succeeded</code>, <code>errored</code>, <code>canceled</code>, <code>expired</code>). Повторная отправка — только упавших, по <code>custom_id</code>. Делайте <code>custom_id</code> детерминированным (id записи + версия промпта), тогда повтор идемпотентен.</li>
+    <li>Скидки складываются с prompt caching, но попадания в кэш внутри батча не гарантированы.</li>
+  </ul>
+  <pre><code class="lang-python">import anthropic
+from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
+from anthropic.types.messages.batch_create_params import Request
+
+client = anthropic.Anthropic()
+batch = client.messages.batches.create(requests=[
+    Request(custom_id=f"review-{r.id}-p7",   # id записи + версия промпта
+            params=MessageCreateParamsNonStreaming(
+                model="claude-haiku-4-5", max_tokens=512,
+                system=CLASSIFY_PROMPT,
+                messages=[{"role": "user", "content": r.text}]))
+    for r in reviews
+])
+# ... позже, когда batch.processing_status == "ended":
+for res in client.messages.batches.results(batch.id):
+    if res.result.type == "succeeded":
+        save(res.custom_id, res.result.message)
+    else:
+        retry_queue.append(res.custom_id)       # errored / expired — отправить повторно
+</code></pre>
+
+  <h2 id="models">Выбор модели и routing</h2>
+  <p>Выбор модели — это компромисс трёх осей: <b>качество</b> на <i>вашей</i> задаче (измеряется evals, модуль 6), <b>цена</b> и <b>латентность</b> (TTFT и токены/с). Цены Anthropic на момент написания (сентябрь 2026), $ за 1M токенов:</p>
+  <table>
+    <tr><th>Модель</th><th>ID</th><th class="num">Input</th><th class="num">Output</th><th>Контекст</th><th>Когда</th></tr>
+    <tr><td>Claude Fable 5.1</td><td><code>claude-fable-5-1</code></td><td class="num">10</td><td class="num">50</td><td>1M</td><td>Самые сложные задачи: длинные агентные сессии, тяжёлый код, где ошибка дороже токенов</td></tr>
+    <tr><td>Claude Opus 5.5</td><td><code>claude-opus-5-5</code></td><td class="num">4</td><td class="num">20</td><td>1M</td><td>Флагманское качество дешевле Opus 5</td></tr>
+    <tr><td>Claude Opus 5</td><td><code>claude-opus-5</code></td><td class="num">5</td><td class="num">25</td><td>1M</td><td>Сильный дефолт для агентов и сложных рассуждений</td></tr>
+    <tr><td>Claude Sonnet 5</td><td><code>claude-sonnet-5</code></td><td class="num">2</td><td class="num">10</td><td>1M</td><td>Рабочая лошадка: большинство продуктовых фич</td></tr>
+    <tr><td>Claude Haiku 4.5</td><td><code>claude-haiku-4-5</code></td><td class="num">1</td><td class="num">5</td><td>200K</td><td>Классификация, роутинг, извлечение, высокие объёмы, низкая латентность</td></tr>
+  </table>
+  <p>Output в 5 раз дороже input — поэтому экономия чаще всего в <b>длине ответа</b> (формат, лимиты, structured output без «воды»), а не в укорачивании промпта. Ещё один рычаг — <code>effort</code>: на тяжёлой модели <code>low</code> может быть дешевле и быстрее, чем средняя модель на <code>high</code>.</p>
+  <h3>Каскады и routing</h3>
+  <ul>
+    <li><b>Routing</b>: дешёвый классификатор (Haiku или даже не-LLM модель) определяет тип/сложность запроса и отправляет на подходящую модель. Ошибка роутера — главный риск: сложный запрос на слабой модели. Измеряйте качество по сегментам.</li>
+    <li><b>Каскад</b>: сначала дешёвая модель; если её ответ не прошёл проверку (валидация схемы, self-check, низкая уверенность, отказ) — эскалация на сильную. Хорошо работает, когда проверка дешевле генерации и есть объективный критерий.</li>
+    <li><b>Fallback по доступности</b>: при 529/5xx — другая модель или другой провайдер/регион (модуль 7). Промпты при этом могут вести себя по-разному — прогоняйте evals на fallback-модели тоже.</li>
+  </ul>
+
+  <div class="viz" id="viz-calc">
+    <p class="viz-title">Калькулятор: модель × кэш × batch × routing</p>
+    <p class="viz-sub">Месячная стоимость (30 дней) при ваших объёмах. Промахи кэша считаются как запись (1.25×). Роутинг отправляет долю трафика на Haiku 4.5, остальное — на выбранную модель.</p>
+    <div class="controls">
+      <label>запросов/день <input type="range" id="c-rpd" min="0" max="8" step="1" value="3"> <output></output></label>
+      <label>input токенов <input type="range" id="c-in" min="0" max="10" step="1" value="5"> <output></output></label>
+      <label>output токенов <input type="range" id="c-out" min="0" max="8" step="1" value="3"> <output></output></label>
+      <label>кэшируемый префикс <input type="range" id="c-share" min="0" max="95" step="5" value="70"> <output></output></label>
+      <label>hit rate кэша <input type="range" id="c-hit" min="0" max="100" step="5" value="80"> <output></output></label>
+      <label>доля в batch <input type="range" id="c-batch" min="0" max="100" step="10" value="0"> <output></output></label>
+      <label>на Haiku (routing) <input type="range" id="c-route" min="0" max="90" step="10" value="0"> <output></output></label>
+      <label>основная модель <select id="c-model"></select></label>
+    </div>
+    <svg id="calc-svg" viewBox="0 0 640 250" role="img" aria-label="Месячная стоимость по моделям"></svg>
+    <div class="readout" id="calc-readout"></div>
+  </div>
+
+  <h2 id="multimodal">Мультимодальность</h2>
+  <p>Claude принимает изображения (<code>image</code>-блоки: base64, URL или file_id из Files API) и PDF (<code>document</code>-блоки). PDF обрабатывается и как текст, и как картинки страниц — поэтому модель видит таблицы, графики и сканы, но и платите вы за оба представления.</p>
+  <ul>
+    <li><b>Стоимость картинки</b> зависит от площади в пикселях, а не от «информативности»: порядка одного токена на патч 28×28 px. Изображение 1280×720 — около 1 200 токенов; большие картинки сервер уменьшает сам, но вы платите за передачу и ждёте. Даунскейльте на клиенте до того, что нужно задаче: для классификации фото товара хватит 512 px, для чтения мелкого текста на скриншоте — нет.</li>
+    <li><b>PDF</b>: каждая страница стоит текст + изображение, то есть порядка тысяч токенов на страницу. Отчёт на 100 страниц — это сотни тысяч токенов. Для больших документов — извлечь текст сами, отправлять только нужные страницы, кэшировать документ (<code>cache_control</code> на document-блоке).</li>
+    <li><b>Порядок</b>: изображения/документы ставьте <i>до</i> вопроса о них.</li>
+    <li><b>Режимы отказа</b>: модель уверенно «читает» размытый текст (галлюцинация OCR), путает оси графиков, плохо считает объекты. Для критичных цифр — сверка с текстовым источником или structured output с полем уверенности.</li>
+  </ul>
+  <pre><code class="lang-go">pdf, err := os.ReadFile("invoice.pdf")
+if err != nil {
+	return err
+}
+msg := anthropic.NewUserMessage(
+	anthropic.NewDocumentBlock(anthropic.Base64PDFSourceParam{Data: base64.StdEncoding.EncodeToString(pdf)}),
+	anthropic.NewTextBlock("Извлеки номер счёта, дату и итоговую сумму."),
+)
+// Картинки — аналогично image-блоком (base64/URL); для повторного использования — Files API.
+</code></pre>
+
+  <h2 id="openai">Сравнение с OpenAI API</h2>
+  <p>Концепции одни и те же, отличаются формы. На собесе часто спрашивают «чем отличается», и хороший ответ — про модели данных и управление состоянием, а не про синтаксис. Детали API меняются — сверяйтесь с актуальной документацией.</p>
+  <table>
+    <tr><th>Аспект</th><th>Anthropic Messages</th><th>OpenAI Chat Completions</th><th>OpenAI Responses</th></tr>
+    <tr><td>System</td><td>Отдельное поле <code>system</code></td><td>Сообщение с ролью <code>system</code>/<code>developer</code> в списке</td><td>Поле <code>instructions</code> или элемент <code>input</code></td></tr>
+    <tr><td>Состояние</td><td>Stateless, история на клиенте</td><td>Stateless</td><td>Опционально на сервере: <code>previous_response_id</code>, <code>store</code></td></tr>
+    <tr><td>Ответ</td><td>Список content blocks</td><td><code>choices[].message</code></td><td>Список output items</td></tr>
+    <tr><td>Tool call</td><td>Блок <code>tool_use</code>, <code>input</code> — объект</td><td><code>tool_calls[]</code>, <code>arguments</code> — JSON-<i>строка</i></td><td>Item <code>function_call</code></td></tr>
+    <tr><td>Результат инструмента</td><td>Блок <code>tool_result</code> в <b>user</b>-сообщении</td><td>Сообщение с ролью <code>tool</code> и <code>tool_call_id</code></td><td>Item <code>function_call_output</code></td></tr>
+    <tr><td>Structured output</td><td><code>output_config.format</code>, <code>strict</code> у tools</td><td><code>response_format: json_schema</code> + <code>strict</code></td><td><code>text.format</code></td></tr>
+    <tr><td>Стриминг</td><td>Именованные события (<code>event:</code>) по блокам</td><td>Анонимные <code>data:</code>-чанки, конец — <code>data: [DONE]</code></td><td>Типизированные семантические события</td></tr>
+    <tr><td>Prompt caching</td><td>Явные breakpoints, запись дороже, чтение ≈0.1×</td><td colspan="2">Автоматический по префиксу, скидка на кэшированный input, без платы за запись</td></tr>
+    <tr><td>Batch</td><td colspan="3">Асинхронно, до 24 ч, −50% у обоих провайдеров (на момент написания)</td></tr>
+  </table>
+  <div class="callout tip"><span class="title">Что сказать на собесе</span>Главная концептуальная разница — где живёт состояние. Stateless API проще масштабировать и аудировать, всё под вашим контролем, но вы платите за историю и сами её обрезаете. Серверное состояние (Responses) экономит трафик и код, но это vendor lock-in и вопросы к хранению данных. Для абстракции над провайдерами (LLM-gateway) внутренний формат обычно ближе к блокам Anthropic/items Responses, потому что плоская строка не выражает tool calls и мультимодальность.</div>
+
+  <h2 id="errors">Ошибки, ретраи, лимиты</h2>
+  <table>
+    <tr><th class="num">Код</th><th>Тип</th><th>Ретраить?</th><th>Что это</th></tr>
+    <tr><td class="num">400</td><td><code>invalid_request_error</code></td><td>Нет</td><td>Невалидный запрос: нет чередования ролей, prefill/temperature на новой модели, схема вне поддерживаемого подмножества</td></tr>
+    <tr><td class="num">401 / 403</td><td><code>authentication_error</code> / <code>permission_error</code></td><td>Нет</td><td>Ключ, права</td></tr>
+    <tr><td class="num">404</td><td><code>not_found_error</code></td><td>Нет</td><td>Опечатка в ID модели — самая частая</td></tr>
+    <tr><td class="num">413</td><td><code>request_too_large</code></td><td>Нет</td><td>Слишком большой запрос</td></tr>
+    <tr><td class="num">429</td><td><code>rate_limit_error</code></td><td>Да, с учётом <code>retry-after</code></td><td>Превышены RPM / input TPM / output TPM вашей организации</td></tr>
+    <tr><td class="num">500</td><td><code>api_error</code></td><td>Да, backoff</td><td>Сбой на стороне API</td></tr>
+    <tr><td class="num">529</td><td><code>overloaded_error</code></td><td>Да, backoff; думать о fallback</td><td>API перегружен целиком — это не ваш лимит, а общая нагрузка</td></tr>
+  </table>
+  <ul>
+    <li><b>429 vs 529</b>: 429 — ваша квота (смотрите заголовки <code>retry-after</code> и <code>anthropic-ratelimit-*</code>, сглаживайте трафик, client-side rate limiter). 529 — перегрузка провайдера: ретраи помогают, но при затяжной перегрузке нужен fallback на другую модель/регион.</li>
+    <li><b>SDK ретраит сам</b>: по умолчанию 2 повтора с экспоненциальным backoff для 408/409/429/5xx. Если строите свой слой ретраев — отключите встроенный (<code>option.WithMaxRetries(0)</code>), иначе получите 3 × 3 = 9 попыток и retry storm.</li>
+    <li><b>Backoff с jitter</b>: без случайного разброса все ваши воркеры ретраят синхронно и снова ловят 429. Full jitter: <code>sleep = rand(0, min(cap, base·2^n))</code>. Если есть <code>retry-after</code> — он главнее формулы.</li>
+    <li><b>Бюджет ретраев</b>: ограничивайте общее время через <code>context</code>, а при массовых ошибках — circuit breaker, чтобы не добивать лежащий сервис.</li>
+    <li><b>Идемпотентность</b>: сам вызов LLM «идемпотентен» (без побочных эффектов), но ретрай стоит денег, а ответ будет другим. Ретраить tool с побочным эффектом — только с ключом идемпотентности.</li>
+  </ul>
+  <div class="tabs">
+    <div class="tab-panel" data-tab="Go"><pre><code class="lang-go">// Клиент без встроенных ретраев — политику задаём сами.
+var client = anthropic.NewClient(option.WithMaxRetries(0))
+
+func WithRetry[T any](ctx context.Context, attempts int, fn func(context.Context) (T, error)) (T, error) {
+	var zero T
+	for n := 0; ; n++ {
+		v, err := fn(ctx)
+		if err == nil {
+			return v, nil
+		}
+		delay, retryable := classify(err, n)
+		if !retryable || n+1 &gt;= attempts {
+			return zero, err
+		}
+		slog.WarnContext(ctx, "llm retry", "attempt", n+1, "delay", delay, "err", err)
+		t := time.NewTimer(delay)
+		select {
+		case &lt;-t.C:
+		case &lt;-ctx.Done():
+			t.Stop()
+			return zero, errors.Join(err, ctx.Err())
+		}
+	}
+}
+
+func classify(err error, n int) (time.Duration, bool) {
+	backoff := min(30*time.Second, 500*time.Millisecond&lt;&lt;n)
+	delay := rand.N(backoff) + 100*time.Millisecond // full jitter
+
+	var apierr *anthropic.Error
+	if errors.As(err, &amp;apierr) {
+		switch s := apierr.StatusCode; {
+		case s == 408, s == 409, s == 429, s == 529, s &gt;= 500:
+			if apierr.Response != nil {
+				if ra, err := strconv.Atoi(apierr.Response.Header.Get("retry-after")); err == nil {
+					delay = time.Duration(ra) * time.Second // сервер знает лучше
+				}
+			}
+			return delay, true
+		default:
+			return 0, false // 400/401/403/404/413 — повтор не поможет
+		}
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return 0, false
+	}
+	var ne net.Error
+	if errors.As(err, &amp;ne) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return delay, true // сеть, обрыв стрима
+	}
+	return 0, false
+}
+
+// Использование:
+// resp, err := WithRetry(ctx, 4, func(ctx context.Context) (*anthropic.Message, error) {
+//     return client.Messages.New(ctx, params)
+// })
+</code></pre></div>
+    <div class="tab-panel" data-tab="Python"><pre><code class="lang-python">import anthropic
+
+# Обычно достаточно встроенных ретраев: backoff и retry-after SDK учитывает сам.
+client = anthropic.Anthropic(max_retries=4, timeout=120.0)
+
+try:
+    resp = client.messages.create(model="claude-opus-5", max_tokens=1024,
+                                  messages=[{"role": "user", "content": "…"}])
+except anthropic.RateLimitError as e:        # 429 после всех повторов
+    log.warning("rate limited, retry-after=%s", e.response.headers.get("retry-after"))
+    raise
+except anthropic.APIStatusError as e:
+    if e.status_code == 529 or e.type == "overloaded_error":
+        resp = call_fallback_model()           # затяжная перегрузка — другая модель
+    else:
+        raise
+</code></pre></div>
+  </div>
+
+  <h2 id="practice">Практика</h2>
+  <div class="task">
+    <h3>Задание 1: стриминговый чат-сервис на Go</h3>
+    <p>HTTP-сервис <code>POST /chat/{session}</code>, который отдаёт ответ Claude через SSE вашему фронту. История — в Postgres или SQLite.</p>
+    <ul>
+      <li>Отмена: закрытие соединения клиентом отменяет запрос к API (проверьте логом, что генерация прекращается).</li>
+      <li>Обрыв без <code>message_stop</code> помечается в БД как неполный ответ.</li>
+      <li>Метрики: TTFT, total, output tokens/s, stop_reason, cache read/write.</li>
+      <li>Prompt caching: на 3-м ходу диалога <code>cache_read_input_tokens</code> &gt; 0.</li>
+    </ul>
+    <label class="check"><input type="checkbox" data-save="m02-t1"> Сделал, метрики пишутся, кэш работает</label>
+  </div>
+  <div class="task">
+    <h3>Задание 2: tool loop с параллельными инструментами</h3>
+    <p>Агент с 3 инструментами (например, <code>get_order</code>, <code>get_weather</code>, <code>search_docs</code>), цикл на errgroup из модуля.</p>
+    <ul>
+      <li>Один инструмент искусственно падает в 30% случаев — модель получает <code>is_error</code> и справляется (перезапрос или честный ответ).</li>
+      <li>Лимит итераций, таймаут на инструмент, общий дедлайн.</li>
+      <li>Тест: при двух параллельных tool_use оба результата уходят одним user-сообщением, порядок совпадает с порядком вызовов.</li>
+    </ul>
+    <label class="check"><input type="checkbox" data-save="m02-t2"> Сделал, тесты зелёные</label>
+  </div>
+  <div class="task">
+    <h3>Задание 3: извлечение с валидацией и расчёт экономики</h3>
+    <p>Извлечение сущностей из 200 текстов (отзывы, письма) в структуру через structured outputs + <code>Validate()</code> + повтор с ошибкой. Прогоните один раз синхронно на Sonnet 5, один раз через Batch API на Haiku 4.5.</p>
+    <ul>
+      <li>Посчитайте фактическую стоимость по <code>usage</code> обоих прогонов и долю повторов.</li>
+      <li>Сравните качество на 30 размеченных вручную примерах. Напишите вывод на абзац: что выбрали бы в прод и почему.</li>
+    </ul>
+    <label class="check"><input type="checkbox" data-save="m02-t3"> Сделал, есть таблица стоимость/качество</label>
+  </div>
+
+  <h2 id="selfcheck">Самопроверка</h2>
+  <details class="q"><summary>Почему 30-й ход диалога стоит дороже первого, и что с этим делать?</summary><div class="a"><p>API stateless: на каждом ходу отправляется вся история, и вы платите за неё как за input. Суммарные входные токены растут квадратично по числу ходов. Лечится prompt caching (история читается за 0.1×), компакцией/суммаризацией старой части, обрезкой больших tool_result и выносом больших документов в кэшируемый префикс.</p></div></details>
+  <details class="q"><summary>Поток закончился, текст выглядит законченным, но <code>message_stop</code> не пришёл. Что делать?</summary><div class="a"><p>Считать ответ неполным: нет гарантии, что это конец, и нет <code>stop_reason</code>/финального usage. Возобновить стрим нельзя, prefill на новых моделях запрещён — повторить запрос целиком (с ретрай-политикой), частичный ответ пометить как оборванный.</p></div></details>
+  <details class="q"><summary>Модель вернула три <code>tool_use</code>. Как правильно вернуть результаты?</summary><div class="a"><p>Выполнить конкурентно, собрать три <code>tool_result</code> с соответствующими <code>tool_use_id</code> и отправить их одним user-сообщением сразу после assistant-сообщения с этими tool_use. Упавший инструмент — <code>is_error: true</code> с понятным текстом, а не исключение на весь цикл.</p></div></details>
+  <details class="q"><summary>Structured outputs гарантируют валидный JSON. Зачем тогда валидация на клиенте?</summary><div class="a"><p>Гарантирована форма, а не смысл: значения могут быть неправильными, бизнес-правила (формат id, диапазоны, существование в БД) схема не выражает — <code>minLength</code>, <code>minimum</code> и т.п. не поддерживаются. Плюс при <code>max_tokens</code> и <code>refusal</code> гарантия не действует.</p></div></details>
+  <details class="q"><summary>В system prompt добавили строку «Текущее время: …». Что сломалось?</summary><div class="a"><p>Prompt caching: system стоит в начале префикса, а время меняется каждый запрос — байты префикса не совпадают, и всё после tools перестаёт кэшироваться. Время надо перенести в user-сообщение (после последнего breakpoint) или округлить до дня, если это допустимо.</p></div></details>
+  <details class="q"><summary>Когда 1-часовой TTL кэша выгоднее 5-минутного?</summary><div class="a"><p>Запись 2× против 1.25×. 1h выгоден, когда запросы с тем же префиксом приходят реже раза в 5 минут, но чаще раза в час (иначе 5-минутный кэш каждый раз протухает и вы платите запись снова), например редкий трафик внутреннего инструмента или агент, который думает дольше 5 минут между ходами.</p></div></details>
+  <details class="q"><summary>Чем 429 отличается от 529 с точки зрения реакции системы?</summary><div class="a"><p>429 — вы превысили свои лимиты: сглаживать трафик, соблюдать <code>retry-after</code>, клиентский rate limiter, приоритезация. 529 — провайдер перегружен целиком: backoff помогает на коротких всплесках, при затяжных — fallback на другую модель или провайдера, деградация функциональности.</p></div></details>
+  <details class="q"><summary>Результаты batch пришли в другом порядке. Как их сопоставить и как повторить упавшие?</summary><div class="a"><p>По <code>custom_id</code>, который вы задали для каждого запроса. Делайте его детерминированным (id записи + версия промпта): тогда повторная отправка только упавших (<code>errored</code>/<code>expired</code>) идемпотентна и легко дедуплицируется.</p></div></details>
+
+  <h2 id="interview">Вопросы с собеседований</h2>
+  <details class="q interview"><summary>Спроектируйте слой интеграции с LLM API для продукта с 50 RPS. Что в нём будет?</summary><div class="a"><p>Тонкая обёртка над SDK со следующими ответственностями: (1) единая модель запроса/ответа с блоками, версией промпта и маршрутом; (2) ретраи с jitter и учётом <code>retry-after</code>, встроенные ретраи SDK отключены; бюджет по времени через context; circuit breaker на провайдера; (3) клиентский rate limiter по RPM и TPM (токены оценивать заранее), очередь с приоритетами для фоновых задач; (4) fallback-цепочка моделей/провайдеров с отдельными evals; (5) prompt caching: стабильный префикс, мониторинг hit rate; (6) observability: трейс на вызов с моделью, версией промпта, токенами (input/output/cache), стоимостью, TTFT, stop_reason; (7) стриминг до клиента с отменой по context; (8) лимиты стоимости на пользователя/тенанта. Оценка: 50 RPS × 3K input токенов — это 9M input токенов в минуту, надо сразу смотреть на TPM-лимиты и кэш.</p></div></details>
+  <details class="q interview"><summary>Как бы вы реализовали tool use с 3 параллельными вызовами, где один — медленный внешний API?</summary><div class="a"><p>Конкурентное выполнение (errgroup с <code>SetLimit</code>), таймаут на каждый инструмент, общий дедлайн цикла. Упавший или просроченный инструмент возвращает <code>tool_result</code> с <code>is_error: true</code> и подсказкой — модель решит, что делать; остальные результаты не теряются. Все результаты — одним user-сообщением. Если медленный API частый — кэш результатов, асинхронный инструмент (запустил задачу, вернул id, отдельный инструмент для статуса) или предзагрузка. Побочные эффекты — с ключом идемпотентности, потому что модель может повторить вызов.</p></div></details>
+  <details class="q interview"><summary>У вас стоимость LLM выросла втрое за месяц без роста трафика. Как будете искать причину?</summary><div class="a"><p>Разложить стоимость по измерениям из телеметрии: маршрут/фича, модель, версия промпта, input vs output vs cache write vs cache read. Типичные причины: (1) упал cache hit rate — кто-то добавил динамику в system или поменял набор tools (сравнить payload двух соседних запросов); (2) выросла длина ответа — новая модель/промпт стали многословнее, или thinking/effort подняли; (3) растущие истории без компакции; (4) ретраи/зацикленные агенты — число вызовов на пользовательский запрос; (5) переключение fallback на дорогую модель. Лечить с метриками «стоимость на успешную задачу», а не на запрос.</p></div></details>
+  <details class="q interview"><summary>JSON mode, tool use как экстрактор, structured outputs — что и когда выбрать?</summary><div class="a"><p>Structured outputs (constrained decoding по схеме) — дефолт для извлечения данных: гарантирует синтаксис и соответствие схеме, не нужен парсер-чинильщик. Strict tools — когда модель должна выбирать действия и аргументы должны быть валидны. «Просто попросить JSON» — только для прототипа или провайдеров без поддержки, с устойчивым парсером и повтором. В любом варианте — бизнес-валидация, обработка <code>max_tokens</code>/<code>refusal</code> и повтор с текстом ошибки. Минусы constrained decoding: ограниченное подмножество JSON Schema, компиляция схемы на первом запросе.</p></div></details>
+  <details class="q interview"><summary>Объясните prompt caching так, чтобы стало понятно, почему порядок блоков важен.</summary><div class="a"><p>Сервер кэширует вычисленное внутреннее состояние модели (KV-cache) для префикса запроса. Префикс определён порядком <code>tools → system → messages</code>, ключ — точные байты до breakpoint'а. Трансформер обрабатывает токены слева направо, и состояние каждого зависит от всех предыдущих — поэтому изменение в середине делает невалидным всё справа, а изменение в конце — ничего. Значит: стабильное в начало (tools, политика, большие документы), изменчивое в конец. Экономика: чтение 0.1×, запись 1.25× (5 мин) или 2× (1 ч); плюс сильное снижение TTFT на длинных промптах. Мониторить <code>cache_read_input_tokens</code>.</p></div></details>
+  <details class="q interview"><summary>Когда Batch API — плохая идея, даже если скидка 50%?</summary><div class="a"><p>Когда нужен ответ пользователю в интерактиве; когда шаги зависят друг от друга (цепочка из 5 батчей = до 5 суток в худшем случае); когда SLA на обработку короче 24 часов и нет запасного синхронного пути; когда объём маленький и сложность оркестрации (опрос статуса, частичные сбои, повторы) дороже экономии. Хорошее применение — ночные переобработки, evals, разметка, обогащение каталога.</p></div></details>
+  <details class="q interview"><summary>Стримим ответ пользователю, а посреди стрима пришёл <code>overloaded_error</code>. Как это обработать в продукте?</summary><div class="a"><p>HTTP-статус уже 200, поэтому ошибка приходит событием <code>error</code> — его надо обрабатывать явно. Частичный ответ нельзя «докачать»: повторить запрос целиком с backoff, возможно на fallback-модели; в UI либо заменить частичный текст новым (с индикацией «перегенерируем»), либо показать ошибку с кнопкой повтора. Логировать как оборванный стрим, учитывать сгенерированные токены в стоимости. Если частые обрывы — смотреть на прокси/таймауты и на долю 529 по модели.</p></div></details>
+  <details class="q interview"><summary>Как выбрать модель для новой фичи, не угадывая?</summary><div class="a"><p>Собрать eval-набор 50–200 примеров с критериями, прогнать 2–3 модели (и 2–3 уровня effort) и построить фронт Парето: качество vs стоимость на задачу vs p95 латентности. Выбрать самую дешёвую, проходящую порог качества с запасом. Рассмотреть каскад (дешёвая модель + проверка + эскалация) и роутинг по сегментам. Пересматривать при выходе новых моделей — evals делают это часовой задачей, а не проектом.</p></div></details>
+
+  <h2 id="links">Источники</h2>
+  <ul>
+    <li><a href="https://docs.anthropic.com/en/api/messages" target="_blank" rel="noopener">Anthropic — Messages API reference</a></li>
+    <li><a href="https://docs.anthropic.com/en/docs/build-with-claude/streaming" target="_blank" rel="noopener">Anthropic — Streaming messages</a></li>
+    <li><a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview" target="_blank" rel="noopener">Anthropic — Tool use overview</a></li>
+    <li><a href="https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching" target="_blank" rel="noopener">Anthropic — Prompt caching</a></li>
+    <li><a href="https://docs.anthropic.com/en/docs/build-with-claude/batch-processing" target="_blank" rel="noopener">Anthropic — Batch processing</a></li>
+    <li><a href="https://docs.anthropic.com/en/docs/build-with-claude/vision" target="_blank" rel="noopener">Anthropic — Vision</a> и <a href="https://docs.anthropic.com/en/docs/build-with-claude/pdf-support" target="_blank" rel="noopener">PDF support</a></li>
+    <li><a href="https://docs.anthropic.com/en/api/errors" target="_blank" rel="noopener">Anthropic — Errors</a> и <a href="https://docs.anthropic.com/en/api/rate-limits" target="_blank" rel="noopener">Rate limits</a></li>
+    <li><a href="https://github.com/anthropics/anthropic-sdk-go" target="_blank" rel="noopener">anthropic-sdk-go на GitHub</a> (примеры в <code>examples/</code>)</li>
+    <li><a href="https://platform.openai.com/docs" target="_blank" rel="noopener">OpenAI API docs</a> (Chat Completions, Responses, Structured Outputs)</li>
+    <li><a href="https://html.spec.whatwg.org/multipage/server-sent-events.html" target="_blank" rel="noopener">HTML Standard — Server-sent events</a></li>
+    <li><a href="https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/" target="_blank" rel="noopener">AWS Builders' Library — Timeouts, retries and backoff with jitter</a></li>
+    <li><a href="https://pkg.go.dev/golang.org/x/sync/errgroup" target="_blank" rel="noopener">golang.org/x/sync/errgroup</a></li>
+  </ul>
+</main>
+<script src="assets/course.js"></script>
+<script>
+/* ---------- 1. Поток SSE ---------- */
+(function () {
+  const svg = document.getElementById('sse-svg');
+  const log = document.getElementById('sse-log');
+  const out = document.getElementById('sse-text');
+  const ro = document.getElementById('sse-readout');
+  const speedIn = document.getElementById('sse-speed');
+  let speed = 1;
+  const COLORS = { message_start: '--accent', content_block_start: '--violet', content_block_delta: '--ok', content_block_stop: '--teal', message_delta: '--warn', message_stop: '--accent', ping: '--muted', error: '--bad' };
+  const chunks = ['Stateless', ' API', ' значит', ':', ' сервер', ' не', ' хранит', ' диалог', '.', ' Каждый', ' запрос', ' несёт', ' всю', ' историю', ',', ' поэтому', ' стоимость', ' растёт', ' с', ' каждым', ' ходом', ' —', ' спасает', ' prompt', ' caching', '.'];
+  function script() {
+    const ev = [];
+    ev.push({ t: 0, type: 'message_start', data: '{"type":"message_start","message":{"id":"msg_01Xf…","role":"assistant","content":[],"usage":{"input_tokens":1840,"output_tokens":1}}}' });
+    ev.push({ t: 40, type: 'content_block_start', data: '{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}' });
+    ev.push({ t: 300, type: 'ping', data: '{"type":"ping"}' });
+    let t = 640;
+    chunks.forEach((c, i) => {
+      ev.push({ t, type: 'content_block_delta', text: c, data: '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":' + JSON.stringify(c) + '}}' });
+      t += 45 + ((i * 37) % 60);
+    });
+    ev.push({ t: t + 20, type: 'content_block_stop', data: '{"type":"content_block_stop","index":0}' });
+    ev.push({ t: t + 40, type: 'message_delta', data: '{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":' + (chunks.length + 3) + '}}' });
+    ev.push({ t: t + 60, type: 'message_stop', data: '{"type":"message_stop"}' });
+    return ev;
+  }
+  const EVENTS = script();
+  const TOTAL = EVENTS[EVENTS.length - 1].t + 100;
+  const TTFT = EVENTS.find(e => e.type === 'content_block_delta').t;
+  let timer = null, idx = 0, shown = [], state = 'idle', startWall = 0, endT = null;
+
+  function x(t) { return 30 + (t / TOTAL) * 590; }
+  function drawTimeline(nowT) {
+    svg.innerHTML = '';
+    const S = (tag, a, p) => { if (tag === 'text' && a.fill) a.style = 'fill:' + a.fill; return Course.svg(tag, a, p); };
+    S('line', { x1: 30, y1: 60, x2: 620, y2: 60, stroke: 'var(--border)', 'stroke-width': 2 }, svg);
+    for (let t = 0; t <= TOTAL; t += 500) {
+      S('line', { x1: x(t), y1: 56, x2: x(t), y2: 64, stroke: 'var(--muted)' }, svg);
+      S('text', { x: x(t), y: 80, 'font-size': 10, 'text-anchor': 'middle', fill: 'var(--muted)' }, svg).textContent = t + ' мс';
+    }
+    shown.forEach(e => {
+      const h = e.type === 'content_block_delta' ? 14 : 24;
+      S('rect', { x: x(e.t) - 2, y: 60 - h, width: 4, height: h, rx: 1, fill: 'var(' + COLORS[e.type] + ')' }, svg);
+    });
+    if (shown.some(e => e.type === 'content_block_delta')) {
+      S('line', { x1: x(TTFT), y1: 8, x2: x(TTFT), y2: 64, stroke: 'var(--bad)', 'stroke-dasharray': '4 3' }, svg);
+      S('text', { x: x(TTFT) + 4, y: 18, 'font-size': 11, fill: 'var(--bad)' }, svg).textContent = 'TTFT ' + TTFT + ' мс';
+    }
+    if (nowT != null) S('line', { x1: x(nowT), y1: 30, x2: x(nowT), y2: 66, stroke: 'var(--accent)', 'stroke-width': 2 }, svg);
+    if (endT != null) S('text', { x: Math.min(x(endT) + 4, 560), y: 38, 'font-size': 11, fill: state === 'done' ? 'var(--ok)' : 'var(--bad)' }, svg).textContent = state === 'done' ? 'message_stop' : (state === 'dropped' ? '✗ обрыв' : '✕ отмена');
+    const leg = [['message_*', '--accent'], ['block start', '--violet'], ['text_delta', '--ok'], ['block stop', '--teal'], ['message_delta', '--warn'], ['ping', '--muted']];
+    leg.forEach((l, i) => {
+      S('rect', { x: 30 + i * 98, y: 86, width: 8, height: 8, fill: 'var(' + l[1] + ')' }, svg);
+      S('text', { x: 42 + i * 98, y: 94, 'font-size': 10, fill: 'var(--muted)' }, svg).textContent = l[0];
+    });
+  }
+  function appendLog(e) {
+    const div = document.createElement('div');
+    const ev = document.createElement('span');
+    ev.className = 'ev'; ev.style.color = 'var(' + COLORS[e.type] + ')';
+    ev.textContent = 'event: ' + e.type;
+    div.append(ev, document.createTextNode('\ndata: ' + e.data + '\n\n'));
+    log.append(div); log.scrollTop = log.scrollHeight;
+  }
+  function textNow() { return shown.filter(e => e.text).map(e => e.text).join(''); }
+  function stop() { clearInterval(timer); timer = null; }
+  function tick() {
+    const nowT = (performance.now() - startWall) * speed;
+    while (idx < EVENTS.length && EVENTS[idx].t <= nowT) {
+      const e = EVENTS[idx++]; shown.push(e); appendLog(e);
+      if (e.text) out.textContent = textNow();
+    }
+    drawTimeline(Math.min(nowT, TOTAL));
+    const nDelta = shown.filter(e => e.text).length;
+    ro.textContent = 'событий: ' + shown.length + ' · text_delta: ' + nDelta + ' · прошло ' + Math.round(Math.min(nowT, TOTAL)) + ' мс' + (nDelta ? ' · TTFT = ' + TTFT + ' мс' : ' · ждём первый токен (prefill промпта)…');
+    if (idx >= EVENTS.length) {
+      stop(); state = 'done'; endT = EVENTS[EVENTS.length - 1].t; drawTimeline(null);
+      ro.textContent = '✓ message_stop получен. stop_reason=end_turn, output_tokens=' + (chunks.length + 3) + '. TTFT ' + TTFT + ' мс, полное время ' + endT + ' мс: пользователь видел текст через ' + Math.round(100 * TTFT / endT) + '% времени от полного ответа.';
+    }
+  }
+  function run() {
+    stop(); idx = 0; shown = []; endT = null; state = 'running';
+    log.textContent = ''; out.textContent = '';
+    startWall = performance.now(); timer = setInterval(tick, 30);
+  }
+  function interrupt(kind) {
+    if (state !== 'running') { ro.textContent = 'Сначала запустите поток.'; return; }
+    stop(); state = kind; endT = shown.length ? shown[shown.length - 1].t : 0; drawTimeline(null);
+    if (kind === 'dropped') {
+      const d = document.createElement('div'); d.style.color = 'var(--bad)'; d.textContent = '✗ io.ErrUnexpectedEOF: поток закрыт без message_stop';
+      log.append(d);
+      ro.textContent = '✗ Обрыв: получено ' + shown.length + ' событий, message_stop нет → ответ НЕПОЛНЫЙ, даже если текст выглядит связным. Нет stop_reason и финального usage. Докачать нельзя: повторяем запрос целиком (backoff), частичный текст помечаем.';
+    } else {
+      const d = document.createElement('div'); d.style.color = 'var(--warn)'; d.textContent = '✕ context canceled: клиент закрыл соединение';
+      log.append(d);
+      ro.textContent = '✕ Отмена через context: соединение закрыто, генерация остановлена. Уже сгенерированные токены закладывайте в стоимость. В Go: прокиньте r.Context() хэндлера до вызова SDK.';
+    }
+  }
+  document.getElementById('sse-run').onclick = run;
+  document.getElementById('sse-drop').onclick = () => interrupt('dropped');
+  document.getElementById('sse-cancel').onclick = () => interrupt('canceled');
+  Course.bindRange(speedIn, v => v + '×', v => {
+    if (state === 'running') { const nowT = (performance.now() - startWall) * speed; speed = v; startWall = performance.now() - nowT / speed; } else speed = v;
+  });
+  drawTimeline(null);
+})();
+
+/* ---------- 2. Tool calling ---------- */
+(function () {
+  const svg = document.getElementById('tool-svg');
+  const ro = document.getElementById('tool-readout');
+  const stepEl = document.getElementById('tool-step');
+  const LANES = [{ x: 90, name: 'Клиент (Go)' }, { x: 320, name: 'Модель (API)' }, { x: 550, name: 'Инструменты' }];
+  const C = 0, M = 1, T = 2;
+  const STEPS = [
+    { arrows: [[C, M, 'POST /v1/messages: user + tools[2]']], text: 'Клиент отправляет историю и описания инструментов get_weather, search_flights.\n{"messages":[{"role":"user","content":"Погода в Берлине и Париже и есть ли билеты BER→CDG на завтра?"}],\n "tools":[{"name":"get_weather",…},{"name":"search_flights",…}]}' },
+    { arrows: [[M, C, 'stop_reason: tool_use · 3 × tool_use']], text: 'Модель решает вызвать три инструмента СРАЗУ (параллельные вызовы):\ncontent: [text "Проверю погоду и билеты",\n  tool_use{id:"tu_1", name:"get_weather", input:{"city":"Berlin"}},\n  tool_use{id:"tu_2", name:"get_weather", input:{"city":"Paris"}},\n  tool_use{id:"tu_3", name:"search_flights", input:{"from":"BER","to":"CDG","date":"2026-09-28"}}]\nКлиент добавляет этот ответ в историю как есть (resp.ToParam()).' },
+    { arrows: [[C, T, 'get_weather(Berlin)'], [C, T, 'get_weather(Paris)'], [C, T, 'search_flights(BER→CDG)']], par: true, text: 'errgroup: три горутины, SetLimit(4), у каждой свой таймаут 15 с. Модель не ждёт — ждёт ваш код; параллельность снижает латентность хода с суммы до максимума.' },
+    { arrows: [[T, C, '☀ 18°C'], [T, C, '☁ 14°C, дождь'], [T, C, '✗ timeout 15s', true]], par: true, text: 'Два инструмента ответили, search_flights упал по таймауту. Это НЕ причина ронять цикл: ошибка станет данными для модели.' },
+    { arrows: [[C, M, 'user: 3 × tool_result (1 × is_error)']], text: 'ОДНО user-сообщение со всеми результатами, порядок и tool_use_id сохранены:\n[{type:"tool_result", tool_use_id:"tu_1", content:"18°C, ясно"},\n {type:"tool_result", tool_use_id:"tu_2", content:"14°C, дождь"},\n {type:"tool_result", tool_use_id:"tu_3", is_error:true,\n  content:"timeout: провайдер билетов не ответил за 15с, можно повторить"}]' },
+    { arrows: [[M, C, 'tool_use: search_flights (повтор)']], text: 'Модель видит ошибку и адаптируется: повторяет поиск (здесь — с расширенным окном дат).\ntool_use{id:"tu_4", name:"search_flights", input:{"from":"BER","to":"CDG","date":"2026-09-28","flex_days":1}}' },
+    { arrows: [[C, T, 'search_flights(BER→CDG, ±1)']], text: 'Клиент исполняет один вызов.' },
+    { arrows: [[T, C, '3 рейса, от 89 €']], text: 'Инструмент вернул компактный результат (не 5 000 токенов сырого JSON провайдера — только нужные поля).' },
+    { arrows: [[C, M, 'user: tool_result (tu_4)']], text: 'Результат уходит модели. История теперь: user → assistant(3 tool_use) → user(3 tool_result) → assistant(tool_use) → user(tool_result).' },
+    { arrows: [[M, C, 'stop_reason: end_turn · ответ']], text: 'end_turn — цикл завершён. Модель собирает ответ: «В Берлине 18°C и ясно, в Париже 14°C и дождь. На завтра есть 3 рейса BER→CDG от 89 €».\nИтого: 3 вызова API, 4 вызова инструментов, 1 ошибка обработана без участия пользователя.' },
+  ];
+  let cur = 0;
+  function draw() {
+    svg.innerHTML = '';
+    const S = (tag, a, p) => { if (tag === 'text' && a.fill) a.style = 'fill:' + a.fill; return Course.svg(tag, a, p); };
+    const H = 520;
+    LANES.forEach(l => {
+      S('rect', { x: l.x - 70, y: 6, width: 140, height: 28, rx: 6, fill: 'var(--bg-soft)', stroke: 'var(--border)' }, svg);
+      S('text', { x: l.x, y: 25, 'font-size': 13, 'font-weight': 700, 'text-anchor': 'middle' }, svg).textContent = l.name;
+      S('line', { x1: l.x, y1: 34, x2: l.x, y2: H - 6, stroke: 'var(--border)', 'stroke-dasharray': '4 4' }, svg);
+    });
+    let y = 56;
+    STEPS.forEach((st, si) => {
+      if (si > cur) return;
+      const active = si === cur;
+      const y0 = y;
+      st.arrows.forEach(a => {
+        const [f, t, label, err] = a;
+        const x1 = LANES[f].x, x2 = LANES[t].x, dir = x2 > x1 ? 1 : -1;
+        const col = err ? 'var(--bad)' : active ? 'var(--accent)' : 'var(--muted)';
+        S('line', { x1: x1 + dir * 4, y1: y, x2: x2 - dir * 8, y2: y, stroke: col, 'stroke-width': active ? 2.2 : 1.2 }, svg);
+        S('path', { d: 'M' + (x2 - dir * 2) + ' ' + y + ' l' + (-dir * 9) + ' -5 v10 z', fill: col }, svg);
+        const tx = S('text', { x: (x1 + x2) / 2, y: y - 5, 'font-size': 11, 'text-anchor': 'middle', 'font-weight': active ? 700 : 400 }, svg);
+        tx.textContent = label;
+        if (!active) tx.style.fill = 'var(--muted)';
+        if (err) tx.style.fill = 'var(--bad)';
+        y += st.par ? 24 : 36;
+      });
+      S('text', { x: 6, y: y0 + 4, 'font-size': 10, fill: 'var(--muted)' }, svg).textContent = String(si + 1);
+      if (st.par) {
+        S('rect', { x: LANES[C].x - 4, y: y0 - 16, width: 8, height: y - y0 - 4, rx: 3, fill: 'var(--teal-soft)', stroke: 'var(--teal)' }, svg);
+        S('text', { x: LANES[C].x - 10, y: y0 + 26, 'font-size': 10, 'text-anchor': 'end', fill: 'var(--teal)' }, svg).textContent = 'errgroup';
+        y += 10;
+      }
+    });
+    ro.textContent = STEPS[cur].text;
+    stepEl.textContent = 'шаг ' + (cur + 1) + ' из ' + STEPS.length;
+    document.getElementById('tool-prev').disabled = cur === 0;
+    document.getElementById('tool-next').disabled = cur === STEPS.length - 1;
+  }
+  document.getElementById('tool-prev').onclick = () => { if (cur > 0) { cur--; draw(); } };
+  document.getElementById('tool-next').onclick = () => { if (cur < STEPS.length - 1) { cur++; draw(); } };
+  document.getElementById('tool-reset').onclick = () => { cur = 0; draw(); };
+  draw();
+})();
+
+/* ---------- 3. Prompt caching ---------- */
+(function () {
+  const MODELS = [
+    { id: 'claude-fable-5-1', name: 'Fable 5.1', in: 10, out: 50 },
+    { id: 'claude-opus-5-5', name: 'Opus 5.5', in: 4, out: 20 },
+    { id: 'claude-opus-5', name: 'Opus 5', in: 5, out: 25 },
+    { id: 'claude-sonnet-5', name: 'Sonnet 5', in: 2, out: 10 },
+    { id: 'claude-haiku-4-5', name: 'Haiku 4.5', in: 1, out: 5 },
+  ];
+  const BLOCKS = [
+    { name: 'tools', sub: '8 инструментов', tok: 3000 },
+    { name: 'system', sub: 'роль + политика', tok: 5000 },
+    { name: 'документ', sub: 'договор в 1-м user', tok: 40000 },
+    { name: 'история', sub: '12 ходов', tok: 8000 },
+    { name: 'вопрос', sub: 'новый ход', tok: 400 },
+  ];
+  const OUT_TOK = 600;
+  const bp = [false, true, true, true]; // breakpoint после блока i
+  let changed = null, cold = false;
+  const svg = document.getElementById('cache-svg');
+  const ro = document.getElementById('cache-readout');
+  const sel = document.getElementById('cache-model');
+  const ttl = document.getElementById('cache-ttl');
+  const btns = document.getElementById('cache-btns');
+  MODELS.forEach((m, i) => { const o = document.createElement('option'); o.value = i; o.textContent = m.name + ' ($' + m.in + '/$' + m.out + ')'; if (m.id === 'claude-opus-5') o.selected = true; sel.append(o); });
+
+  function compute() {
+    let lastBp = -1; bp.forEach((on, i) => { if (on) lastBp = i; });
+    let readUpTo = -1; // индекс последнего блока, который читается из кэша
+    if (!cold) {
+      const lim = changed == null ? Infinity : changed;
+      bp.forEach((on, i) => { if (on && i < lim) readUpTo = i; });
+    }
+    return BLOCKS.map((b, i) => i <= readUpTo ? 'read' : i <= lastBp ? 'write' : 'plain');
+  }
+  function fmt(v) { return '$' + v.toFixed(v < 1 ? 4 : 2); }
+  function draw() {
+    svg.innerHTML = '';
+    const S = (tag, a, p) => { if (tag === 'text' && a.fill) a.style = 'fill:' + a.fill; return Course.svg(tag, a, p); };
+    const st = compute();
+    const m = MODELS[+sel.value];
+    const w = +ttl.value;
+    const total = BLOCKS.reduce((s, b) => s + b.tok, 0);
+    const minW = 70, avail = 600 - minW * BLOCKS.length;
+    let x = 20;
+    const fills = { read: 'var(--ok-soft)', write: 'var(--warn-soft)', plain: 'var(--bg-soft)' };
+    const strokes = { read: 'var(--ok)', write: 'var(--warn)', plain: 'var(--border)' };
+    const xs = [];
+    BLOCKS.forEach((b, i) => {
+      const bw = minW + avail * Math.sqrt(b.tok / total) / BLOCKS.reduce((s, c) => s + Math.sqrt(c.tok / total), 0);
+      xs.push([x, bw]);
+      S('rect', { x: x, y: 40, width: bw - 4, height: 60, rx: 6, fill: fills[st[i]], stroke: changed === i ? 'var(--bad)' : strokes[st[i]], 'stroke-width': changed === i ? 3 : 1.5 }, svg);
+      S('text', { x: x + (bw - 4) / 2, y: 62, 'font-size': 12, 'font-weight': 700, 'text-anchor': 'middle' }, svg).textContent = b.name;
+      S('text', { x: x + (bw - 4) / 2, y: 78, 'font-size': 10, 'text-anchor': 'middle', fill: 'var(--muted)' }, svg).textContent = b.sub;
+      S('text', { x: x + (bw - 4) / 2, y: 93, 'font-size': 10, 'text-anchor': 'middle', fill: 'var(--muted)' }, svg).textContent = (b.tok / 1000) + 'K ток.';
+      const lab = { read: 'чтение 0.1×', write: 'запись ' + w + '×', plain: 'input 1×' }[st[i]];
+      S('text', { x: x + (bw - 4) / 2, y: 118, 'font-size': 11, 'text-anchor': 'middle', fill: strokes[st[i]] === 'var(--border)' ? 'var(--muted)' : strokes[st[i]] }, svg).textContent = changed === i ? '✎ ' + lab : lab;
+      x += bw;
+    });
+    // breakpoints
+    bp.forEach((on, i) => {
+      const bx = xs[i][0] + xs[i][1] - 2;
+      const g = S('g', { style: 'cursor:pointer', role: 'button', tabindex: 0, 'aria-label': 'breakpoint после блока ' + BLOCKS[i].name }, svg);
+      S('line', { x1: bx, y1: 22, x2: bx, y2: 104, stroke: on ? 'var(--accent)' : 'var(--border)', 'stroke-width': on ? 2 : 1, 'stroke-dasharray': on ? '' : '3 3' }, g);
+      S('path', { d: 'M' + bx + ' 14 h14 l-4 5 l4 5 h-14 z', fill: on ? 'var(--accent)' : 'var(--bg-soft)', stroke: 'var(--accent)' }, g);
+      S('rect', { x: bx - 8, y: 8, width: 28, height: 100, fill: 'transparent' }, g);
+      const toggle = () => { bp[i] = !bp[i]; draw(); };
+      g.addEventListener('click', toggle);
+      g.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+    });
+    S('text', { x: 20, y: 146, 'font-size': 11, fill: 'var(--muted)' }, svg).textContent = 'порядок префикса: tools → system → messages · флажок = cache_control (кликабелен), включено ' + bp.filter(Boolean).length + ' из 4';
+    S('text', { x: 20, y: 162, 'font-size': 11, fill: 'var(--muted)' }, svg).textContent = cold ? 'холодный старт: кэша ещё нет, всё до последнего флажка записывается' : changed == null ? 'тёплый кэш: префикс совпадает с прошлым запросом' : 'изменён блок «' + BLOCKS[changed].name + '» → он и всё правее до последнего флажка перезаписываются';
+
+    // cost
+    const P = m.in / 1e6;
+    let read = 0, write = 0, plain = 0;
+    BLOCKS.forEach((b, i) => { if (st[i] === 'read') read += b.tok; else if (st[i] === 'write') write += b.tok; else plain += b.tok; });
+    const outCost = OUT_TOK * m.out / 1e6;
+    const withC = read * P * 0.1 + write * P * w + plain * P + outCost;
+    const noC = total * P + outCost;
+    const diff = (1 - withC / noC) * 100;
+    ro.textContent =
+      'Модель ' + m.name + ', вход ' + total.toLocaleString('ru') + ' ток., выход ' + OUT_TOK + ' ток.\n' +
+      'чтение кэша: ' + read.toLocaleString('ru') + ' · запись: ' + write.toLocaleString('ru') + ' · обычный input: ' + plain.toLocaleString('ru') + '\n' +
+      'БЕЗ кэша: ' + fmt(noC) + '   С кэшем: ' + fmt(withC) + '   ' + (diff >= 0 ? 'экономия ' + diff.toFixed(0) + '%' : 'ДОРОЖЕ на ' + (-diff).toFixed(0) + '% (платим за запись)') + '\n' +
+      (cold || write > 0 ? 'Запись окупится, если этот префикс прочитают хотя бы ' + (w === 2 ? '2 раза' : '1 раз') + ' в пределах TTL.' : 'Всё до последнего флажка прочитано из кэша — ещё и TTFT заметно ниже.');
+    [...btns.children].forEach((b, i) => b.classList.toggle('on', changed === i));
+  }
+  BLOCKS.forEach((b, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'btn'; btn.type = 'button'; btn.textContent = '✎ изменить: ' + b.name;
+    btn.onclick = () => { cold = false; changed = changed === i ? null : i; draw(); };
+    btns.append(btn);
+  });
+  document.getElementById('cache-cold').onclick = () => { cold = true; changed = null; draw(); };
+  document.getElementById('cache-reset').onclick = () => { cold = false; changed = null; draw(); };
+  sel.onchange = draw; ttl.onchange = draw;
+  draw();
+})();
+
+/* ---------- 4. Калькулятор ---------- */
+(function () {
+  const MODELS = [
+    { name: 'Fable 5.1', in: 10, out: 50 },
+    { name: 'Opus 5.5', in: 4, out: 20 },
+    { name: 'Opus 5', in: 5, out: 25 },
+    { name: 'Sonnet 5', in: 2, out: 10 },
+    { name: 'Haiku 4.5', in: 1, out: 5 },
+  ];
+  const HAIKU = 4;
+  const RPD = [100, 300, 1000, 3000, 10000, 30000, 100000, 300000, 1000000];
+  const IN = [200, 500, 1000, 2000, 4000, 8000, 16000, 32000, 64000, 128000, 200000];
+  const OUT = [50, 100, 200, 400, 800, 1500, 3000, 6000, 12000];
+  const $ = id => document.getElementById(id);
+  const sel = $('c-model');
+  MODELS.forEach((m, i) => { const o = document.createElement('option'); o.value = i; o.textContent = m.name; if (i === 2) o.selected = true; sel.append(o); });
+  const svg = $('calc-svg'), ro = $('calc-readout');
+  const v = {};
+  const n = x => x >= 1000 ? (x / 1000) + 'K' : String(x);
+  function money(x) { return x >= 1e6 ? '$' + (x / 1e6).toFixed(2) + 'M' : x >= 1e4 ? '$' + Math.round(x / 1e3) + 'K' : '$' + Math.round(x).toLocaleString('ru'); }
+  function perReq(m, cfg) {
+    const P = m.in / 1e6;
+    const cached = cfg.inTok * cfg.share, fresh = cfg.inTok - cached;
+    const inCost = fresh * P + cached * P * (cfg.hit * 0.1 + (1 - cfg.hit) * 1.25);
+    return { inCost, outCost: cfg.outTok * m.out / 1e6 };
+  }
+  function monthly(m, cfg) {
+    const r = perReq(m, cfg);
+    return (r.inCost + r.outCost) * cfg.rpd * 30 * (1 - 0.5 * cfg.batch);
+  }
+  function draw() {
+    const cfg = { rpd: RPD[v.rpd], inTok: IN[v.in], outTok: OUT[v.out], share: v.share / 100, hit: v.hit / 100, batch: v.batch / 100, route: v.route / 100 };
+    const main = MODELS[+sel.value];
+    const rows = MODELS.map(m => ({ name: 'всё на ' + m.name, cost: monthly(m, cfg), sel: m === main }));
+    const mix = (1 - cfg.route) * monthly(main, cfg) + cfg.route * monthly(MODELS[HAIKU], cfg);
+    const noOpt = monthly(main, Object.assign({}, cfg, { share: 0, batch: 0 }));
+    rows.push({ name: 'ваш микс', cost: mix, mix: true });
+    const max = Math.max(...rows.map(r => r.cost), 1);
+    svg.innerHTML = '';
+    const S = (tag, a, p) => { if (tag === 'text' && a.fill) a.style = 'fill:' + a.fill; return Course.svg(tag, a, p); };
+    rows.forEach((r, i) => {
+      const y = 12 + i * 36;
+      S('text', { x: 4, y: y + 17, 'font-size': 12, 'font-weight': r.sel || r.mix ? 700 : 400 }, svg).textContent = r.name;
+      S('rect', { x: 130, y: y + 2, width: 400, height: 22, rx: 4, fill: 'var(--bg-soft)' }, svg);
+      S('rect', { x: 130, y: y + 2, width: Math.max(2, 400 * r.cost / max), height: 22, rx: 4, fill: r.mix ? 'var(--ok)' : r.sel ? 'var(--accent)' : 'var(--violet-soft)', stroke: r.sel ? 'var(--accent)' : 'none' }, svg);
+      S('text', { x: 536, y: y + 18, 'font-size': 12, 'font-weight': 700 }, svg).textContent = money(r.cost);
+    });
+    const r = perReq(main, cfg);
+    const outShare = r.outCost / (r.inCost + r.outCost) * 100;
+    ro.textContent =
+      cfg.rpd.toLocaleString('ru') + ' запросов/день × 30 дн. · вход ' + cfg.inTok.toLocaleString('ru') + ' · выход ' + cfg.outTok.toLocaleString('ru') + ' ток.\n' +
+      main.name + ' без кэша и batch: ' + money(noOpt) + '/мес → с вашими настройками (без роутинга): ' + money(monthly(main, cfg)) + '\n' +
+      'ваш микс (' + Math.round(cfg.route * 100) + '% на Haiku): ' + money(mix) + '/мес · экономия ' + Math.max(0, (1 - mix / noOpt) * 100).toFixed(0) + '% к наивному варианту\n' +
+      'доля output в стоимости запроса: ' + outShare.toFixed(0) + '%' + (outShare > 50 ? ' → главный рычаг — длина ответа, а не промпт' : ' → главный рычаг — вход: кэш и размер контекста') +
+      (cfg.batch > 0 ? '\nbatch: эти ' + Math.round(cfg.batch * 100) + '% ответов придут в течение до 24 ч, не для интерактива' : '') +
+      (cfg.route > 0 ? '\nроутинг: закладывайте evals по сегментам — ошибка роутера = сложный запрос на слабой модели' : '');
+  }
+  Course.bindRange($('c-rpd'), i => n(RPD[i]), x => { v.rpd = x; if (v.ready) draw(); });
+  Course.bindRange($('c-in'), i => n(IN[i]), x => { v.in = x; if (v.ready) draw(); });
+  Course.bindRange($('c-out'), i => n(OUT[i]), x => { v.out = x; if (v.ready) draw(); });
+  Course.bindRange($('c-share'), x => x + '%', x => { v.share = x; if (v.ready) draw(); });
+  Course.bindRange($('c-hit'), x => x + '%', x => { v.hit = x; if (v.ready) draw(); });
+  Course.bindRange($('c-batch'), x => x + '%', x => { v.batch = x; if (v.ready) draw(); });
+  Course.bindRange($('c-route'), x => x + '%', x => { v.route = x; if (v.ready) draw(); });
+  sel.onchange = draw;
+  v.ready = true;
+  draw();
+})();
+</script>
+</body>
+</html>

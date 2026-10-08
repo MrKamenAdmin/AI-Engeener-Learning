@@ -34,10 +34,13 @@
     <div class="eyebrow">Модуль 1</div>
     <h1>Как работают LLM</h1>
     <p class="lead">Модуль про внутреннее устройство LLM в том объёме, который нужен инженеру продукта. Разберём токены и BPE, attention, сэмплинг, эмбеддинги, этапы обучения, KV-cache и квантизацию, а в конце посчитаем, сколько стоит длинный контекст и reasoning. Этого хватит, чтобы объяснять счёт за API, латентность и галлюцинации цифрами, без ссылок на «магию».</p>
-    <div class="meta-row"><span class="chip">≈ 10 часов</span><span class="chip">Go + Python</span><span class="chip">8 интерактивных визуализаций</span><span class="chip">цены на сентябрь 2026</span></div>
+    <div class="meta-row"><span class="chip">≈ 10 часов</span><span class="chip"><span data-only="go">Go</span><span data-only="java">Java</span> + Python</span><span class="chip">8 интерактивных визуализаций</span><span class="chip">цены на сентябрь 2026</span></div>
   </div>
 
-  <div class="callout go"><span class="title">Как читать этот модуль Go-разработчику</span>
+  <div class="callout go" data-only="java"><span class="title">Как читать этот модуль Java-разработчику</span>
+    <p>Относитесь к LLM как к чистой функции <code>float[] f(int[] tokens)</code>. Она принимает последовательность целых чисел и возвращает вектор логитов, по одному на каждый токен словаря. Всё остальное (чат, tool use, «рассуждения») собрано поверх этой функции циклом <code>for</code> и сэмплером. От понимания этой функции и цикла зависят стоимость, латентность и режимы отказов вашего продукта.</p>
+  </div>
+  <div class="callout go" data-only="go"><span class="title">Как читать этот модуль Go-разработчику</span>
     <p>Относитесь к LLM как к чистой функции <code>f(tokens []int) []float32</code>. Она принимает последовательность целых чисел и возвращает вектор логитов, по одному на каждый токен словаря. Всё остальное (чат, tool use, «рассуждения») собрано поверх этой функции циклом <code>for</code> и сэмплером. От понимания этой функции и цикла зависят стоимость, латентность и режимы отказов вашего продукта.</p>
   </div>
 
@@ -58,7 +61,7 @@
 
   <div class="viz" id="viz-bpe">
     <p class="viz-title">Песочница BPE</p>
-    <p class="viz-sub">Учебный BPE. Он обучается прямо в браузере на встроенном корпусе примерно из 5 КБ текста (≈ 65% английского, 20% русского, 15% Go-кода). <b>Это не токенизатор Claude или GPT</b>: у настоящих словарь в сотни раз больше, а корпус в миллиарды раз. Механика при этом та же. Двигайте ползунок слияний и смотрите, как текст «склеивается». Есть два режима базовых единиц. В режиме <b>байтов UTF-8</b> (как у GPT-2/4 и o200k) кириллическая буква изначально стоит 2 токена, а токены могут резать букву пополам: такие показаны шестнадцатеричными байтами в красной пунктирной рамке. В режиме <b>символов с byte fallback</b> (как SentencePiece в Llama 2) незнакомые символы, например эмодзи, распадаются на байты <code>&lt;0xF0&gt;…</code>.</p>
+    <p class="viz-sub">Учебный BPE. Он обучается прямо в браузере на встроенном корпусе примерно из 5 КБ текста (≈ 65% английского, 20% русского, 15% <span data-only="go">Go</span><span data-only="java">Java</span>-кода). <b>Это не токенизатор Claude или GPT</b>: у настоящих словарь в сотни раз больше, а корпус в миллиарды раз. Механика при этом та же. Двигайте ползунок слияний и смотрите, как текст «склеивается». Есть два режима базовых единиц. В режиме <b>байтов UTF-8</b> (как у GPT-2/4 и o200k) кириллическая буква изначально стоит 2 токена, а токены могут резать букву пополам: такие показаны шестнадцатеричными байтами в красной пунктирной рамке. В режиме <b>символов с byte fallback</b> (как SentencePiece в Llama 2) незнакомые символы, например эмодзи, распадаются на байты <code>&lt;0xF0&gt;…</code>.</p>
     <textarea id="bpe-in" rows="4" aria-label="Текст для токенизации">The model reads tokens, not words. Модель читает токены, а не слова.
 func main() { fmt.Println(12345 + 67890) }</textarea>
     <div class="controls">
@@ -67,7 +70,7 @@ func main() { fmt.Println(12345 + 67890) }</textarea>
       <span class="btn-group">
         <button class="btn" type="button" data-sample="en">Английский</button>
         <button class="btn" type="button" data-sample="ru">Русский</button>
-        <button class="btn" type="button" data-sample="code">Go-код</button>
+        <button class="btn" type="button" data-sample="code">Код</button>
         <button class="btn" type="button" data-sample="num">Числа</button>
         <button class="btn" type="button" data-sample="emoji">Эмодзи</button>
       </span>
@@ -103,7 +106,61 @@ func main() { fmt.Println(12345 + 67890) }</textarea>
   <h3>Код: как считать токены на самом деле</h3>
   <p>Токенизатор Claude не опубликован, поэтому локально, как с <code>tiktoken</code>, посчитать нельзя. Для этого есть бесплатный (но с rate limit) эндпоинт <code>POST /v1/messages/count_tokens</code>. Он принимает те же <code>model</code>, <code>system</code>, <code>messages</code>, <code>tools</code>, что и Messages API, и возвращает <code>input_tokens</code>. Документация называет результат оценкой: фактический <code>usage.input_tokens</code> может немного отличаться, потому что провайдер добавляет служебные токены. <code>tiktoken</code> ниже приведён для иллюстрации BPE на открытом словаре OpenAI. Для бюджетов Claude он <b>не подходит</b>.</p>
   <div class="tabs">
-    <div class="tab-panel" data-tab="Go: count_tokens"><pre><code class="lang-go">// Подсчёт токенов через API. Сырой net/http, чтобы видеть эндпоинт;
+    <div class="tab-panel" data-tab="Java: count_tokens" data-only="java"><pre><code class="lang-java">// Подсчёт токенов через API. Сырой java.net.http, чтобы видеть эндпоинт;
+// в проде берите SDK: client.messages().countTokens(MessageCountTokensParams.builder()...build()).
+package tokens;
+
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
+import java.util.List;
+
+public final class Tokens {
+    record Msg(String role, String content) {}
+
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    record CountReq(String model, String system, List&lt;Msg&gt; messages) {}
+
+    record CountResp(int input_tokens) {}
+
+    private static final ObjectMapper JSON = new ObjectMapper()
+            .configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+    private static final HttpClient HTTP = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(5)).build();
+
+    /** Возвращает число входных токенов для запроса к модели. */
+    public static int count(String model, String system, String user)
+            throws IOException, InterruptedException {
+        byte[] body = JSON.writeValueAsBytes(
+                new CountReq(model, system, List.of(new Msg("user", user))));
+        HttpRequest req = HttpRequest.newBuilder()
+                .uri(URI.create("https://api.anthropic.com/v1/messages/count_tokens"))
+                .timeout(Duration.ofSeconds(10))
+                .header("x-api-key", System.getenv("ANTHROPIC_API_KEY"))
+                .header("anthropic-version", "2023-06-01")
+                .header("content-type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body))
+                .build();
+
+        HttpResponse&lt;String&gt; resp = HTTP.send(req, HttpResponse.BodyHandlers.ofString());
+        if (resp.statusCode() != 200) {
+            throw new IOException("count_tokens: status " + resp.statusCode() + ": " + resp.body());
+        }
+        return JSON.readValue(resp.body(), CountResp.class).input_tokens();
+    }
+
+    // Пример: сравнить EN и RU. Считайте разницу с пустым сообщением,
+    // чтобы вычесть служебные токены шаблона.
+    //   int en = Tokens.count("claude-opus-5", null, "The model reads tokens, not words.");
+    //   int ru = Tokens.count("claude-opus-5", null, "Модель читает токены, а не слова.");
+}
+</code></pre></div>
+    <div class="tab-panel" data-tab="Go: count_tokens" data-only="go"><pre><code class="lang-go">// Подсчёт токенов через API. Сырой net/http, чтобы видеть эндпоинт;
 // в проде берите SDK: client.Messages.CountTokens(ctx, anthropic.MessageCountTokensParams{...}).
 package tokens
 
@@ -200,7 +257,17 @@ for name, text in samples.items():
   <h2 id="generation">Генерация и сэмплинг</h2>
   <h3>Next-token prediction и авторегрессия</h3>
   <p>Модель обучена одной задаче: по префиксу из токенов выдать распределение вероятностей следующего токена. Её выход — вектор <b>логитов</b> (logits) длиной в размер словаря, то есть ненормированных оценок, которые softmax превращает в вероятности. Генерация устроена как цикл:</p>
-  <pre><code class="lang-go">tokens := tokenize(prompt)
+  <pre data-only="java"><code class="lang-java">List&lt;Integer&gt; tokens = tokenize(prompt);
+while (out.size() &lt; maxTokens) {
+    float[] logits = model(tokens);          // один forward pass
+    int next = sample(logits, params);       // temperature / top_k / top_p
+    if (next == EOS || hitsStop(out, next)) {
+        break;
+    }
+    tokens.add(next);                        // авторегрессия: выход становится входом
+    out.add(next);
+}</code></pre>
+  <pre data-only="go"><code class="lang-go">tokens := tokenize(prompt)
 for len(out) &lt; maxTokens {
 	logits := model(tokens)          // один forward pass
 	next := sample(logits, params)   // temperature / top_k / top_p
@@ -295,7 +362,10 @@ for len(out) &lt; maxTokens {
     <div class="readout" id="attn-readout"></div>
   </div>
 
-  <div class="callout go"><span class="title">Аналогия из Go</span>
+  <div class="callout go" data-only="java"><span class="title">Аналогия из Java</span>
+    <p>Слой attention похож на fan-in: каждая позиция (как задача в <code>StructuredTaskScope</code>) читает результаты всех предыдущих одновременно, но с весами. Слой MLP работает как <code>parallelStream().map(...)</code> над независимыми элементами: каждая позиция обрабатывается сама по себе. Стек блоков — это pipeline из N стадий, где на каждой стадии представление токена обогащается контекстом.</p>
+  </div>
+  <div class="callout go" data-only="go"><span class="title">Аналогия из Go</span>
     <p>Слой attention похож на fan-in: каждая горутина-позиция читает из всех предыдущих «каналов» одновременно, но с весами. Слой MLP работает как <code>errgroup</code> с независимыми задачами: каждая позиция обрабатывается сама по себе. Стек блоков — это pipeline из N стадий, где на каждой стадии представление токена обогащается контекстом.</p>
   </div>
   <div class="callout tip"><span class="title">Что сказать на собесе про сложность</span>
@@ -328,7 +398,43 @@ for len(out) &lt; maxTokens {
   </div>
 
   <div class="tabs">
-    <div class="tab-panel" data-tab="Go"><pre><code class="lang-go">package vecs
+    <div class="tab-panel" data-tab="Java" data-only="java"><pre><code class="lang-java">package vecs;
+
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+
+public final class Vecs {
+    /** Косинусное сходство. double-аккумулятор, чтобы не терять точность на 3072 измерениях. */
+    public static double cosine(float[] a, float[] b) {
+        if (a.length != b.length) {
+            throw new IllegalArgumentException("dim mismatch: %d vs %d".formatted(a.length, b.length));
+        }
+        double dot = 0, na = 0, nb = 0;
+        for (int i = 0; i &lt; a.length; i++) {
+            double x = a[i], y = b[i];
+            dot += x * y;
+            na += x * x;
+            nb += y * y;
+        }
+        if (na == 0 || nb == 0) throw new IllegalArgumentException("zero vector");
+        return dot / (Math.sqrt(na) * Math.sqrt(nb));
+    }
+
+    public record Hit(String id, double score) {}
+
+    // topK — брутфорс-поиск. Для 100K векторов × 1536 это ~150M умножений,
+    // единицы-десятки миллисекунд. Дальше нужен ANN-индекс (HNSW, модуль 5).
+    public static List&lt;Hit&gt; topK(float[] q, Map&lt;String, float[]&gt; docs, int k) {
+        List&lt;Hit&gt; hits = new ArrayList&lt;&gt;(docs.size());
+        docs.forEach((id, v) -&gt; hits.add(new Hit(id, cosine(q, v))));
+        hits.sort(Comparator.comparingDouble(Hit::score).reversed());
+        return hits.subList(0, Math.min(k, hits.size()));
+    }
+}
+</code></pre></div>
+    <div class="tab-panel" data-tab="Go" data-only="go"><pre><code class="lang-go">package vecs
 
 import (
 	"errors"
@@ -473,7 +579,10 @@ print(idx, sc.round(3))   # 42 будет первым с косинусом ≈
     <div class="card"><h4>Decode</h4><p>По одному токену за шаг. На каждом шаге нужно прочитать из памяти все веса и весь KV-cache ради одного вектора, поэтому шаг ограничен <b>пропускной способностью памяти</b> (memory-bound). Определяет <b>tokens/s</b> или ITL (inter-token latency).</p></div>
   </div>
   <p>Оценка сверху для decode при batch = 1: tokens/s ≈ bandwidth / байты, читаемые на шаг. У 8B-модели в FP16 это 16 ГБ, у H100 около 3.35 ТБ/с, получается потолок ≈ 200 токенов/с. Квантизация до INT4 уменьшает читаемые байты в 4 раза и почти пропорционально ускоряет decode. Батчинг почти бесплатно увеличивает суммарную пропускную способность: веса читаются один раз на весь батч. Поэтому провайдеры держат большие батчи, а скорость отдельного запроса колеблется в зависимости от нагрузки.</p>
-  <div class="callout go"><span class="title">Аналогия из Go и SLO</span>
+  <div class="callout go" data-only="java"><span class="title">Аналогия из Java и SLO</span>
+    <p>TTFT — это время до первого байта ответа (в <code>HttpClient</code> — момент, когда <code>BodyHandler</code> получил первый чанк; в Micrometer это отдельный <code>Timer</code>), tokens/s — это пропускная способность потока. Для чата важнее TTFT: пользователь видит, что «пошло». Для генерации отчёта в фоне важнее tokens/s и цена. Мерить нужно обе метрики отдельно, в перцентилях p50/p95, как любую латентность. Итоговая латентность ≈ TTFT + output_tokens / tokens_per_s.</p>
+  </div>
+  <div class="callout go" data-only="go"><span class="title">Аналогия из Go и SLO</span>
     <p>TTFT — это время до первого байта ответа (как <code>httptrace.GotFirstResponseByte</code>), tokens/s — это пропускная способность потока. Для чата важнее TTFT: пользователь видит, что «пошло». Для генерации отчёта в фоне важнее tokens/s и цена. Мерить нужно обе метрики отдельно, в перцентилях p50/p95, как любую латентность. Итоговая латентность ≈ TTFT + output_tokens / tokens_per_s.</p>
   </div>
 
@@ -598,20 +707,20 @@ print(idx, sc.round(3))   # 42 будет первым с косинусом ≈
   <!-- ===================================================== -->
   <h2 id="practice">Практика</h2>
   <div class="task">
-    <h3>Задание 1: token-бюджетер на Go</h3>
+    <h3>Задание 1: token-бюджетер на <span data-only="go">Go</span><span data-only="java">Java</span></h3>
     <p>Напишите CLI <code>tokbudget</code>. Он читает директорию документов (.md/.txt), считает токены каждого файла через <code>count_tokens</code> и печатает таблицу: файл, символы, токены, символы на токен, стоимость одного прогона в input для Opus 5, Sonnet 5 и Haiku 4.5.</p>
-    <p><b>Критерии готовности:</b> конкурентные запросы через <code>errgroup</code> с лимитом (<code>SetLimit</code>) и ретраями на 429 с учётом <code>retry-after</code>; вычтено «пустое» сообщение (служебные токены); есть сравнение: для 10+ парных документов EN/RU посчитан средний коэффициент RU/EN; итог отражает долю документов, которые не влезают в 200K (окно Haiku).</p>
+    <p><b>Критерии готовности:</b> конкурентные запросы <span data-only="go">через <code>errgroup</code> с лимитом (<code>SetLimit</code>)</span><span data-only="java">на virtual threads с лимитом через <code>Semaphore</code></span> и ретраями на 429 с учётом <code>retry-after</code>; вычтено «пустое» сообщение (служебные токены); есть сравнение: для 10+ парных документов EN/RU посчитан средний коэффициент RU/EN; итог отражает долю документов, которые не влезают в 200K (окно Haiku).</p>
     <label class="check"><input type="checkbox" data-save="m01-t1"> Сделал и записал коэффициент RU/EN для своего домена</label>
   </div>
   <div class="task">
     <h3>Задание 2: сэмплинг своими руками</h3>
-    <p>Поднимите локальную open-source модель (Ollama или vLLM, например 3–8B) и получите logprobs для 20 top-токенов следующего шага. Реализуйте на Python или Go функцию <code>sample(logits, T, top_k, top_p)</code> в том же порядке, что в визуализации, и сравните с сэмплингом движка по гистограмме из 1000 запусков.</p>
+    <p>Поднимите локальную open-source модель (Ollama или vLLM, например 3–8B) и получите logprobs для 20 top-токенов следующего шага. Реализуйте на Python или <span data-only="go">Go</span><span data-only="java">Java</span> функцию <code>sample(logits, T, top_k, top_p)</code> в том же порядке, что в визуализации, и сравните с сэмплингом движка по гистограмме из 1000 запусков.</p>
     <p><b>Критерии готовности:</b> гистограммы совпадают в пределах статистического шума; есть график энтропии в зависимости от T; вы можете объяснить, почему при T=0 и повторных запусках ответ всё равно иногда меняется.</p>
     <label class="check"><input type="checkbox" data-save="m01-t2"> Сделал</label>
   </div>
   <div class="task">
     <h3>Задание 3: мини-поиск на эмбеддингах</h3>
-    <p>Возьмите 200–500 абзацев своей документации, получите эмбеддинги (Voyage, OpenAI или локальная multilingual-e5), сохраните их в файл и реализуйте на Go поиск top-5 по косинусу (код выше). Составьте 20 запросов с известным правильным абзацем.</p>
+    <p>Возьмите 200–500 абзацев своей документации, получите эмбеддинги (Voyage, OpenAI или локальная multilingual-e5), сохраните их в файл и реализуйте на <span data-only="go">Go</span><span data-only="java">Java</span> поиск top-5 по косинусу (код выше). Составьте 20 запросов с известным правильным абзацем.</p>
     <p><b>Критерии готовности:</b> посчитан recall@5; найдены и описаны минимум 3 ошибки поиска (многозначность, опечатка, запрос на другом языке); измерено распределение косинусов для релевантных и нерелевантных пар и выбран порог отсечения по данным.</p>
     <label class="check"><input type="checkbox" data-save="m01-t3"> Сделал</label>
   </div>

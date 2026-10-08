@@ -14,9 +14,9 @@
 </header>
 <main class="content" style="margin:0 auto">
   <section class="hero">
-    <div class="module-hero"><div class="eyebrow">Курс для Go-разработчика</div></div>
+    <div class="module-hero"><div class="eyebrow">Курс для <span data-only="go">Go</span><span data-only="java">Java</span>-разработчика · стек выбирается переключателем Go / Java вверху</div></div>
     <h1>Прикладной AI engineer: до уровня сеньора</h1>
-    <p class="lead muted">Как строить продукты поверх готовых LLM: API, RAG, агенты и MCP, context engineering, безопасность, evals, продакшн, свои модели, данные и governance — и как принимать и защищать архитектурные решения на уровне сеньора. Без исследовательской математики, но с компромиссами, режимами отказов, цифрами по стоимости и латентности и вопросами с собеседований. Примеры кода на Go, а там, где экосистема живёт в Python, на Python. Финал — капстоун-проект с измеримыми критериями приёмки.</p>
+    <p class="lead muted">Как строить продукты поверх готовых LLM: API, RAG, агенты и MCP, context engineering, безопасность, evals, продакшн, свои модели, данные и governance — и как принимать и защищать архитектурные решения на уровне сеньора. Без исследовательской математики, но с компромиссами, режимами отказов, цифрами по стоимости и латентности и вопросами с собеседований. Примеры кода на <span data-only="go">Go</span><span data-only="java">Java</span>, а там, где экосистема живёт в Python, на Python. Финал — капстоун-проект с измеримыми критериями приёмки.</p>
     <div class="progress-big"><i></i></div>
     <p class="muted" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><span id="progress-text"></span> <button class="btn" id="progress-reset" type="button">Сбросить прогресс</button></p>
   </section>
@@ -26,7 +26,7 @@
 
   <h2 id="how">Как проходить</h2>
   <div class="grid">
-    <div class="card"><h4>Структура модуля</h4><p>Теория, интерактивные схемы, код на Go/Python, практическое задание, вопросы для самопроверки (ответы под спойлером) и вопросы с собеседований.</p></div>
+    <div class="card"><h4>Структура модуля</h4><p>Теория, интерактивные схемы, код на <span data-only="go">Go</span><span data-only="java">Java</span>/Python, практическое задание, вопросы для самопроверки (ответы под спойлером) и вопросы с собеседований.</p></div>
     <div class="card"><h4>Темп</h4><p>Около 20 недель по 8–10 часов (≈ 185 часов). Модули 0–4 идут за 3–4 недели, RAG, агенты, безопасность, evals, продакшн и свои модели — по 1–2 недели каждый, параллельно с ними идут сквозные проекты. Последние 3 недели — капстоун. Факультатив «Голос и vision» — ещё около 6 часов.</p></div>
     <div class="card"><h4>Прогресс</h4><p>Отметки «пройден» и чекбоксы заданий хранятся в localStorage этого браузера. Если очистить данные сайта, они пропадут.</p></div>
     <div class="card"><h4>Цены и модели</h4><p>Цифры по моделям и тарифам указаны на момент написания: сентябрь 2026, новые модули — октябрь 2026. Перед решениями сверяйтесь с документацией провайдера: цены и линейки моделей меняются часто.</p></div>
@@ -48,7 +48,7 @@
       </g>
       <path d="M195,195 L195,268" stroke="var(--muted)" stroke-width="1.5" fill="none" stroke-dasharray="4 4" marker-end="url(#arr)"/>
       <g font-size="12.5" text-anchor="middle">
-        <rect x="10" y="145" width="100" height="50" rx="8" fill="var(--teal-soft)" stroke="var(--teal)"/><text x="60" y="175">0 · Go → AI</text>
+        <rect x="10" y="145" width="100" height="50" rx="8" fill="var(--teal-soft)" stroke="var(--teal)"/><text x="60" y="175" data-only="go">0 · Go → AI</text><text x="60" y="175" data-only="java">0 · Java → AI</text>
         <rect x="140" y="145" width="110" height="50" rx="8" fill="var(--accent-soft)" stroke="var(--accent)"/><text x="195" y="166">1 · LLM внутри</text><text x="195" y="183">2 · API</text>
         <rect x="280" y="75" width="110" height="50" rx="8" fill="var(--accent-soft)" stroke="var(--accent)"/><text x="335" y="105">3 · Промпты</text>
         <rect x="280" y="215" width="110" height="50" rx="8" fill="var(--accent-soft)" stroke="var(--accent)"/><text x="335" y="245">4 · Инструменты</text>

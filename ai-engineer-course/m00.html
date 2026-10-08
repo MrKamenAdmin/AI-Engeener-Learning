@@ -17,9 +17,10 @@
 <main class="content">
   <div class="module-hero">
     <div class="eyebrow">Модуль 0 · вводный</div>
-    <h1>Что Go-разработчик уже умеет и как это переносится</h1>
-    <p class="lead">Процентов шестьдесят работы прикладного AI engineer — это обычный бэкенд: конкурентность, ретраи, лимиты, наблюдаемость, хранилища, тесты. Разберём, что из вашего Go-опыта переносится один в один, что меняет смысл (тесты превращаются в evals, логи — в учёт токенов) и что придётся учить с нуля.</p>
-    <div class="meta-row"><span class="chip">≈ 4 часа</span><span class="chip">Go + немного Python</span><span class="chip">3 визуализации</span><span class="chip">актуально на сентябрь 2026</span></div>
+    <h1 data-only="go">Что Go-разработчик уже умеет и как это переносится</h1>
+    <h1 data-only="java">Что Java-разработчик уже умеет и как это переносится</h1>
+    <p class="lead">Процентов шестьдесят работы прикладного AI engineer — это обычный бэкенд: конкурентность, ретраи, лимиты, наблюдаемость, хранилища, тесты. Разберём, что из вашего <span data-only="go">Go</span><span data-only="java">Java</span>-опыта переносится один в один, что меняет смысл (тесты превращаются в evals, логи — в учёт токенов) и что придётся учить с нуля.</p>
+    <div class="meta-row"><span class="chip">≈ 4 часа</span><span class="chip"><span data-only="go">Go</span><span data-only="java">Java</span> + немного Python</span><span class="chip">3 визуализации</span><span class="chip">актуально на сентябрь 2026</span></div>
   </div>
 
   <h2 id="diff">Чем AI engineering отличается от бэкенда</h2>
@@ -50,10 +51,11 @@
   </div>
 
   <h2 id="map">Карта переноса навыков</h2>
-  <p>Ниже — сопоставление того, что вы уже делаете в Go-сервисах, с практиками AI engineering. Кликните на навык слева, чтобы увидеть, во что он превращается, или на практику справа, чтобы увидеть, из чего она растёт. Связи «многие ко многим»: например, <code>context</code> участвует и в параллельных вызовах, и в стриминге.</p>
+  <p data-only="go">Ниже — сопоставление того, что вы уже делаете в Go-сервисах, с практиками AI engineering. Кликните на навык слева, чтобы увидеть, во что он превращается, или на практику справа, чтобы увидеть, из чего она растёт. Связи «многие ко многим»: например, <code>context</code> участвует и в параллельных вызовах, и в стриминге.</p>
+  <p data-only="java">Ниже — сопоставление того, что вы уже делаете в Java-сервисах, с практиками AI engineering. Кликните на навык слева, чтобы увидеть, во что он превращается, или на практику справа, чтобы увидеть, из чего она растёт. Связи «многие ко многим»: например, отмена и таймауты участвуют и в параллельных вызовах, и в стриминге.</p>
 
   <div class="viz" id="viz-map">
-    <p class="viz-title">Навык Go → практика AI engineering</p>
+    <p class="viz-title">Навык <span data-only="go">Go</span><span data-only="java">Java</span> → практика AI engineering</p>
     <p class="viz-sub">Клик или Enter по узлу. Цвет связи: зелёный — переносится почти без изменений, жёлтый — идея та же, смысл меняется, красный — только каркас, содержание новое.</p>
     <svg id="map-svg" viewBox="0 0 560 490" role="img" aria-label="Карта соответствий навыков Go и практик AI engineering"></svg>
     <div class="legend"><span><i style="background:var(--ok)"></i>переносится</span><span><i style="background:var(--warn)"></i>меняет смысл</span><span><i style="background:var(--bad)"></i>учить заново</span></div>
@@ -61,9 +63,10 @@
   </div>
 
   <h2 id="concurrency">Конкурентность → параллельные вызовы</h2>
-  <p>Самый прямой перенос. LLM-вызов — это I/O на секунды, CPU почти не занят. Горутины идеальны: 200 одновременных вызовов стоят несколько мегабайт памяти. Типичные задачи:</p>
+  <p data-only="go">Самый прямой перенос. LLM-вызов — это I/O на секунды, CPU почти не занят. Горутины идеальны: 200 одновременных вызовов стоят несколько мегабайт памяти. Типичные задачи:</p>
+  <p data-only="java">Самый прямой перенос. LLM-вызов — это I/O на секунды, CPU почти не занят. Virtual threads из Java 21 идеальны: 200 одновременных блокирующих вызовов стоят несколько мегабайт памяти, без реактивщины и без пула на 200 платформенных потоков. Типичные задачи:</p>
   <ul>
-    <li><b>Fan-out/fan-in.</b> Суммаризировать 500 документов, классифицировать 10 000 тикетов, прогнать eval-набор. Каждый элемент независим, результат собирается в срез по индексу.</li>
+    <li><b>Fan-out/fan-in.</b> Суммаризировать 500 документов, классифицировать 10 000 тикетов, прогнать eval-набор. Каждый элемент независим, результат собирается в <span data-only="go">срез</span><span data-only="java">массив</span> по индексу.</li>
     <li><b>Parallelization-паттерн из статьи Anthropic «Building effective agents».</b> Sectioning: разные аспекты одной задачи (проверка на безопасность и основной ответ) параллельно. Voting: один и тот же вопрос N раз, берём большинство — дешёвый способ поднять надёжность классификации.</li>
     <li><b>Параллельные tool calls.</b> Модель может вернуть несколько блоков <code>tool_use</code> в одном ответе. Их выполняют конкурентно и возвращают все <code>tool_result</code> одним user-сообщением.</li>
     <li><b>Hedging.</b> Если запрос не ответил за p95, запустить второй и взять тот, что придёт первым. Работает против тяжёлых хвостов латентности, но удваивает стоимость хвоста.</li>
@@ -73,7 +76,7 @@
   <ul>
     <li><b>Лимит конкурентности задаёт не ваш CPU, а rate limit провайдера.</b> У Anthropic три лимита на организацию и модель: RPM (запросы в минуту), ITPM (входные токены в минуту) и OTPM (выходные токены в минуту). Выбить ITPM проще, чем RPM: 50 параллельных запросов по 30K токенов контекста — это 1.5M входных токенов за несколько секунд.</li>
     <li><b>Длинные хвосты латентности.</b> Время ответа пропорционально длине вывода, а длину вывода вы контролируете лишь частично. При fan-out из N вызовов общее время определяет самый медленный — классический «tail at scale».</li>
-    <li><b>Частичный успех часто лучше полного провала.</b> errgroup по умолчанию отменяет всё при первой ошибке. Для батча из 500 документов это неправильно: лучше собрать 497 результатов и 3 ошибки, чем потерять уже оплаченные 497 ответов.</li>
+    <li><b>Частичный успех часто лучше полного провала.</b> <span data-only="go">errgroup по умолчанию отменяет всё при первой ошибке.</span><span data-only="java"><code>StructuredTaskScope.ShutdownOnFailure</code> и самописный fail-fast поверх <code>CompletableFuture</code> отменяют всё при первой ошибке.</span> Для батча из 500 документов это неправильно: лучше собрать 497 результатов и 3 ошибки, чем потерять уже оплаченные 497 ответов.</li>
   </ul>
 
   <div class="viz" id="viz-fanout">
@@ -92,11 +95,90 @@
 
   <p>Что видно на модели. При K ≥ N общее время равно максимальной длительности, а не сумме: 12 вызовов по 4 с укладываются примерно в 6–8 с вместо ~48. Увеличение разброса бьёт именно по параллельному варианту: он ждёт самый медленный вызов. При K &lt; N время примерно ⌈N/K⌉ × средняя латентность, и выгода от K растёт почти линейно до упора в rate limit провайдера. В проде K подбирают так, чтобы <code>K × (токены на запрос) × (запросов в минуту на один слот)</code> укладывалось в ITPM с запасом.</p>
 
-  <h3>Код: errgroup + semaphore + context</h3>
-  <p>Классическая схема: общий дедлайн на операцию, отдельный таймаут на вызов, ограничение одновременных вызовов, запись результата по индексу (без мьютекса, каждая горутина пишет в свой элемент).</p>
+  <h3 data-only="go">Код: errgroup + semaphore + context</h3>
+  <h3 data-only="java">Код: virtual threads + Semaphore + дедлайн</h3>
+  <p data-only="go">Классическая схема: общий дедлайн на операцию, отдельный таймаут на вызов, ограничение одновременных вызовов, запись результата по индексу (без мьютекса, каждая горутина пишет в свой элемент).</p>
+  <p data-only="java">Классическая схема: общий дедлайн на операцию, отдельный таймаут на вызов, ограничение одновременных вызовов, запись результата по индексу (без блокировок, каждый поток пишет в свой элемент массива). <code>ExecutorCompletionService</code> отдаёт задачи в порядке завершения, поэтому первая же ошибка отменяет остальные, а не ждёт своей очереди.</p>
 
   <div class="tabs">
-    <div class="tab-panel" data-tab="Go"><pre><code class="lang-go">package fanout
+    <div class="tab-panel" data-tab="Java" data-only="java"><pre><code class="lang-java">package fanout;
+
+import com.anthropic.client.AnthropicClient;
+import com.anthropic.core.RequestOptions;
+import com.anthropic.models.messages.Message;
+import com.anthropic.models.messages.MessageCreateParams;
+import com.anthropic.models.messages.TextBlock;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.*;
+import java.util.stream.Collectors;
+
+public final class FanOut {
+    public record Result(String text, long inputTokens, long outputTokens) {}
+
+    private static final RequestOptions PER_CALL = RequestOptions.builder()
+            .timeout(Duration.ofSeconds(45)) // таймаут одного вызова
+            .build();
+
+    /**
+     * Делает docs.size() вызовов, не более maxInFlight одновременно.
+     * Fail-fast: первая ошибка прерывает остальные вызовы.
+     */
+    public static List&lt;Result&gt; summarize(AnthropicClient client, List&lt;String&gt; docs, int maxInFlight)
+            throws InterruptedException, ExecutionException, TimeoutException {
+        long deadline = System.nanoTime() + Duration.ofMinutes(2).toNanos(); // бюджет на всю операцию
+        Semaphore sem = new Semaphore(maxInFlight);
+        Result[] results = new Result[docs.size()]; // каждый поток пишет только в свой индекс
+
+        try (ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            var done = new ExecutorCompletionService&lt;Void&gt;(pool);
+            List&lt;Future&lt;Void&gt;&gt; tasks = new ArrayList&lt;&gt;();
+            for (int i = 0; i &lt; docs.size(); i++) {
+                int idx = i;
+                tasks.add(done.submit(() -&gt; {
+                    sem.acquire(); // ждущий виртуальный поток почти ничего не стоит
+                    try {
+                        results[idx] = summarizeOne(client, docs.get(idx));
+                    } catch (RuntimeException e) {
+                        throw new RuntimeException("doc " + idx, e);
+                    } finally {
+                        sem.release();
+                    }
+                    return null;
+                }));
+            }
+            try {
+                for (int n = 0; n &lt; tasks.size(); n++) {
+                    Future&lt;Void&gt; f = done.poll(deadline - System.nanoTime(), TimeUnit.NANOSECONDS);
+                    if (f == null) {
+                        throw new TimeoutException("fan-out aborted: deadline exceeded");
+                    }
+                    f.get(); // ExecutionException первой упавшей задачи
+                }
+            } catch (ExecutionException | TimeoutException | InterruptedException e) {
+                tasks.forEach(t -&gt; t.cancel(true)); // прерываем ждущие и летящие вызовы
+                throw e;
+            }
+        }
+        return List.of(results);
+    }
+
+    static Result summarizeOne(AnthropicClient client, String doc) {
+        Message resp = client.messages().create(MessageCreateParams.builder()
+                .model("claude-opus-5")
+                .maxTokens(1024)
+                .addUserMessage("Суммаризируй в 3 пунктах:\n\n" + doc)
+                .build(), PER_CALL);
+        String text = resp.content().stream()
+                .flatMap(b -&gt; b.text().stream())
+                .map(TextBlock::text)
+                .collect(Collectors.joining());
+        return new Result(text, resp.usage().inputTokens(), resp.usage().outputTokens());
+    }
+}
+</code></pre></div>
+    <div class="tab-panel" data-tab="Go" data-only="go"><pre><code class="lang-go">package fanout
 
 import (
 	"context"
@@ -175,7 +257,7 @@ async def summarize(docs: list[str], max_in_flight: int = 8) -&gt; list[str]:
     results: list[str] = [""] * len(docs)
 
     async def one(i: int, doc: str) -&gt; None:
-        async with sem:  # аналог sem.Acquire/Release
+        async with sem:  # ограничение параллелизма, как семафор
             async with asyncio.timeout(45):  # таймаут одного вызова
                 resp = await client.messages.create(
                     model="claude-opus-5",
@@ -184,7 +266,7 @@ async def summarize(docs: list[str], max_in_flight: int = 8) -&gt; list[str]:
                 )
         results[i] = "".join(b.text for b in resp.content if b.type == "text")
 
-    # TaskGroup ≈ errgroup.WithContext: первая ошибка отменяет остальные задачи
+    # TaskGroup: первая ошибка отменяет остальные задачи
     async with asyncio.timeout(120):
         async with asyncio.TaskGroup() as tg:
             for i, d in enumerate(docs):
@@ -193,7 +275,17 @@ async def summarize(docs: list[str], max_in_flight: int = 8) -&gt; list[str]:
 </code></pre></div>
   </div>
 
-  <div class="callout go"><span class="title">Нюансы, которые спросят на ревью</span>
+  <div class="callout go" data-only="java"><span class="title">Нюансы, которые спросят на ревью</span>
+    <ul>
+      <li>Если лимит только по числу вызовов, а результат нужен целиком, проще <code>pool.invokeAll(tasks)</code> поверх того же семафора. <code>Semaphore</code> умеет и веса: <code>sem.acquire(n)</code> резервирует «слоты» пропорционально ожидаемым токенам — отдельная библиотека не нужна.</li>
+      <li>Не ограничивайте конкурентность размером пула платформенных потоков (<code>newFixedThreadPool(8)</code>): лимит — это бизнес-правило про rate limit провайдера, и он должен быть явным семафором, а не побочным эффектом настройки пула.</li>
+      <li>Fail-fast подходит для ответа пользователю (без одной части ответ бессмысленен). Для батчей и evals нужна семантика «собрать всё»: задача ловит исключение и кладёт его в <code>Result</code> (например, sealed-иерархия <code>Ok | Failed</code>), а не бросает наружу.</li>
+      <li><code>StructuredTaskScope</code> выражает то же короче, но в Java 21 это preview API (<code>--enable-preview</code>), и его интерфейс менялся между версиями. В проде на 21 LTS обычно хватает executor на virtual threads.</li>
+      <li>Внешний таймаут в 2 минуты при 500 документах и K=8 гарантированно сработает. Бюджет считают как ⌈N/K⌉ × p95 латентности или уходят в Batch API (−50% к цене, асинхронно, до 24 ч).</li>
+      <li>SDK Anthropic по умолчанию сам ретраит 2 раза (408/409/429/5xx). Если сверху свой ретрай или Resilience4j <code>Retry</code> — либо отключите встроенный (<code>AnthropicOkHttpClient.builder().fromEnv().maxRetries(0)</code>), либо помните, что попыток будет перемножено.</li>
+    </ul>
+  </div>
+  <div class="callout go" data-only="go"><span class="title">Нюансы, которые спросят на ревью</span>
     <ul>
       <li>Если лимит только по числу вызовов, проще <code>g.SetLimit(n)</code> у errgroup: <code>g.Go</code> сам заблокируется. Weighted-семафор нужен, когда вес вызова разный — например, резервировать «слоты» пропорционально ожидаемым токенам.</li>
       <li>Fail-fast подходит для ответа пользователю (без одной части ответ бессмысленен). Для батчей и evals нужна семантика «собрать всё»: горутина возвращает <code>nil</code>, а ошибку кладёт в <code>results[i].Err</code>.</li>
@@ -202,12 +294,59 @@ async def summarize(docs: list[str], max_in_flight: int = 8) -&gt; list[str]:
     </ul>
   </div>
 
-  <h2 id="streaming">Стриминг и отмена через context</h2>
+  <h2 id="streaming" data-only="go">Стриминг и отмена через context</h2>
+  <h2 id="streaming" data-only="java">Стриминг и отмена запроса</h2>
   <p>Ответ в 800 токенов генерируется 10–20 секунд. Без стриминга пользователь смотрит на спиннер всё это время, со стримингом видит первые слова через TTFT. Провайдеры отдают поток через SSE (Server-Sent Events: HTTP-ответ <code>text/event-stream</code>, события вида <code>event: …\ndata: {json}\n\n</code>). У Anthropic последовательность такая: <code>message_start</code> → для каждого блока <code>content_block_start</code>, серия <code>content_block_delta</code> (<code>text_delta</code>, <code>input_json_delta</code> для аргументов инструментов, <code>thinking_delta</code>), <code>content_block_stop</code> → <code>message_delta</code> (stop_reason и итоговый usage) → <code>message_stop</code>. Между ними бывают <code>ping</code>, а посреди стрима может прийти <code>error</code> (например, <code>overloaded_error</code>) — уже после 200 OK.</p>
 
-  <p>Для Go-разработчика тут всё знакомо: <code>bufio.Scanner</code> по телу ответа, канал событий наружу, <code>http.Flusher</code> на своей стороне, чтобы проксировать поток в браузер. Ключевая вещь — <b>отмена</b>. Пользователь закрыл вкладку → <code>r.Context()</code> вашего хендлера отменён → вы должны закрыть исходящий запрос к провайдеру, иначе модель продолжит генерировать токены, за которые вы заплатите. Если передавать <code>r.Context()</code> в SDK, это происходит само.</p>
+  <p data-only="go">Для Go-разработчика тут всё знакомо: <code>bufio.Scanner</code> по телу ответа, канал событий наружу, <code>http.Flusher</code> на своей стороне, чтобы проксировать поток в браузер. Ключевая вещь — <b>отмена</b>. Пользователь закрыл вкладку → <code>r.Context()</code> вашего хендлера отменён → вы должны закрыть исходящий запрос к провайдеру, иначе модель продолжит генерировать токены, за которые вы заплатите. Если передавать <code>r.Context()</code> в SDK, это происходит само.</p>
+  <p data-only="java">Для Java-разработчика тут всё знакомо: SDK отдаёт поток событий как <code>StreamResponse</code> (это <code>AutoCloseable</code> с <code>java.util.stream.Stream</code> внутри), а на своей стороне вы проксируете его в браузер через <code>SseEmitter</code> в Spring MVC или <code>Flux&lt;ServerSentEvent&gt;</code> в WebFlux. Ключевая вещь — <b>отмена</b>. Пользователь закрыл вкладку → следующий <code>emitter.send()</code> бросает <code>IOException</code> → вы должны закрыть исходящий запрос к провайдеру, иначе модель продолжит генерировать токены, за которые вы заплатите. Если держать <code>StreamResponse</code> в try-with-resources, закрытие происходит само: исключение выходит из блока, и соединение с провайдером рвётся. В WebFlux то же делает отмена подписки.</p>
 
-  <pre><code class="lang-go">// Проксирование стрима в браузер и замер TTFT. ctx = r.Context() хендлера:
+  <pre data-only="java"><code class="lang-java">// Проксирование стрима в браузер и замер TTFT. Клиент ушёл → send() бросает IOException →
+// try-with-resources закрывает StreamResponse → SDK рвёт соединение с провайдером.
+@GetMapping(path = "/answer", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+public SseEmitter answer(@RequestParam String q) {
+    SseEmitter emitter = new SseEmitter(0L); // без таймаута Spring: ответ может идти минуты
+    Thread.startVirtualThread(() -&gt; streamAnswer(emitter, q));
+    return emitter;
+}
+
+void streamAnswer(SseEmitter emitter, String q) {
+    long start = System.nanoTime();
+    long ttftNanos = -1;
+    MessageAccumulator acc = MessageAccumulator.create();
+    MessageCreateParams params = MessageCreateParams.builder()
+            .model("claude-opus-5")
+            .maxTokens(2048)
+            .addUserMessage(q)
+            .build();
+    try (StreamResponse&lt;RawMessageStreamEvent&gt; stream = client.messages().createStreaming(params)) {
+        for (Iterator&lt;RawMessageStreamEvent&gt; it = stream.stream().iterator(); it.hasNext(); ) {
+            RawMessageStreamEvent ev = it.next();
+            acc.accumulate(ev);
+            Optional&lt;String&gt; text = ev.contentBlockDelta()
+                    .flatMap(d -&gt; d.delta().text())
+                    .map(TextDelta::text);
+            if (text.isPresent()) {
+                if (ttftNanos &lt; 0) {
+                    ttftNanos = System.nanoTime() - start;
+                }
+                emitter.send(SseEmitter.event().data(text.get(), MediaType.APPLICATION_JSON));
+            }
+        }
+        Message msg = acc.message();
+        log.atInfo().setMessage("llm_call")
+                .addKeyValue("ttft_ms", ttftNanos / 1_000_000)
+                .addKeyValue("total_ms", (System.nanoTime() - start) / 1_000_000)
+                .addKeyValue("in", msg.usage().inputTokens())
+                .addKeyValue("out", msg.usage().outputTokens())
+                .addKeyValue("stop", msg.stopReason().orElse(null))
+                .log();
+        emitter.complete();
+    } catch (IOException | RuntimeException e) { // включая ошибку, пришедшую посреди стрима
+        emitter.completeWithError(e);
+    }
+}</code></pre>
+  <pre data-only="go"><code class="lang-go">// Проксирование стрима в браузер и замер TTFT. ctx = r.Context() хендлера:
 // клиент ушёл → ctx отменён → SDK закрывает соединение с провайдером.
 func streamAnswer(ctx context.Context, w http.ResponseWriter, client *anthropic.Client, q string) error {
 	flusher, ok := w.(http.Flusher)
@@ -276,7 +415,72 @@ func streamAnswer(ctx context.Context, w http.ResponseWriter, client *anthropic.
   <h3>Код: ретрай с экспоненциальным backoff + jitter</h3>
   <p>Вариант «full jitter» из классической статьи AWS: пауза равномерно случайна в интервале (0, min(cap, base·2<sup>attempt</sup>)]. Если провайдер прислал <code>retry-after</code>, ждём не меньше него.</p>
 
-  <pre><code class="lang-go">package retry
+  <pre data-only="java"><code class="lang-java">package retry;
+
+import com.anthropic.errors.AnthropicIoException;
+import com.anthropic.errors.AnthropicServiceException;
+import java.time.Duration;
+import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ThreadLocalRandom;
+
+public final class Retry {
+    /**
+     * Вызывает fn до attempts раз. Встроенные ретраи SDK стоит отключить:
+     * AnthropicOkHttpClient.builder().fromEnv().maxRetries(0).build(), иначе попытки перемножатся.
+     * Отмена — прерывание потока: Thread.sleep бросит InterruptedException.
+     */
+    public static &lt;T&gt; T call(int attempts, Duration base, Duration maxDelay, Callable&lt;T&gt; fn) throws Exception {
+        for (int a = 0; ; a++) {
+            try {
+                return fn.call();
+            } catch (Exception e) {
+                Duration retryAfter = retryAfter(e); // null — не ретраить
+                if (retryAfter == null || a == attempts - 1) {
+                    throw e;
+                }
+                Duration delay = fullJitter(a, base, maxDelay);
+                if (retryAfter.compareTo(delay) &gt; 0) {
+                    delay = retryAfter; // сервер знает лучше, когда освободится лимит
+                }
+                Thread.sleep(delay);
+            }
+        }
+    }
+
+    static Duration fullJitter(int attempt, Duration base, Duration maxDelay) {
+        long cap = maxDelay.toMillis();
+        long d = base.toMillis() &lt;&lt; Math.min(attempt, 30);
+        if (d &lt;= 0 || d &gt; cap) { // &lt;= 0 — защита от переполнения сдвига
+            d = cap;
+        }
+        return Duration.ofMillis(ThreadLocalRandom.current().nextLong(d) + 1);
+    }
+
+    /** null — ретраить бессмысленно; иначе минимальная пауза из retry-after (может быть ZERO). */
+    static Duration retryAfter(Exception e) {
+        if (e instanceof AnthropicServiceException se) {
+            return switch (se.statusCode()) {
+                case 408, 409, 429, 500, 502, 503, 504, 529 -&gt; parseRetryAfter(se);
+                default -&gt; null; // 400/401/403/404/413 — повтор не поможет
+            };
+        }
+        if (e instanceof AnthropicIoException) {
+            return Duration.ZERO; // сетевая ошибка: соединение сброшено, DNS и т.п.
+        }
+        return null; // InterruptedException — вызывающий сдался, не спорим с ним
+    }
+
+    static Duration parseRetryAfter(AnthropicServiceException e) {
+        List&lt;String&gt; v = e.headers().values("retry-after");
+        try {
+            return v.isEmpty() ? Duration.ZERO : Duration.ofSeconds(Math.max(0, Long.parseLong(v.get(0))));
+        } catch (NumberFormatException ex) {
+            return Duration.ZERO;
+        }
+    }
+}</code></pre>
+  <pre data-only="go"><code class="lang-go">package retry
 
 import (
 	"context"
@@ -353,9 +557,26 @@ func parseRetryAfter(resp *http.Response) time.Duration {
 }</code></pre>
 
   <h3>Rate limit на своей стороне: token bucket</h3>
-  <p>Ждать 429 от провайдера — реактивная стратегия. Проактивная — не превышать лимит самому. Token bucket (ведро токенов) — то, что вы знаете по <code>golang.org/x/time/rate</code>: ведро ёмкостью <i>burst</i> пополняется со скоростью <i>r</i> в секунду, каждый запрос забирает из него «жетоны». Новое здесь одно: <b>жетоны — это LLM-токены</b>, а не запросы. Лимитер на запросы защищает RPM, но не ITPM; один запрос с 150K контекста съест лимит, как сотня маленьких.</p>
+  <p>Ждать 429 от провайдера — реактивная стратегия. Проактивная — не превышать лимит самому. Token bucket (ведро токенов) — то, что вы знаете по <span data-only="go"><code>golang.org/x/time/rate</code></span><span data-only="java">Bucket4j, Guava <code>RateLimiter</code> или Resilience4j <code>RateLimiter</code></span>: ведро ёмкостью <i>burst</i> пополняется со скоростью <i>r</i> в секунду, каждый запрос забирает из него «жетоны». Новое здесь одно: <b>жетоны — это LLM-токены</b>, а не запросы. Лимитер на запросы защищает RPM, но не ITPM; один запрос с 150K контекста съест лимит, как сотня маленьких.</p>
 
-  <pre><code class="lang-go">// Два ведра: на запросы и на входные токены. Значения — из вашего tier'а в консоли провайдера.
+  <pre data-only="java"><code class="lang-java">// Bucket4j. Два ведра: на запросы и на входные токены. Значения — из вашего tier'а в консоли провайдера.
+static final long TOKEN_BURST = 200_000;
+static final Bucket REQ_LIM = Bucket.builder()
+        .addLimit(l -&gt; l.capacity(50).refillGreedy(4_000, Duration.ofMinutes(1)))              // 4000 RPM
+        .build();
+static final Bucket TOK_LIM = Bucket.builder()
+        .addLimit(l -&gt; l.capacity(TOKEN_BURST).refillGreedy(2_000_000, Duration.ofMinutes(1))) // 2M ITPM, burst 200K
+        .build();
+
+static void acquire(long estInputTokens) throws InterruptedException {
+    REQ_LIM.asBlocking().consume(1);
+    // Больше ёмкости ведро не накопит никогда: огромный запрос надо резать или слать в Batch API.
+    if (estInputTokens &gt; TOKEN_BURST) {
+        throw new IllegalArgumentException("request exceeds token burst: " + estInputTokens);
+    }
+    TOK_LIM.asBlocking().consume(estInputTokens);
+}</code></pre>
+  <pre data-only="go"><code class="lang-go">// Два ведра: на запросы и на входные токены. Значения — из вашего tier'а в консоли провайдера.
 reqLim := rate.NewLimiter(rate.Limit(4000.0/60), 50)           // 4000 RPM
 tokLim := rate.NewLimiter(rate.Limit(2_000_000.0/60), 200_000) // 2M ITPM, burst 200K
 
@@ -367,12 +588,15 @@ func acquire(ctx context.Context, estInputTokens int) error {
 	return tokLim.WaitN(ctx, estInputTokens)
 }</code></pre>
 
-  <div class="callout go"><span class="title">Где это живёт в архитектуре</span>
+  <div class="callout go" data-only="java"><span class="title">Где это живёт в архитектуре</span>
+    <p>В одном процессе Bucket4j в памяти достаточно. Когда реплик 20, лимит провайдера общий, а лимитеры локальные — вы превысите его в 20 раз. Решения: распределённый лимитер в Redis (у Bucket4j есть бэкенды для Redis через Lettuce/Redisson и для JCache с тем же API; либо свой скрипт на Lua, sliding window или GCRA), либо отдельный <b>LLM-gateway</b> — единая точка выхода к провайдерам с лимитами, ретраями, кэшем, учётом стоимости по командам и fallback. Это один из стандартных вопросов на AI system design (см. модуль 12). Оценку входных токенов до вызова берут из эндпоинта подсчёта токенов провайдера или грубо: символы / 3.5 с запасом.</p>
+  </div>
+  <div class="callout go" data-only="go"><span class="title">Где это живёт в архитектуре</span>
     <p>В одном процессе <code>x/time/rate</code> достаточно. Когда реплик 20, лимит провайдера общий, а лимитеры локальные — вы превысите его в 20 раз. Решения: распределённый лимитер в Redis (скрипт на Lua, sliding window или GCRA), либо отдельный <b>LLM-gateway</b> — единая точка выхода к провайдерам с лимитами, ретраями, кэшем, учётом стоимости по командам и fallback. Это один из стандартных вопросов на AI system design (см. модуль 12). Оценку входных токенов до вызова берут из эндпоинта подсчёта токенов провайдера или грубо: символы / 3.5 с запасом.</p>
   </div>
 
   <h2 id="breaker">Circuit breaker и fallback</h2>
-  <p>Circuit breaker — тот же паттерн, что вы ставите перед нестабильным сервисом (<code>sony/gobreaker</code> и аналоги). В LLM-мире у него две задачи: не долбить перегруженного провайдера (529 сериями по несколько минут — реальность) и быстро переключиться на fallback. Fallback-цепочка типична: основная модель → более дешёвая модель того же провайдера → другой провайдер → деградированный ответ («сервис перегружен, попробуйте позже» или ответ без LLM).</p>
+  <p>Circuit breaker — тот же паттерн, что вы ставите перед нестабильным сервисом (<span data-only="go"><code>sony/gobreaker</code> и аналоги</span><span data-only="java">Resilience4j <code>CircuitBreaker</code>, в Spring Boot — через <code>@CircuitBreaker(fallbackMethod = …)</code> или Spring Cloud CircuitBreaker</span>). В LLM-мире у него две задачи: не долбить перегруженного провайдера (529 сериями по несколько минут — реальность) и быстро переключиться на fallback. Fallback-цепочка типична: основная модель → более дешёвая модель того же провайдера → другой провайдер → деградированный ответ («сервис перегружен, попробуйте позже» или ответ без LLM).</p>
 
   <div class="viz" id="viz-cb">
     <p class="viz-title">Состояния circuit breaker</p>
@@ -393,6 +617,7 @@ func acquire(ctx context.Context, estInputTokens int) error {
   <ul>
     <li><b>Считать нужно правильные ошибки.</b> 400 из-за вашего бага не должна открывать breaker. 429 — спорно: это не отказ провайдера, а ваш лимит; правильнее снизить конкурентность, а не отрубать всё. Открывать стоит на 5xx/529 и таймауты.</li>
     <li><b>Порог по доле, а не подряд.</b> При 200 RPS «5 ошибок подряд» случается от шума. Используйте долю ошибок в скользящем окне с минимальным числом запросов.</li>
+    <li data-only="java"><b>В Resilience4j это три настройки:</b> <code>failureRateThreshold</code>, <code>slidingWindowSize</code> и <code>minimumNumberOfCalls</code>. Какие исключения считать отказом, задаёт <code>recordException(e -&gt; …)</code>: 5xx/529 и таймауты — да, <code>BadRequestException</code> и <code>RateLimitException</code> из SDK — нет. Медленные вызовы ловит <code>slowCallDurationThreshold</code>.</li>
     <li><b>Таймаут вызова</b> — важный сигнал. Если p99 обычно 20 с, а сейчас запросы висят по 90 с, провайдер деградирует, хоть и отвечает 200.</li>
     <li><b>Отдельный breaker на модель и регион.</b> Перегрузка одной модели не значит, что недоступна другая.</li>
     <li><b>Fallback меняет качество.</b> Промпт, отлаженный под одну модель, на другой может дать другой формат. Fallback-модель должна проходить те же evals, иначе вы узнаете о проблеме в момент инцидента.</li>
@@ -412,6 +637,7 @@ func acquire(ctx context.Context, estInputTokens int) error {
     <tr><td>оценка качества</td><td>Онлайн-evals, фидбек пользователя (лайк/дизлайк), доля ответов, прошедших валидацию</td><td>Отдельный пайплайн</td></tr>
   </table>
   <p>Для трейсов есть стандарт: OpenTelemetry GenAI semantic conventions — атрибуты <code>gen_ai.request.model</code>, <code>gen_ai.usage.input_tokens</code>, <code>gen_ai.usage.output_tokens</code>, <code>gen_ai.response.finish_reasons</code> и т.д. В агентах трейс особенно ценен: span на каждый шаг модели и каждый tool call показывает, где ушли 40 секунд и 200K токенов.</p>
+  <p data-only="java">В Spring Boot это ложится на привычный стек: Micrometer Observation API даёт и метрики, и спаны одним вызовом, Micrometer Tracing с мостом в OpenTelemetry экспортирует их по OTLP, а <code>/actuator/prometheus</code> отдаёт счётчики токенов и стоимости. Spring AI и LangChain4j сами создают observation на каждый вызов модели с атрибутами <code>gen_ai.*</code>; если вы зовёте официальный <code>anthropic-java</code> напрямую, оберните вызов в свой <code>Observation</code> или спан OpenTelemetry Java API (пример — в проекте D, <a href="projects.html#proj-prod">сквозные проекты</a>).</p>
 
   <div class="callout warn"><span class="title">Что ломается</span>
     <ul>
@@ -425,7 +651,8 @@ func acquire(ctx context.Context, estInputTokens int) error {
   <p>Ваш опыт с PostgreSQL, индексами и Redis напрямую нужен в RAG (retrieval-augmented generation — поиск релевантных документов и подстановка их в контекст модели). Новые сущности:</p>
   <ul>
     <li><b>Embedding</b> — вектор из сотен–тысяч чисел, который модель-эмбеддер ставит в соответствие тексту так, что близкие по смыслу тексты близки по косинусному расстоянию. Это «ключ» для поиска по смыслу.</li>
-    <li><b>Векторный индекс</b> — приближённый поиск ближайших соседей (ANN), чаще всего HNSW. Для Go-разработчика самое естественное — <code>pgvector</code> в том же Postgres: транзакции, JOIN с метаданными, привычные бэкапы. Отдельные векторные БД (Qdrant, Weaviate, Milvus и др.) имеют смысл на десятках-сотнях миллионов векторов или при специфичных требованиях. Подробно — модуль 5.</li>
+    <li data-only="java"><b>Векторный индекс</b> — приближённый поиск ближайших соседей (ANN), чаще всего HNSW. Для Java-разработчика самое естественное — <code>pgvector</code> в том же Postgres: транзакции, JOIN с метаданными, привычные бэкапы, Flyway-миграции. Из кода — обычный JDBC или jOOQ с типом <code>PGvector</code> из <code>pgvector-java</code>, либо готовый <code>PgVectorStore</code> из Spring AI (или <code>PgVectorEmbeddingStore</code> из LangChain4j); JPA для векторного поиска неудобна — запросы с <code>&lt;=&gt;</code> всё равно пишутся нативным SQL. Интеграционные тесты — Testcontainers с образом <code>pgvector/pgvector</code>. Отдельные векторные БД (Qdrant, Weaviate, Milvus и др.) имеют смысл на десятках-сотнях миллионов векторов или при специфичных требованиях. Подробно — модуль 5.</li>
+    <li data-only="go"><b>Векторный индекс</b> — приближённый поиск ближайших соседей (ANN), чаще всего HNSW. Для Go-разработчика самое естественное — <code>pgvector</code> в том же Postgres: транзакции, JOIN с метаданными, привычные бэкапы. Отдельные векторные БД (Qdrant, Weaviate, Milvus и др.) имеют смысл на десятках-сотнях миллионов векторов или при специфичных требованиях. Подробно — модуль 5.</li>
     <li><b>Гибридный поиск.</b> Векторный поиск плохо находит точные идентификаторы, коды ошибок, артикулы. Его комбинируют с полнотекстовым (BM25 / <code>tsvector</code>) — тоже знакомая территория.</li>
   </ul>
 
@@ -440,7 +667,7 @@ func acquire(ctx context.Context, estInputTokens int) error {
   <p>Очереди тоже переносятся: длинные задачи (суммаризация документа на 300 страниц, агент, который работает 10 минут) не должны жить в HTTP-запросе. Паттерн «задача в очередь → воркер → статус и результат в БД → уведомление» ровно тот же. Отличие — идемпотентность дороже: повторная обработка сообщения не просто нагружает базу, а стоит денег и может дать другой результат. Храните результат по ключу задачи и проверяйте его перед вызовом модели. Для офлайн-нагрузок у провайдеров есть Batch API: у Anthropic −50% к цене, результаты до 24 часов, порядок произвольный, сопоставление по <code>custom_id</code>.</p>
 
   <h2 id="evals">Тесты → evals</h2>
-  <p>Самое большое смысловое изменение. Table-driven тесты — отличная интуиция для evals: таблица входов и ожиданий. Но проверка меняется с «равно» на «насколько хорошо», а результат — с «зелёный/красный» на число с погрешностью.</p>
+  <p>Самое большое смысловое изменение. <span data-only="go">Table-driven тесты</span><span data-only="java">Параметризованные тесты JUnit 5 (<code>@ParameterizedTest</code> с <code>@CsvFileSource</code> или <code>@MethodSource</code>)</span> — отличная интуиция для evals: таблица входов и ожиданий. Но проверка меняется с «равно» на «насколько хорошо», а результат — с «зелёный/красный» на число с погрешностью.</p>
 
   <table>
     <tr><th></th><th>Unit-тест</th><th>Eval</th></tr>
@@ -454,7 +681,39 @@ func acquire(ctx context.Context, estInputTokens int) error {
 
   <p>Статистика здесь не для красоты. 50 примеров, 45 прошли — 90%, но 95% доверительный интервал (Уилсона) примерно 79–96%. Если новая версия промпта дала 47 из 50, это не доказательство улучшения, это шум. Для различения 90% и 93% нужны сотни примеров. Для сравнения двух версий на одном наборе используют парные тесты (McNemar) — смотрят только примеры, где версии разошлись.</p>
 
-  <pre><code class="lang-go">//go:build evals
+  <pre data-only="java"><code class="lang-java">// Запуск: mvn verify -Dgroups=evals (по умолчанию тег исключён в surefire — это стоит денег)
+@Tag("evals")
+class ClassifierEvalTest {
+    @Test
+    void classifierAccuracy() throws Exception {
+        List&lt;GoldenCase&gt; cases = Golden.load("tickets_golden.jsonl"); // 300 размеченных тикетов
+        var pass = new AtomicInteger();
+        var sem = new Semaphore(8);
+        try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            var futures = cases.stream().map(c -&gt; pool.submit(() -&gt; {
+                sem.acquire();
+                try {
+                    if (classifier.classify(c.text()).category().equals(c.want())) {
+                        pass.incrementAndGet();
+                    }
+                } finally {
+                    sem.release();
+                }
+                return null;
+            })).toList();
+            for (var f : futures) {
+                f.get(); // инфраструктурная ошибка — это не «модель ошиблась»: тест падает
+            }
+        }
+        double n = cases.size();
+        double rate = pass.get() / n;
+        double lo = wilsonLower(rate, n, 1.96);
+        System.out.printf("accuracy=%.3f (95%% CI lower=%.3f, n=%.0f)%n", rate, lo, n);
+        assertTrue(lo &gt;= 0.85, // порог по нижней границе, а не по точечной оценке
+                () -&gt; "accuracy lower bound %.3f &lt; 0.85".formatted(lo));
+    }
+}</code></pre>
+  <pre data-only="go"><code class="lang-go">//go:build evals
 
 // Запуск: go test -tags evals -run TestClassifierEval ./... (не в каждом CI, это стоит денег)
 func TestClassifierEval(t *testing.T) {
@@ -485,7 +744,7 @@ func TestClassifierEval(t *testing.T) {
 		t.Errorf("accuracy lower bound %.3f &lt; 0.85", lo)
 	}
 }</code></pre>
-  <p>В проде так делают редко на Go целиком: разметка, анализ и графики удобнее в Python (pandas, Jupyter, модуль 4), а evals — отдельная дисциплина (модуль 8). Но прогонщик в CI, который шлёт сотни запросов с лимитами и ретраями, — это как раз ваша сильная сторона.</p>
+  <p>В проде так делают редко на <span data-only="go">Go</span><span data-only="java">Java</span> целиком: разметка, анализ и графики удобнее в Python (pandas, Jupyter, модуль 4), а evals — отдельная дисциплина (модуль 8). Но прогонщик в CI, который шлёт сотни запросов с лимитами и ретраями, — это как раз ваша сильная сторона.</p>
 
   <h2 id="skills">Что учить с нуля</h2>
   <p>Переносится инфраструктура. Новое — всё, что про поведение модели и оценку качества:</p>
@@ -504,23 +763,28 @@ func TestClassifierEval(t *testing.T) {
     <tr><td>Senior-практики</td><td>ADR, design review, SLO для недетерминированной системы, постмортемы, разговор о метриках с бизнесом</td><td>13</td></tr>
   </table>
 
+  <div class="callout go" data-only="java"><span class="title">Экосистема Java: Spring AI и LangChain4j</span>
+    <p>В Java есть два зрелых фреймворка поверх LLM API. <b>Spring AI</b> — «Spring Data для моделей»: <code>ChatClient</code>, advisors для RAG и памяти, <code>VectorStore</code> (включая pgvector), structured output в records, tool calling через <code>@Tool</code>, MCP-клиент и MCP-сервер как Spring Boot-стартеры, observability через Micrometer из коробки. <b>LangChain4j</b> — порт идей LangChain: декларативные AI Services (интерфейс + аннотации), RAG-пайплайны, агенты, интеграции со Spring Boot и Quarkus. Оба удобны для типовых задач, но прячут детали API: в курсе основной код написан на официальном SDK <code>com.anthropic:anthropic-java</code>, чтобы было видно, что уходит в модель. Фреймворк берите, когда понимаете, что он делает за вас, и проверяйте это трейсами.</p>
+  </div>
+
   <div class="callout"><span class="title">Позиционирование на рынке</span>
-    <p>Сильная сторона Go-бэкендера на собеседовании на AI engineer — «я знаю, как это выдержит прод»: лимиты, ретраи, стоимость, наблюдаемость, безопасность. Слабое место, которое проверят, — понимание модели и evals. Типичная ошибка кандидатов с бэкенд-опытом: говорить о LLM как о детерминированном сервисе и не иметь ответа на «как вы узнаете, что стало лучше?». Курс построен так, чтобы закрыть именно это.</p>
+    <p>Сильная сторона <span data-only="go">Go</span><span data-only="java">Java</span>-бэкендера на собеседовании на AI engineer — «я знаю, как это выдержит прод»: лимиты, ретраи, стоимость, наблюдаемость, безопасность. Слабое место, которое проверят, — понимание модели и evals. Типичная ошибка кандидатов с бэкенд-опытом: говорить о LLM как о детерминированном сервисе и не иметь ответа на «как вы узнаете, что стало лучше?». Курс построен так, чтобы закрыть именно это.</p>
   </div>
 
   <h2 id="practice">Практика</h2>
   <div class="task">
     <h3>Задание 1: надёжный fan-out-клиент</h3>
-    <p>Напишите на Go пакет <code>llmbatch</code>: функция принимает срез промптов и возвращает срез результатов в том же порядке, где у каждого элемента есть текст, usage и ошибка. Используйте errgroup с лимитом, общий дедлайн, таймаут на вызов, свой ретрай с full jitter и <code>retry-after</code> (встроенный ретрай SDK отключите), token bucket по входным токенам.</p>
+    <p data-only="go">Напишите на Go пакет <code>llmbatch</code>: функция принимает срез промптов и возвращает срез результатов в том же порядке, где у каждого элемента есть текст, usage и ошибка. Используйте errgroup с лимитом, общий дедлайн, таймаут на вызов, свой ретрай с full jitter и <code>retry-after</code> (встроенный ретрай SDK отключите), token bucket по входным токенам.</p>
+    <p data-only="java">Напишите на Java пакет <code>llmbatch</code>: метод принимает список промптов и возвращает список результатов в том же порядке, где каждый элемент — sealed-тип <code>Ok(text, usage) | Failed(exception)</code>. Используйте executor на virtual threads с <code>Semaphore</code>, общий дедлайн, таймаут на вызов через <code>RequestOptions</code>, свой ретрай с full jitter и <code>retry-after</code> (встроенный ретрай SDK отключите через <code>maxRetries(0)</code>), token bucket по входным токенам (Bucket4j).</p>
     <p><b>Критерии готовности:</b></p>
     <label class="check"><input type="checkbox" data-save="m00-t1"> Ошибка одного элемента не отменяет остальные; порядок результатов совпадает с порядком входа</label>
-    <label class="check"><input type="checkbox" data-save="m00-t2"> Юнит-тест на ретрай с фейковым клиентом: 429 с <code>retry-after: 2</code> → пауза ≥ 2 с; 400 не ретраится; отмена ctx прерывает ожидание</label>
+    <label class="check"><input type="checkbox" data-save="m00-t2"> Юнит-тест на ретрай с фейковым клиентом: 429 с <code>retry-after: 2</code> → пауза ≥ 2 с; 400 не ретраится; <span data-only="go">отмена ctx прерывает ожидание</span><span data-only="java">прерывание потока прерывает ожидание (JUnit 5, фейковый клиент без сети)</span></label>
     <label class="check"><input type="checkbox" data-save="m00-t3"> На 50 реальных вызовах (Haiku 4.5, чтобы было дёшево) залогированы TTFT/latency, input/output tokens и итоговая стоимость в $</label>
   </div>
   <div class="task">
     <h3>Задание 2: breaker и fallback</h3>
-    <p>Оберните клиент в circuit breaker (свой или <code>sony/gobreaker</code>) с fallback с основной модели на более дешёвую. Считайте ошибками только 5xx/529/таймауты.</p>
-    <label class="check"><input type="checkbox" data-save="m00-t4"> Тест с фейковым транспортом (<code>http.RoundTripper</code>), который отдаёт 529: после порога вызовы идут на fallback без обращения к основной модели; через cooldown пробный запрос возвращает breaker в closed</label>
+    <p>Оберните клиент в circuit breaker (<span data-only="go">свой или <code>sony/gobreaker</code></span><span data-only="java">свой или Resilience4j <code>CircuitBreaker</code></span>) с fallback с основной модели на более дешёвую. Считайте ошибками только 5xx/529/таймауты.</p>
+    <label class="check"><input type="checkbox" data-save="m00-t4"> Тест с <span data-only="go">фейковым транспортом (<code>http.RoundTripper</code>)</span><span data-only="java">фейковым HTTP-сервером (OkHttp <code>MockWebServer</code> или WireMock, клиент SDK смотрит на него через <code>baseUrl</code>)</span>, который отдаёт 529: после порога вызовы идут на fallback без обращения к основной модели; через cooldown пробный запрос возвращает breaker в closed</label>
     <label class="check"><input type="checkbox" data-save="m00-t5"> 400 и 429 не открывают breaker</label>
     <label class="check"><input type="checkbox" data-save="m00-t6"> В логах каждого вызова есть, какая модель ответила и почему (primary / fallback / breaker open)</label>
   </div>
@@ -530,7 +794,8 @@ func TestClassifierEval(t *testing.T) {
   <details class="q"><summary>Какие лимиты есть у Anthropic API и почему лимитер на запросы в секунду недостаточен?</summary><div class="a"><p>RPM, ITPM и OTPM на модель. Лимитер на запросы защищает только RPM; запросы с длинным контекстом исчерпывают ITPM при небольшом RPS. Нужен token bucket, где «жетоны» — оценка входных токенов, и учёт выходных токенов через max_tokens.</p></div></details>
   <details class="q"><summary>Зачем jitter в backoff, если экспонента уже разносит попытки?</summary><div class="a"><p>Без jitter все клиенты, получившие 429 одновременно, повторят попытку тоже одновременно: через 1, 2, 4 секунды. Волны повторов синхронизированы и снова упираются в лимит. Jitter размазывает их по интервалу. Full jitter даёт наименьшую суммарную нагрузку при конкуренции.</p></div></details>
   <details class="q"><summary>Какие коды ошибок не надо ретраить и почему 429 не стоит считать отказом для circuit breaker?</summary><div class="a"><p>Не ретраить 400, 401, 403, 404, 413: повтор даст то же самое. 429 означает, что вы превысили свой лимит, провайдер при этом здоров; открывать breaker — значит отрезать трафик, который прошёл бы через секунду. Правильная реакция — снизить конкурентность и уважать retry-after.</p></div></details>
-  <details class="q"><summary>Что произойдёт, если пользователь закрыл вкладку во время стриминга, а вы не передали r.Context() в вызов SDK?</summary><div class="a"><p>Запрос к провайдеру продолжит выполняться до конца генерации: вы заплатите за все выходные токены, которые никто не увидит, и займёте слот конкурентности и лимит OTPM. Передача контекста хендлера закрывает соединение, и генерация на стороне провайдера прекращается.</p></div></details>
+  <details class="q" data-only="go"><summary>Что произойдёт, если пользователь закрыл вкладку во время стриминга, а вы не передали r.Context() в вызов SDK?</summary><div class="a"><p>Запрос к провайдеру продолжит выполняться до конца генерации: вы заплатите за все выходные токены, которые никто не увидит, и займёте слот конкурентности и лимит OTPM. Передача контекста хендлера закрывает соединение, и генерация на стороне провайдера прекращается.</p></div></details>
+  <details class="q" data-only="java"><summary>Что произойдёт, если пользователь закрыл вкладку во время стриминга, а вы проглотили IOException от SseEmitter и не закрыли StreamResponse?</summary><div class="a"><p>Запрос к провайдеру продолжит выполняться до конца генерации: вы заплатите за все выходные токены, которые никто не увидит, и займёте слот конкурентности и лимит OTPM. <code>StreamResponse</code> в try-with-resources (или отмена подписки во WebFlux) закрывает соединение, и генерация на стороне провайдера прекращается.</p></div></details>
   <details class="q"><summary>Почему семантический кэш опаснее обычного?</summary><div class="a"><p>Он возвращает ответ на «похожий» вопрос. Эмбеддинги плохо различают отрицания, числа, имена сущностей: «как отменить подписку» и «как не отменять подписку автоматически» близки по вектору. Пользователь получит чужой ответ. Порог близости подбирают по evals, кэш ограничивают по тенанту и типу запросов, часто кэшируют только FAQ-подобные вопросы.</p></div></details>
   <details class="q"><summary>Eval показал 88% на старом промпте и 92% на новом, по 50 примеров. Катить?</summary><div class="a"><p>Этого недостаточно для вывода. Доверительные интервалы при n=50 шириной около ±8–9 п.п. и пересекаются. Нужно больше примеров, парное сравнение на одних и тех же примерах (смотреть, где версии разошлись), несколько прогонов из-за недетерминизма, и проверка по срезам: общий рост может скрывать падение в важной категории.</p></div></details>
   <details class="q"><summary>Что обязательно логировать на каждый LLM-вызов?</summary><div class="a"><p>Модель, версию промпта, input/output/cache токены, стоимость, TTFT и общую латентность, stop_reason, ошибку и число попыток, для агентов — число итераций и tool calls, trace id. Промпты и ответы — только с учётом политики ПДн: семплирование, редактирование, TTL.</p></div></details>
@@ -565,28 +830,34 @@ func TestClassifierEval(t *testing.T) {
     <li><a href="https://docs.anthropic.com/en/api/rate-limits" target="_blank" rel="noopener">Anthropic API — Rate limits</a> (RPM / ITPM / OTPM, retry-after)</li>
     <li><a href="https://docs.anthropic.com/en/api/errors" target="_blank" rel="noopener">Anthropic API — Errors</a> (коды, overloaded_error 529)</li>
     <li><a href="https://docs.anthropic.com/en/api/messages-streaming" target="_blank" rel="noopener">Anthropic API — Streaming Messages</a> (типы SSE-событий)</li>
-    <li><a href="https://github.com/anthropics/anthropic-sdk-go" target="_blank" rel="noopener">anthropic-sdk-go</a> — официальный Go SDK</li>
-    <li><a href="https://pkg.go.dev/golang.org/x/sync/errgroup" target="_blank" rel="noopener">errgroup</a>, <a href="https://pkg.go.dev/golang.org/x/sync/semaphore" target="_blank" rel="noopener">semaphore</a>, <a href="https://pkg.go.dev/golang.org/x/time/rate" target="_blank" rel="noopener">x/time/rate</a></li>
+    <li data-only="go"><a href="https://github.com/anthropics/anthropic-sdk-go" target="_blank" rel="noopener">anthropic-sdk-go</a> — официальный Go SDK</li>
+    <li data-only="go"><a href="https://pkg.go.dev/golang.org/x/sync/errgroup" target="_blank" rel="noopener">errgroup</a>, <a href="https://pkg.go.dev/golang.org/x/sync/semaphore" target="_blank" rel="noopener">semaphore</a>, <a href="https://pkg.go.dev/golang.org/x/time/rate" target="_blank" rel="noopener">x/time/rate</a></li>
+    <li data-only="java"><a href="https://github.com/anthropics/anthropic-sdk-java" target="_blank" rel="noopener">anthropic-sdk-java</a> — официальный Java SDK (<code>com.anthropic:anthropic-java</code>)</li>
+    <li data-only="java"><a href="https://openjdk.org/jeps/444" target="_blank" rel="noopener">JEP 444 — Virtual Threads</a>, <a href="https://openjdk.org/jeps/453" target="_blank" rel="noopener">JEP 453 — Structured Concurrency (Preview)</a>, <a href="https://bucket4j.com/" target="_blank" rel="noopener">Bucket4j</a></li>
+    <li data-only="java"><a href="https://docs.spring.io/spring-ai/reference/" target="_blank" rel="noopener">Spring AI</a>, <a href="https://docs.langchain4j.dev/" target="_blank" rel="noopener">LangChain4j</a>, <a href="https://java.testcontainers.org/" target="_blank" rel="noopener">Testcontainers for Java</a></li>
     <li><a href="https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/" target="_blank" rel="noopener">AWS Architecture Blog — Exponential Backoff And Jitter</a></li>
-    <li><a href="https://martinfowler.com/bliki/CircuitBreaker.html" target="_blank" rel="noopener">Martin Fowler — CircuitBreaker</a>; <a href="https://github.com/sony/gobreaker" target="_blank" rel="noopener">sony/gobreaker</a></li>
+    <li><a href="https://martinfowler.com/bliki/CircuitBreaker.html" target="_blank" rel="noopener">Martin Fowler — CircuitBreaker</a>; <a href="https://github.com/sony/gobreaker" target="_blank" rel="noopener" data-only="go">sony/gobreaker</a><a href="https://resilience4j.readme.io/docs/circuitbreaker" target="_blank" rel="noopener" data-only="java">Resilience4j CircuitBreaker</a></li>
     <li><a href="https://sre.google/sre-book/handling-overload/" target="_blank" rel="noopener">Google SRE Book — Handling Overload</a> (retry budgets)</li>
     <li><a href="https://research.google/pubs/the-tail-at-scale/" target="_blank" rel="noopener">Dean, Barroso — The Tail at Scale</a> (hedged requests)</li>
     <li><a href="https://opentelemetry.io/docs/specs/semconv/gen-ai/" target="_blank" rel="noopener">OpenTelemetry — Semantic conventions for GenAI</a></li>
     <li><a href="https://hamel.dev/blog/posts/evals/" target="_blank" rel="noopener">Hamel Husain — Your AI Product Needs Evals</a></li>
-    <li><a href="https://github.com/pgvector/pgvector" target="_blank" rel="noopener">pgvector</a></li>
+    <li><a href="https://github.com/pgvector/pgvector" target="_blank" rel="noopener">pgvector</a><span data-only="java"> и <a href="https://github.com/pgvector/pgvector-java" target="_blank" rel="noopener">pgvector-java</a></span></li>
   </ul>
 </main>
 <script src="assets/course.js"></script>
 <script>
+if (Course.STACK === 'java') document.title = '0 · Что Java-разработчик уже умеет';
+
 // ---------- Карта переноса ----------
 (function () {
+  const JAVA = Course.STACK === 'java';
   const svg = document.getElementById('map-svg');
   const out = document.getElementById('map-readout');
   const L = [
-    ['go', 'goroutines, errgroup'], ['ctx', 'context, таймауты'], ['retry', 'ретраи, backoff'],
+    ['go', JAVA ? 'virtual threads, executors' : 'goroutines, errgroup'], ['ctx', JAVA ? 'отмена, таймауты' : 'context, таймауты'], ['retry', 'ретраи, backoff'],
     ['rate', 'rate limiting'], ['cb', 'circuit breaker'], ['obs', 'логи, метрики, трейсы'],
     ['sql', 'SQL, индексы'], ['redis', 'Redis, кэш'], ['queue', 'очереди, воркеры'],
-    ['test', 'table-driven тесты'], ['api', 'контракты API, схемы'], ['pprof', 'профилирование']
+    ['test', JAVA ? '@ParameterizedTest' : 'table-driven тесты'], ['api', 'контракты API, схемы'], ['pprof', 'профилирование']
   ];
   const R = [
     ['par', 'параллельные вызовы LLM'], ['stream', 'стриминг SSE'], ['r429', 'ретраи 429 / 529'],
@@ -596,9 +867,9 @@ func TestClassifierEval(t *testing.T) {
   ];
   // [слева, справа, тип: ok|warn|bad, пояснение]
   const E = [
-    ['go', 'par', 'ok', 'errgroup + лимит конкурентности — ровно тот же код. Новое: лимит задаёт rate limit провайдера (RPM/ITPM/OTPM), а не CPU; частичный успех часто важнее fail-fast; хвост латентности определяет общее время.'],
+    ['go', 'par', 'ok', JAVA ? 'Executor на virtual threads + Semaphore — ровно тот же код. Новое: лимит задаёт rate limit провайдера (RPM/ITPM/OTPM), а не CPU и не размер пула; частичный успех часто важнее fail-fast; хвост латентности определяет общее время.' : 'errgroup + лимит конкурентности — ровно тот же код. Новое: лимит задаёт rate limit провайдера (RPM/ITPM/OTPM), а не CPU; частичный успех часто важнее fail-fast; хвост латентности определяет общее время.'],
     ['go', 'so', 'ok', 'Параллельные tool_use в одном ответе модели выполняются конкурентно, все tool_result возвращаются одним user-сообщением — это fan-out/fan-in внутри агентного цикла.'],
-    ['ctx', 'stream', 'ok', 'Отмена r.Context() при закрытии вкладки должна закрыть соединение с провайдером — иначе вы платите за токены, которые никто не прочтёт.'],
+    ['ctx', 'stream', 'ok', JAVA ? 'Закрытие вкладки → IOException из SseEmitter.send() (или отмена подписки в WebFlux) должно закрыть StreamResponse и соединение с провайдером — иначе вы платите за токены, которые никто не прочтёт.' : 'Отмена r.Context() при закрытии вкладки должна закрыть соединение с провайдером — иначе вы платите за токены, которые никто не прочтёт.'],
     ['ctx', 'par', 'ok', 'Общий дедлайн на операцию + таймаут на вызов. Бюджет считается как ⌈N/K⌉ × p95, и p95 здесь — секунды.'],
     ['retry', 'r429', 'warn', 'Backoff + jitter те же. Меняется цена попытки: каждая оплачивается токенами, упавший стрим уже стоил денег, повтор даст другой ответ. Уважайте retry-after, отключайте встроенные ретраи SDK, если есть свои.'],
     ['rate', 'tpm', 'warn', 'Token bucket тот же, но «жетоны» — LLM-токены: запрос со 150K контекста съедает ITPM, как сотня маленьких. Лимит общий на организацию → нужен распределённый лимитер или LLM-gateway.'],
@@ -639,7 +910,7 @@ func TestClassifierEval(t *testing.T) {
   }
   L.forEach((n, i) => node('L', n, i));
   R.forEach((n, i) => node('R', n, i));
-  const hl = Course.svg('text', { x: lx, y: 18, 'font-size': 12, fill: 'var(--muted)' }, svg); hl.textContent = 'Навык Go';
+  const hl = Course.svg('text', { x: lx, y: 18, 'font-size': 12, fill: 'var(--muted)' }, svg); hl.textContent = JAVA ? 'Навык Java' : 'Навык Go';
   const hr = Course.svg('text', { x: rx + bw, y: 18, 'font-size': 12, fill: 'var(--muted)', 'text-anchor': 'end' }, svg); hr.textContent = 'Практика AI engineering';
 
   function pick(side, id) {
@@ -706,7 +977,7 @@ func TestClassifierEval(t *testing.T) {
     });
     // параллельно
     const lanes = Math.min(K, N), areaTop = 84, areaH = 200, lh = Math.min(22, areaH / lanes);
-    T(X0, 74, `errgroup + semaphore(K=${K}): ${parTotal.toFixed(1)} с`, { 'font-weight': 600 });
+    T(X0, 74, `${Course.STACK === 'java' ? 'virtual threads + Semaphore' : 'errgroup + semaphore'}(K=${K}): ${parTotal.toFixed(1)} с`, { 'font-weight': 600 });
     par.forEach((p, i) => {
       const yy = areaTop + p.lane * lh;
       Course.svg('rect', { x: X0 + p.s * sc, y: yy, width: Math.max(1, (p.e - p.s) * sc - 1), height: Math.max(1.5, lh - 2), rx: 2, fill: 'var(--bg-soft)', stroke: 'var(--border)' }, svg);

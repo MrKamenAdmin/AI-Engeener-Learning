@@ -30,8 +30,8 @@
   <div class="module-hero">
     <div class="eyebrow">Модуль 6</div>
     <h1>Агенты и MCP</h1>
-    <p class="lead">Агент — это цикл вокруг LLM с инструментами, и почти все проблемы агентов — это проблемы цикла: когда остановиться, сколько он стоит, что попадает в контекст и что ему разрешено делать. Разберём паттерны Anthropic, проектирование инструментов, context engineering для задач на десятки и сотни шагов и MCP, напишем на Go агентный цикл с бюджетом, компакцией, заметками и субагентами и MCP-сервер — и научимся говорить «здесь агент не нужен».</p>
-    <div class="meta-row"><span class="chip">≈ 14 часов</span><span class="chip">Go</span><span class="chip">5 визуализаций</span><span class="chip">MCP-сервер на Go</span><span class="chip">на момент написания: октябрь 2026</span></div>
+    <p class="lead">Агент — это цикл вокруг LLM с инструментами, и почти все проблемы агентов — это проблемы цикла: когда остановиться, сколько он стоит, что попадает в контекст и что ему разрешено делать. Разберём паттерны Anthropic, проектирование инструментов, context engineering для задач на десятки и сотни шагов и MCP, напишем на <span data-only="go">Go</span><span data-only="java">Java</span> агентный цикл с бюджетом, компакцией, заметками и субагентами и MCP-сервер — и научимся говорить «здесь агент не нужен».</p>
+    <div class="meta-row"><span class="chip">≈ 14 часов</span><span class="chip"><span data-only="go">Go</span><span data-only="java">Java</span></span><span class="chip">5 визуализаций</span><span class="chip">MCP-сервер на <span data-only="go">Go</span><span data-only="java">Java</span></span><span class="chip">на момент написания: октябрь 2026</span></div>
   </div>
 
   <h2 id="loop">Агентный цикл</h2>
@@ -53,7 +53,7 @@
     <tr><td><code>refusal</code></td><td>Модель (safety)</td><td>Не ретраить вслепую; залогировать, показать пользователю.</td></tr>
     <tr><td>max iterations</td><td>Ваш код</td><td>Жёсткий предохранитель от зацикливания. Типично 10–50 для задач, 100+ для coding-агентов.</td></tr>
     <tr><td>Бюджет токенов / $ / времени</td><td>Ваш код</td><td>Суммировать стоимость по <code>usage</code> всех вызовов, включая субагентов; прерывать с понятной ошибкой и частичным результатом (код — <a href="#go-loop">Budgeted</a>).</td></tr>
-    <tr><td>Отмена <code>ctx</code></td><td>Пользователь / сервер</td><td>Прокидывать <code>context.Context</code> и в API-вызов, и в каждый инструмент.</td></tr>
+    <tr><td>Отмена <span data-only="go"><code>ctx</code></span><span data-only="java">(interrupt)</span></td><td>Пользователь / сервер</td><td><span data-only="go">Прокидывать <code>context.Context</code> и в API-вызов, и в каждый инструмент.</span><span data-only="java">Прерывать поток цикла (<code>Future.cancel(true)</code>), уважать <code>InterruptedException</code> в инструментах, ставить таймауты и на API-вызов, и на каждый инструмент.</span></td></tr>
   </table>
 
   <div class="callout tip"><span class="title">Цифры: почему агенты дорогие</span>
@@ -76,7 +76,8 @@
     <div class="trace" id="al-trace" aria-live="polite"></div>
   </div>
 
-  <div class="callout go"><span class="title">Аналогия из Go</span>Агентный цикл — это <code>for { select { case &lt;-ctx.Done(): … } }</code> с тремя предохранителями: счётчик итераций (как retry budget), бюджет ресурсов (как <code>http.MaxBytesReader</code>) и дедлайн (<code>context.WithTimeout</code>). Без любого из них вы получите аналог горутины без выхода — только утекают не байты, а доллары.</div>
+  <div class="callout go" data-only="java"><span class="title">Аналогия из Java</span>Агентный цикл — это <code>while (!Thread.currentThread().isInterrupted())</code> с тремя предохранителями: счётчик итераций (как <code>maxAttempts</code> в Resilience4j Retry), бюджет ресурсов (как лимит размера тела запроса) и дедлайн (<code>Future.get(timeout)</code> или <code>TimeLimiter</code>). Без любого из них вы получите аналог потока без выхода — только утекают не потоки, а доллары.</div>
+  <div class="callout go" data-only="go"><span class="title">Аналогия из Go</span>Агентный цикл — это <code>for { select { case &lt;-ctx.Done(): … } }</code> с тремя предохранителями: счётчик итераций (как retry budget), бюджет ресурсов (как <code>http.MaxBytesReader</code>) и дедлайн (<code>context.WithTimeout</code>). Без любого из них вы получите аналог горутины без выхода — только утекают не байты, а доллары.</div>
 
   <h2 id="workflows">Workflow или агент</h2>
   <p>В статье «Building effective agents» (Anthropic, декабрь 2024) вводится ключевое различие, которое стоит повторять на каждом собеседовании:</p>
@@ -149,14 +150,281 @@
   <ul>
     <li><b>Возвращайте осмысленное, а не всё.</b> Имена вместо UUID, пагинация, фильтры, обрезка до разумного размера (Claude Code по умолчанию режет вывод инструментов ~25K токенов). Параметр <code>response_format: "concise" | "detailed"</code> — хороший приём.</li>
     <li><b>Ошибки — для модели, не для человека.</b> Не <code>500 Internal Error</code>, а <code>tool_result</code> с <code>is_error: true</code> и текстом: что не так и как исправить. «Колонка <code>created</code> не найдена. Доступные: <code>created_at</code>, <code>updated_at</code>» — модель исправится с первой попытки.</li>
-    <li><b>Идемпотентность.</b> Агент повторяет вызовы: после таймаута, после compaction, по ошибке. Мутирующие инструменты должны принимать ключ идемпотентности или быть естественно идемпотентными (<code>set_status</code>, а не <code>toggle_status</code>). Та же дисциплина, что для ретраев в платёжных API; код — в уроке <a href="#go-loop">«Агентный цикл на Go»</a>.</li>
+    <li><b>Идемпотентность.</b> Агент повторяет вызовы: после таймаута, после compaction, по ошибке. Мутирующие инструменты должны принимать ключ идемпотентности или быть естественно идемпотентными (<code>set_status</code>, а не <code>toggle_status</code>). Та же дисциплина, что для ретраев в платёжных API; код — в уроке <a href="#go-loop">«Агентный цикл на <span data-only="go">Go</span><span data-only="java">Java</span>»</a>.</li>
     <li><b>Разделяйте чтение и запись.</b> Read-only инструменты можно выполнять параллельно и без подтверждения; мутирующие — гейтить. Если всё идёт через один <code>bash</code>, харнесс не отличит <code>grep</code> от <code>git push</code>.</li>
   </ul>
-  <div class="callout go"><span class="title">Аналогия из Go</span>Описание инструмента — это godoc публичной функции, которую будет вызывать человек без доступа к исходникам и без возможности задать вопрос. Ошибка инструмента — это <code>fmt.Errorf("column %q not found; available: %v", …)</code>, а не <code>errors.New("bad request")</code>.</div>
+  <div class="callout go" data-only="java"><span class="title">Аналогия из Java</span>Описание инструмента — это Javadoc публичного метода, который будет вызывать человек без доступа к исходникам и без возможности задать вопрос. Ошибка инструмента — это <code>new IllegalArgumentException("column %s not found; available: %s".formatted(…))</code>, а не <code>new RuntimeException("bad request")</code>.</div>
+  <div class="callout go" data-only="go"><span class="title">Аналогия из Go</span>Описание инструмента — это godoc публичной функции, которую будет вызывать человек без доступа к исходникам и без возможности задать вопрос. Ошибка инструмента — это <code>fmt.Errorf("column %q not found; available: %v", …)</code>, а не <code>errors.New("bad request")</code>.</div>
 
-  <h2 id="go-loop">Агентный цикл на Go</h2>
-  <p>Ручной цикл на официальном SDK: лимит итераций, бюджет в долларах, prompt caching, конкурентное исполнение параллельных вызовов, подтверждение опасных действий человеком, ошибки инструментов как <code>is_error</code>, запись траектории для evals и точка подключения компакции (о ней — в уроке <a href="#context">Context engineering</a>). Клиент спрятан за интерфейсом <code>Model</code> из одного метода: ему удовлетворяют <code>&amp;client.Messages</code>, декоратор бюджета и fake в тестах, поэтому весь цикл тестируется без сети. В Go SDK есть и бета <code>toolrunner</code>, который крутит цикл за вас (<code>MaxIterations</code>, гейт внутри функции инструмента), — для учёбы и полного контроля полезно написать свой. Код собирается с <code>anthropic-sdk-go v1.75.0</code>; полная версия с тестами на fake-модели — в <code>examples/m06-agents</code> репозитория курса.</p>
-  <pre><code class="lang-go">package agent
+  <h2 id="go-loop" data-only="go">Агентный цикл на Go</h2>
+  <h2 id="go-loop" data-only="java">Агентный цикл на Java</h2>
+  <p data-only="java">Ручной цикл на официальном Java SDK: лимит итераций, бюджет в долларах, prompt caching, конкурентное исполнение параллельных вызовов на virtual threads, подтверждение опасных действий человеком, ошибки инструментов как <code>is_error</code>, запись траектории для evals и точка подключения компакции (о ней — в уроке <a href="#context">Context engineering</a>). Клиент спрятан за функциональным интерфейсом <code>Model</code> из одного метода: ему удовлетворяют <code>client.messages()::create</code>, декоратор бюджета и fake в тестах, поэтому весь цикл тестируется без сети. В Java SDK есть и бета <code>BetaToolRunner</code>, который крутит цикл за вас, а Spring AI и LangChain4j делают то же через <code>@Tool</code>-методы, — для учёбы и полного контроля полезно написать свой. Ошибки цикла — исключения с частичным результатом внутри (<code>AgentException.result</code>), а не пара «результат + ошибка». Код собирается с <code>com.anthropic:anthropic-java 2.70.0</code>; полная версия с тестами на fake-модели — в <code>examples/java/m06-agents</code> репозитория курса.</p>
+  <p data-only="go">Ручной цикл на официальном SDK: лимит итераций, бюджет в долларах, prompt caching, конкурентное исполнение параллельных вызовов, подтверждение опасных действий человеком, ошибки инструментов как <code>is_error</code>, запись траектории для evals и точка подключения компакции (о ней — в уроке <a href="#context">Context engineering</a>). Клиент спрятан за интерфейсом <code>Model</code> из одного метода: ему удовлетворяют <code>&amp;client.Messages</code>, декоратор бюджета и fake в тестах, поэтому весь цикл тестируется без сети. В Go SDK есть и бета <code>toolrunner</code>, который крутит цикл за вас (<code>MaxIterations</code>, гейт внутри функции инструмента), — для учёбы и полного контроля полезно написать свой. Код собирается с <code>anthropic-sdk-go v1.75.0</code>; полная версия с тестами на fake-модели — в <code>examples/m06-agents</code> репозитория курса.</p>
+  <pre data-only="java"><code class="lang-java">// Model.java
+package course.m06agents;
+
+import com.anthropic.models.messages.Message;
+import com.anthropic.models.messages.MessageCreateParams;
+
+/**
+ * Всё, что циклу нужно от клиента. Ему удовлетворяет {@code client.messages()::create},
+ * декоратор {@link Budgeted} и fake в тестах.
+ */
+@FunctionalInterface
+public interface Model {
+    Message create(MessageCreateParams params);
+}
+
+// AgentTool.java
+/**
+ * Инструмент цикла: определение для Messages API, флаг опасности и обработчик.
+ *
+ * @param dangerous мутирует мир: требует подтверждения человека
+ */
+public record AgentTool(Tool param, boolean dangerous, Fn run) {
+
+    /** Обработчик получает input модели как JSON-строку. Исключение — ошибка инструмента. */
+    @FunctionalInterface
+    public interface Fn {
+        String run(String inputJson) throws Exception;
+    }
+
+    public AgentTool(Tool param, Fn run) {
+        this(param, false, run);
+    }
+
+    public AgentTool withRun(Fn run) {
+        return new AgentTool(param, dangerous, run);
+    }
+
+    public AgentTool withDangerous(boolean dangerous) {
+        return new AgentTool(param, dangerous, run);
+    }
+
+    public String name() {
+        return param.name();
+    }
+
+    /** Определение инструмента: имя, описание и JSON Schema входа. */
+    public static Tool def(String name, String description, Map&lt;String, ?&gt; properties, List&lt;String&gt; required) {
+        var props = Tool.InputSchema.Properties.builder();
+        properties.forEach((k, v) -&gt; props.putAdditionalProperty(k, JsonValue.from(v)));
+        var b = Tool.builder().name(name)
+                .inputSchema(Tool.InputSchema.builder().properties(props.build()).required(required).build());
+        if (description != null &amp;&amp; !description.isEmpty()) {
+            b.description(description);
+        }
+        return b.build();
+    }
+
+    public static Tool def(String name) {
+        return def(name, null, Map.of(), List.of());
+    }
+}
+
+// Agent.java
+package course.m06agents;
+
+import com.anthropic.core.ObjectMappers;
+import com.anthropic.models.messages.CacheControlEphemeral;
+import com.anthropic.models.messages.ContentBlock;
+import com.anthropic.models.messages.ContentBlockParam;
+import com.anthropic.models.messages.Message;
+import com.anthropic.models.messages.MessageCreateParams;
+import com.anthropic.models.messages.MessageParam;
+import com.anthropic.models.messages.StopReason;
+import com.anthropic.models.messages.TextBlockParam;
+import com.anthropic.models.messages.ToolResultBlockParam;
+import com.anthropic.models.messages.ToolUnion;
+import com.anthropic.models.messages.ToolUseBlock;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+
+/**
+ * Агентный цикл модуля 6 (m06.html#go-loop) и всё, что делает его пригодным для длинных задач:
+ * бюджет в долларах, компакция, заметки, субагенты, ретраи и идемпотентность инструментов,
+ * мост к MCP, сессии с проверкой прогресса.
+ *
+ * @param model    {@code client.messages()::create} или {@link Budgeted} поверх него
+ * @param modelId  "claude-opus-5"
+ * @param compact  null — без компакции
+ * @param confirm  null — опасные действия запрещены
+ */
+public record Agent(Model model, String modelId, String system, Map&lt;String, AgentTool&gt; tools,
+                    int maxIters, Compactor compact, Confirm confirm) {
+
+    static final CacheControlEphemeral EPHEMERAL = CacheControlEphemeral.builder().build();
+
+    public Agent {
+        tools = tools == null ? Map.of() : Map.copyOf(tools);
+        system = system == null ? "" : system;
+    }
+
+    public Agent withModel(Model m) {
+        return new Agent(m, modelId, system, tools, maxIters, compact, confirm);
+    }
+
+    /** Запись траектории: по ним считают eval агента (модуль 8). */
+    public record Step(int iter, String tool, String input, boolean isError, long ctxTokens) {}
+
+    public static final class Result {
+        public String text = "";
+        public int iters;
+        public final List&lt;Step&gt; steps = new ArrayList&lt;&gt;();
+        public long peakCtx;
+        public int compactions, compactErrors;
+    }
+
+    /** Ошибка прогона; несёт частичный результат: итерации, траекторию, пик контекста. */
+    public static class AgentException extends Exception {
+        public final transient Result result;
+
+        public AgentException(String msg, Throwable cause, Result result) {
+            super(msg, cause);
+            this.result = result;
+        }
+    }
+
+    public static final class MaxItersException extends AgentException {
+        MaxItersException(int max, Result r) {
+            super("agent: max iterations reached (" + max + ")", null, r);
+        }
+    }
+
+    record Outcome(String out, boolean isError) {}
+
+    public Result run(String task) throws AgentException {
+        // Стабильный порядок = стабильный кэшируемый префикс.
+        List&lt;ToolUnion&gt; defs = new TreeMap&lt;&gt;(tools).values().stream().map(t -&gt; ToolUnion.ofTool(t.param())).toList();
+        List&lt;MessageParam&gt; msgs = new ArrayList&lt;&gt;(List.of(userText(task)));
+        var res = new Result();
+        long ctxTok = 0; // размер контекста по usage последнего вызова
+
+        for (int iter = 0; iter &lt; maxIters; iter++) {
+            res.iters = iter + 1;
+            if (compact != null) {
+                try {
+                    var compacted = compact.maybe(msgs, ctxTok);
+                    if (compacted.isPresent()) {
+                        msgs = new ArrayList&lt;&gt;(compacted.get());
+                        res.compactions++;
+                    }
+                } catch (RuntimeException e) {
+                    res.compactErrors++; // история не тронута: работаем дальше, попробуем на следующем шаге
+                }
+            }
+            Message resp;
+            try {
+                resp = model.create(MessageCreateParams.builder()
+                        .model(modelId).maxTokens(16000)
+                        // Breakpoint на system: tools и system остаются в кэше, даже когда компакция перепишет историю.
+                        .systemOfTextBlockParams(List.of(TextBlockParam.builder().text(system).cacheControl(EPHEMERAL).build()))
+                        .tools(defs)
+                        .messages(msgs)
+                        // Автоматический breakpoint на последнем блоке: каждый шаг читает всю прошлую историю по 0,1×.
+                        .cacheControl(EPHEMERAL)
+                        .build());
+            } catch (RuntimeException e) {
+                throw new AgentException("iter " + iter + ": " + e.getMessage(), e, res); // BudgetExceededException тоже сюда
+            }
+            var u = resp.usage(); // с кэшем input_tokens — только хвост после breakpoint, складываем всё
+            ctxTok = u.inputTokens() + u.cacheReadInputTokens().orElse(0L)
+                    + u.cacheCreationInputTokens().orElse(0L) + u.outputTokens();
+            res.peakCtx = Math.max(res.peakCtx, ctxTok);
+            msgs.add(resp.toParam());
+
+            StopReason stop = resp.stopReason().orElse(null);
+            if (StopReason.END_TURN.equals(stop)) {
+                res.text = text(resp);
+                return res;
+            } else if (StopReason.MAX_TOKENS.equals(stop)) {
+                throw new AgentException("agent: response truncated (max_tokens)", null, res);
+            } else if (!StopReason.TOOL_USE.equals(stop)) {
+                throw new AgentException("agent: unexpected stop_reason " + stop, null, res);
+            }
+
+            List&lt;ToolUseBlock&gt; calls = resp.content().stream().filter(ContentBlock::isToolUse).map(ContentBlock::asToolUse).toList();
+            // Параллельные tool_use: исполняем конкурентно на virtual threads, возвращаем ВСЕ результаты одним сообщением.
+            List&lt;ContentBlockParam&gt; results = new ArrayList&lt;&gt;();
+            try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+                List&lt;Future&lt;Outcome&gt;&gt; futures = calls.stream().map(c -&gt; pool.submit(() -&gt; execTool(c))).toList();
+                for (int i = 0; i &lt; calls.size(); i++) {
+                    var call = calls.get(i);
+                    Outcome o = futures.get(i).get();
+                    results.add(ContentBlockParam.ofToolResult(ToolResultBlockParam.builder()
+                            .toolUseId(call.id()).content(o.out()).isError(o.isError()).build()));
+                    res.steps.add(new Step(iter, call.name(), json(call._input()), o.isError(), ctxTok));
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new AgentException("interrupted", e, res);
+            } catch (ExecutionException e) {
+                throw new AgentException("tool executor", e.getCause(), res); // execTool не бросает: сюда не попадаем
+            }
+            msgs.add(MessageParam.builder().role(MessageParam.Role.USER).contentOfBlockParams(results).build());
+        }
+        throw new MaxItersException(maxIters, res);
+    }
+
+    Outcome execTool(ToolUseBlock call) {
+        AgentTool t = tools.get(call.name());
+        if (t == null) {
+            return new Outcome("unknown tool \"" + call.name() + "\"", true);
+        }
+        String input = json(call._input());
+        if (t.dangerous() &amp;&amp; (confirm == null || !confirm.ask(call.name() + " " + input))) {
+            return new Outcome("The user denied this action. Do not retry it; propose an alternative or finish.", true);
+        }
+        try {
+            // Таймаут на попытку, а не на все.
+            String out = Reliability.retry(3, () -&gt; Reliability.withTimeout(Duration.ofSeconds(60), () -&gt; t.run().run(input)));
+            return new Outcome(truncate(out, 40_000, "\n…[truncated; narrow the query]"), false); // ≈10K токенов
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return new Outcome("error: interrupted", true);
+        } catch (Exception e) {
+            return new Outcome("error: " + e.getMessage(), true); // модель увидит и попробует исправиться
+        }
+    }
+
+    static MessageParam userText(String text) {
+        return MessageParam.builder().role(MessageParam.Role.USER).content(text).build();
+    }
+
+    static String text(Message m) {
+        var sb = new StringBuilder();
+        m.content().stream().filter(ContentBlock::isText).forEach(b -&gt; sb.append(b.asText().text()));
+        return sb.toString();
+    }
+
+    static String json(Object v) {
+        try {
+            return ObjectMappers.jsonMapper().writeValueAsString(v);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** Режет по границе символа: обрезанная посреди суррогатной пары строка — мусор в контексте. */
+    static String truncate(String s, int n, String tail) {
+        if (s.length() &lt;= n) {
+            return s;
+        }
+        if (n &gt; 0 &amp;&amp; Character.isLowSurrogate(s.charAt(n))) {
+            n--;
+        }
+        return s.substring(0, n) + tail;
+    }
+}
+</code></pre>
+  <pre data-only="go"><code class="lang-go">package agent
 
 import (
 	"context"
@@ -334,13 +602,33 @@ func truncate(s string, n int, tail string) string {
 }</code></pre>
   <p>Детали, которые легко пропустить на ревью:</p>
   <ul>
-    <li><b>Порядок инструментов сортируется.</b> Обход map в Go случаен, а tools — начало кэшируемого префикса: другой порядок в новом процессе — промах кэша на system и tools.</li>
+    <li><b>Порядок инструментов сортируется.</b> <span data-only="go">Обход map в Go случаен</span><span data-only="java">Порядок обхода <code>HashMap</code> и <code>Map.of</code> в Java не задан</span>, а tools — начало кэшируемого префикса: другой порядок в новом процессе — промах кэша на system и tools.</li>
     <li><b>Два breakpoint'а кэша.</b> Top-level <code>cache_control</code> ставит маркер на последний блок, и каждый шаг читает всю прошлую историю по 0,1× цены. Маркер на system держит в кэше system и tools, когда компакция перепишет историю.</li>
     <li><b>Размер контекста — из <code>usage</code>.</b> С кэшем <code>input_tokens</code> — это только хвост после последнего breakpoint'а, поэтому складываются все три поля и output (он войдёт в следующий запрос). Это число управляет компакцией и пишется в траекторию.</li>
     <li><b>Таймаут — на попытку, ретраи — внутри <code>execTool</code></b>: модель не тратит ход на временную ошибку сети.</li>
   </ul>
-  <p>Реализация <code>Confirm</code> для CLI — мьютекс вокруг чтения <code>stdin</code>, чтобы параллельные опасные вызовы не спрашивали одновременно:</p>
-  <pre><code class="lang-go">func StdinConfirm() Confirm {
+  <p>Реализация <code>Confirm</code> для CLI — <span data-only="go">мьютекс</span><span data-only="java"><code>synchronized</code></span> вокруг чтения <code>stdin</code>, чтобы параллельные опасные вызовы не спрашивали одновременно:</p>
+  <pre data-only="java"><code class="lang-java">@FunctionalInterface
+public interface Confirm {
+    boolean ask(String action);
+
+    static Confirm stdin() {
+        var in = new BufferedReader(new InputStreamReader(System.in));
+        return action -&gt; {
+            synchronized (in) {
+                System.err.printf("Агент хочет выполнить:%n  %s%nРазрешить? [y/N] ", action);
+                try {
+                    String line = in.readLine();
+                    return line != null &amp;&amp; line.strip().equalsIgnoreCase("y");
+                } catch (IOException e) {
+                    return false;
+                }
+            }
+        };
+    }
+}
+</code></pre>
+  <pre data-only="go"><code class="lang-go">func StdinConfirm() Confirm {
 	var mu sync.Mutex
 	in := bufio.NewReader(os.Stdin)
 	return func(action string) bool {
@@ -354,7 +642,69 @@ func truncate(s string, n int, tail string) string {
 
   <h3>Бюджет в долларах</h3>
   <p>Лимит в токенах неудобен: у вызовов разные модели (субагенты на Haiku, основной агент на Opus), у токенов разная цена (вход, выход, чтение и запись кэша), а бизнес считает деньги. Поэтому бюджет задаётся в долларах и реализован декоратором над <code>Model</code>. Цикл о нём не знает, а вложенные <code>Budgeted</code> дают иерархию «сессия → субагент»: расходы субагента видны и в его лимите, и в лимите родителя.</p>
-  <pre><code class="lang-go">// $ за 1M токенов (вход, выход), на момент написания — сентябрь 2026.
+  <pre data-only="java"><code class="lang-java">/**
+ * Model с лимитом в долларах. Это декоратор, как interceptor над HTTP-клиентом: цикл о нём не знает.
+ * Вложенные Budgeted образуют иерархию: субагент тратит свой лимит и одновременно лимит родителя.
+ */
+public final class Budgeted implements Model {
+    /** $ за 1M токенов (вход, выход), на момент написания — сентябрь 2026. */
+    private static final Map&lt;String, double[]&gt; PRICES = Map.of(
+            "claude-fable-5-1", new double[] {10, 50},
+            "claude-opus-5-5", new double[] {4, 20},
+            "claude-opus-5", new double[] {5, 25},
+            "claude-sonnet-5", new double[] {2, 10},
+            "claude-haiku-4-5", new double[] {1, 5});
+
+    public static final class BudgetExceededException extends RuntimeException {
+        BudgetExceededException(double spent, double max) {
+            super("agent: budget exhausted: spent $%.4f of $%.2f".formatted(spent, max));
+        }
+    }
+
+    private final Model inner;
+    private final double maxUsd;
+    private double spent; // guarded by this
+
+    public Budgeted(Model inner, double maxUsd) {
+        this.inner = inner;
+        this.maxUsd = maxUsd;
+    }
+
+    static double[] price(String model) {
+        // Неизвестная модель — по самой дорогой: бюджет не должен молча обнуляться.
+        return PRICES.getOrDefault(model, PRICES.get("claude-fable-5-1"));
+    }
+
+    /** Стоимость одного вызова по usage: чтение кэша 0,1×, запись 1,25× (TTL 5 минут). */
+    public static double cost(String model, Usage u) {
+        double[] p = price(model);
+        double in = u.inputTokens() + 0.1 * u.cacheReadInputTokens().orElse(0L)
+                + 1.25 * u.cacheCreationInputTokens().orElse(0L);
+        return (in * p[0] + u.outputTokens() * p[1]) / 1e6;
+    }
+
+    @Override
+    public Message create(MessageCreateParams p) {
+        double s = spent();
+        if (s &gt;= maxUsd) {
+            throw new BudgetExceededException(s, maxUsd);
+        }
+        // Упрощение: стоимость известна только по usage после вызова, поэтому лимит может быть
+        // превышен на один вызов (на N — при N параллельных субагентах). Жёсткий лимит —
+        // оценить вызов заранее через count_tokens и зарезервировать сумму под блокировкой.
+        Message resp = inner.create(p);
+        synchronized (this) {
+            spent += cost(p.model().asString(), resp.usage());
+        }
+        return resp;
+    }
+
+    public synchronized double spent() {
+        return spent;
+    }
+}
+</code></pre>
+  <pre data-only="go"><code class="lang-go">// $ за 1M токенов (вход, выход), на момент написания — сентябрь 2026.
 var prices = map[anthropic.Model][2]float64{
 	"claude-fable-5-1": {10, 50},
 	"claude-opus-5-5":  {4, 20},
@@ -412,11 +762,131 @@ func (b *Budgeted) Spent() float64 {
 	defer b.mu.Unlock()
 	return b.spent
 }</code></pre>
-  <p>Стоимость считается по <code>usage</code> после вызова, поэтому лимит можно превысить на один вызов. Если нужен жёсткий потолок (бесплатный тариф, лимит клиента), оценивайте вызов до отправки: <code>client.Messages.CountTokens</code> принимает те же model, system, tools и messages и возвращает <code>InputTokens</code>. Входные токены × цена плюс <code>MaxTokens</code> × цена выхода — верхняя граница вызова. Это лишний сетевой запрос на каждом шаге, поэтому обычно хватает учёта по usage и запаса в лимите. Цены в коде — на сентябрь 2026; в проде таблица цен — конфиг, а не константа.</p>
+  <p>Стоимость считается по <code>usage</code> после вызова, поэтому лимит можно превысить на один вызов. Если нужен жёсткий потолок (бесплатный тариф, лимит клиента), оценивайте вызов до отправки: <span data-only="go"><code>client.Messages.CountTokens</code></span><span data-only="java"><code>client.messages().countTokens(...)</code></span> принимает те же model, system, tools и messages и возвращает <span data-only="go"><code>InputTokens</code></span><span data-only="java"><code>inputTokens()</code></span>. Входные токены × цена плюс <span data-only="go"><code>MaxTokens</code></span><span data-only="java"><code>maxTokens</code></span> × цена выхода — верхняя граница вызова. Это лишний сетевой запрос на каждом шаге, поэтому обычно хватает учёта по usage и запаса в лимите. Цены в коде — на сентябрь 2026; в проде таблица цен — конфиг, а не константа.</p>
 
   <h3>Ретраи и идемпотентность инструментов</h3>
-  <p>Инструмент падает по двум причинам. Либо ошиблась модель (нет такой колонки, неверный путь) — тогда повтор бесполезен и нужна ошибка с подсказкой. Либо мир временно недоступен (таймаут, 429, 503) — тогда повтор с backoff дешевле, чем тратить на ошибку ход модели. Различает их автор инструмента: временные ошибки он оборачивает в <code>ErrTransient</code>. Повтор мутирующего действия безопасен только при идемпотентности: таймаут не означает, что действие не выполнилось.</p>
-  <pre><code class="lang-go">// ErrTransient помечает ошибку, которую имеет смысл повторить: таймаут, 429, 503.
+  <p>Инструмент падает по двум причинам. Либо ошиблась модель (нет такой колонки, неверный путь) — тогда повтор бесполезен и нужна ошибка с подсказкой. Либо мир временно недоступен (таймаут, 429, 503) — тогда повтор с backoff дешевле, чем тратить на ошибку ход модели. Различает их автор инструмента: временные ошибки он <span data-only="go">оборачивает в <code>ErrTransient</code></span><span data-only="java">бросает как <code>TransientException</code></span>. Повтор мутирующего действия безопасен только при идемпотентности: таймаут не означает, что действие не выполнилось.</p>
+  <pre data-only="java"><code class="lang-java">/** Ретраи, таймауты и идемпотентность инструментов. */
+public final class Reliability {
+    private Reliability() {}
+
+    /**
+     * Помечает ошибку, которую имеет смысл повторить: таймаут, 429, 503. Бросайте её только
+     * там, где повтор безопасен: чтение или идемпотентная запись.
+     */
+    public static class TransientException extends Exception {
+        public TransientException(String msg) {
+            super(msg);
+        }
+    }
+
+    static boolean isTransient(Throwable e) {
+        for (; e != null; e = e.getCause()) {
+            if (e instanceof TransientException) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Повторяет f при TransientException с экспоненциальной задержкой и джиттером:
+     * 100, 200, 400 мс плюс случайная добавка, чтобы ретраи не шли синхронной волной.
+     * Прерывание потока (отмена) прекращает ожидание.
+     */
+    static String retry(int attempts, Callable&lt;String&gt; f) throws Exception {
+        for (int i = 0; ; i++) {
+            try {
+                return f.call();
+            } catch (Exception e) {
+                if (!isTransient(e) || i == attempts - 1) {
+                    throw e;
+                }
+                long d = 100L &lt;&lt; i;
+                Thread.sleep(d + ThreadLocalRandom.current().nextLong(d));
+            }
+        }
+    }
+
+    /** Выполняет f на отдельном virtual thread; по таймауту прерывает его. */
+    static &lt;T&gt; T withTimeout(Duration timeout, Callable&lt;T&gt; f) throws Exception {
+        var task = new FutureTask&lt;&gt;(f);
+        Thread.ofVirtual().start(task);
+        try {
+            return task.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            task.cancel(true);
+            throw new TimeoutException("tool timed out after " + timeout.toSeconds() + "s");
+        } catch (ExecutionException e) {
+            throw e.getCause() instanceof Exception ex ? ex : e;
+        }
+    }
+
+    private static final ThreadLocal&lt;String&gt; IDEM_KEY = new ThreadLocal&lt;&gt;();
+
+    /**
+     * Ключ текущего вызова; инструмент передаёт его во внешний API (заголовок Idempotency-Key),
+     * чтобы дедуплицировал и сервер: ретрай после таймаута мог дойти до него дважды.
+     */
+    public static String idempotencyKey() {
+        String k = IDEM_KEY.get();
+        return k == null ? "" : k;
+    }
+
+    /**
+     * Оборачивает мутирующий инструмент: одинаковый вызов (сессия + имя + аргументы)
+     * выполняется один раз, повтор получает сохранённый результат. Агент повторяет вызовы
+     * после таймаутов, компакции и рестарта — без этого письмо уйдёт дважды.
+     */
+    public static AgentTool idempotent(String session, AgentTool t) {
+        // Упрощение: журнал в памяти процесса и без блокировки на время выполнения.
+        // Для рестартов и параллельных одинаковых вызовов — таблица с UNIQUE(key) в БД.
+        Map&lt;String, String&gt; done = new HashMap&lt;&gt;();
+        AgentTool.Fn run = t.run();
+        return t.withRun(input -&gt; {
+            String key = idemKey(session, t.name(), input);
+            String prev;
+            synchronized (done) {
+                prev = done.get(key);
+            }
+            if (prev != null) {
+                return "Already done earlier in this session, not repeated. Result was: " + prev;
+            }
+            IDEM_KEY.set(key);
+            try {
+                String out = run.run(input);
+                synchronized (done) { // ошибки не запоминаем: повтор после ошибки должен выполниться
+                    done.put(key, out);
+                }
+                return out;
+            } finally {
+                IDEM_KEY.remove();
+            }
+        });
+    }
+
+    private static final ObjectMapper CANON = ObjectMappers.jsonMapper().copy()
+            .configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
+
+    /** Не зависит от порядка ключей и пробелов: {"b":1,"a":2} и {"a":2, "b":1} — один вызов. */
+    static String idemKey(String session, String tool, String input) throws Exception {
+        Object v;
+        try {
+            v = CANON.readValue(input, Object.class);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("invalid input JSON: " + e.getMessage(), e);
+        }
+        String canon = CANON.writeValueAsString(v);
+        byte[] sum = sha256(session + "\0" + tool + "\0" + canon);
+        return HexFormat.of().formatHex(Arrays.copyOf(sum, 16));
+    }
+
+    private static byte[] sha256(String s) throws NoSuchAlgorithmException {
+        return MessageDigest.getInstance("SHA-256").digest(s.getBytes(StandardCharsets.UTF_8));
+    }
+}
+</code></pre>
+  <pre data-only="go"><code class="lang-go">// ErrTransient помечает ошибку, которую имеет смысл повторить: таймаут, 429, 503.
 // Оборачивайте в неё только то, что безопасно повторить: чтение или идемпотентную запись.
 var ErrTransient = errors.New("transient")
 
@@ -516,10 +986,10 @@ func idemKey(session, tool string, input json.RawMessage) (string, error) {
   <p>Лэнс Мартин (LangChain, июнь 2025) свёл приёмы к четырём рычагам. Классификация удобна и для дизайна, и для собеседования: любой приём управления контекстом — один из них.</p>
   <table>
     <tr><th>Рычаг</th><th>Суть</th><th>Приёмы</th><th>В коде модуля</th><th>Компромисс</th></tr>
-    <tr><td><b>Write</b></td><td>Сохранить вне окна, чтобы пережило компакцию и рестарт</td><td>Scratchpad, <code>NOTES.md</code>, todo-лист, progress-файл, git-коммиты, memory tool (директория <code>/memories</code> между сессиями)</td><td><code>Notes.Tool()</code>, <code>RunSessions</code></td><td>Устаревает и разрастается: нужны лимит, перезапись вместо дописывания и гигиена</td></tr>
+    <tr><td><b>Write</b></td><td>Сохранить вне окна, чтобы пережило компакцию и рестарт</td><td>Scratchpad, <code>NOTES.md</code>, todo-лист, progress-файл, git-коммиты, memory tool (директория <code>/memories</code> между сессиями)</td><td><span data-only="go"><code>Notes.Tool()</code>, <code>RunSessions</code></span><span data-only="java"><code>notes.tool()</code>, <code>Sessions.runSessions</code></span></td><td>Устаревает и разрастается: нужны лимит, перезапись вместо дописывания и гигиена</td></tr>
     <tr><td><b>Select</b></td><td>Втянуть в окно только нужное и вовремя</td><td>Just-in-time инструменты (grep, чтение по пути, поиск), RAG по памяти и документации, выбор инструментов под задачу, <code>CLAUDE.md</code>, MCP resources</td><td><code>docs_search</code> проекта C, resource <code>schema://analytics</code></td><td>Промах retrieval: агент не знает, чего не видит. Каждый лишний инструмент — токены и путаница</td></tr>
     <tr><td><b>Compress</b></td><td>Те же сведения меньшим числом токенов</td><td>Обрезка и пагинация выводов, context editing (очистка старых tool results), компакция-суммаризация</td><td><code>truncate</code> в <code>execTool</code>, <code>Compactor</code></td><td>Теряются детали; переписанная история инвалидирует кэш</td></tr>
-    <tr><td><b>Isolate</b></td><td>Разнести работу по разным окнам</td><td>Субагенты с чистым контекстом, sandbox (код исполняется вне контекста, внутрь — только результат), состояние в коде, а не в сообщениях</td><td><code>Agent.AsTool</code></td><td>Токенов в разы больше; на границе теряется контекст (аргумент Cognition, урок <a href="#multi">«Мультиагентные системы»</a>)</td></tr>
+    <tr><td><b>Isolate</b></td><td>Разнести работу по разным окнам</td><td>Субагенты с чистым контекстом, sandbox (код исполняется вне контекста, внутрь — только результат), состояние в коде, а не в сообщениях</td><td><span data-only="go"><code>Agent.AsTool</code></span><span data-only="java"><code>agent.asTool</code></span></td><td>Токенов в разы больше; на границе теряется контекст (аргумент Cognition, урок <a href="#multi">«Мультиагентные системы»</a>)</td></tr>
   </table>
   <div class="callout tip"><span class="title">Порядок вмешательства</span>Сначала сделайте так, чтобы инструменты возвращали меньше: это бесплатно и работает сразу. Затем — just-in-time загрузка, затем очистка старых tool results (context editing) и только потом суммаризация. Помните о кэше: любое изменение префикса инвалидирует кэш после точки изменения, поэтому чистить лучше редко и пачками, чем понемногу на каждом шаге.</div>
 
@@ -534,7 +1004,7 @@ func idemKey(session, tool string, input json.RawMessage) (string, error) {
     <tr><td>История</td><td class="num">остаток, до 120K</td><td>Компакция на 60–75% рабочего бюджета, последние N ходов — дословно</td><td>Context rot: решения 10-го шага тонут в логах</td></tr>
     <tr><td>Резерв на ответ</td><td class="num">16–32K</td><td><code>max_tokens</code> с запасом на thinking</td><td><code>stop_reason: max_tokens</code> посреди <code>tool_use</code></td></tr>
   </table>
-  <p>Без метрик бюджет остаётся пожеланием. Нужны: размер контекста на каждом вызове (поле <code>CtxTokens</code> в траектории, атрибут span в модуле 9), доля чтения из кэша, доля tool results в контексте, число компакций на задачу и качество на длинных задачах в evals (модуль 8). Алерт ставят на сессии, у которых контекст или стоимость выбиваются из распределения.</p>
+  <p>Без метрик бюджет остаётся пожеланием. Нужны: размер контекста на каждом вызове (поле <span data-only="go"><code>CtxTokens</code></span><span data-only="java"><code>ctxTokens</code></span> в траектории, атрибут span в модуле 9), доля чтения из кэша, доля tool results в контексте, число компакций на задачу и качество на длинных задачах в evals (модуль 8). Алерт ставят на сессии, у которых контекст или стоимость выбиваются из распределения.</p>
 
   <h3>Just-in-time против предзагрузки</h3>
   <p><b>Предзагрузка</b> — до первого вызова собрать всё, что может понадобиться (RAG, README целиком, схему БД), и положить в контекст. <b>Just-in-time</b> — агент держит лёгкие ссылки (пути, ID, URL, запросы) и подтягивает содержимое инструментами, когда оно понадобилось. Так работает Claude Code: <code>grep</code> и <code>glob</code> по репозиторию вместо загрузки кода, а имена файлов, структура каталогов и время изменения сами подсказывают, что стоит открыть. Для документов тот же принцип — agentic RAG: поиск как инструмент с бюджетом итераций (<a href="m05.html#agentic">модуль 5</a>).</p>
@@ -570,7 +1040,108 @@ func idemKey(session, tool string, input json.RawMessage) (string, error) {
     <li><b>Что сохранить.</b> Исходную задачу — дословно, не пересказом. Решения и их причины, что сделано и проверено, точные пути, ID и числа, встреченные ошибки, открытые вопросы, следующий шаг. Последние N ходов — дословно, чтобы модель продолжила с живого места. Выбросить — сырые выводы, которые можно получить снова. Claude Code, по описанию Anthropic, сохраняет архитектурные решения, нерешённые баги и детали реализации, а после компакции продолжает с резюме и пятью последними открытыми файлами. Промпт суммаризатора настраивают на сложных траекториях: сначала полнота (ничего важного не потерять), потом точность (убрать лишнее).</li>
     <li><b>Как не сломать историю.</b> Граница резюме проходит перед ответом модели: тогда каждая пара <code>tool_use</code> → <code>tool_result</code> целиком остаётся по одну сторону, а роли чередуются, иначе API ответит 400. Thinking-блоки в сохранённых ходах вырезаются: их подпись привязана к прежнему префиксу, и на моделях с проверкой префикса (по документации на октябрь 2026 — в их числе Fable 5.1 и Opus 5.5) такая история невалидна, а убрать все thinking-блоки допустимо. Кэш: system и tools остаются в кэше благодаря отдельному breakpoint'у, история после компакции один раз записывается заново (1,25×) и дальше снова читается по 0,1×.</li>
   </ul>
-  <pre><code class="lang-go">// Compactor сжимает историю, когда контекст перерос порог: старые ходы заменяет
+  <pre data-only="java"><code class="lang-java">/**
+ * Сжимает историю, когда контекст перерос порог: старые ходы заменяет резюме от дешёвой
+ * модели, последние keepTurns ходов оставляет дословно.
+ *
+ * @param model     тот же Budgeted, что у агента: суммаризация тоже стоит денег
+ * @param modelId   "claude-haiku-4-5"
+ * @param threshold токенов контекста; 50–70% рабочего бюджета, а не 95% окна
+ * @param keepTurns ход = ответ модели с tool_use + сообщение с tool_result
+ */
+public record Compactor(Model model, String modelId, long threshold, int keepTurns) {
+
+    static final String SUMMARY_PROMPT = """
+            You compact the working history of an AI agent so that it can continue the task.
+            Preserve: the task and its acceptance criteria; decisions made and why; what is done and verified;
+            exact file paths, IDs, names and numbers; errors met and how they were resolved; open questions;
+            the immediate next step. Drop raw tool outputs that can be fetched again. At most 500 words.""";
+
+    /**
+     * Вызывается перед каждым вызовом модели. ctxTokens — размер контекста по usage прошлого вызова.
+     * Возвращает новую историю или empty, если компакции не было. Бросает исключение, если
+     * суммаризация не удалась: история при этом не тронута.
+     */
+    public Optional&lt;List&lt;MessageParam&gt;&gt; maybe(List&lt;MessageParam&gt; msgs, long ctxTokens) {
+        if (ctxTokens &lt; threshold) {
+            return Optional.empty();
+        }
+        // Хвост должен начинаться с ответа модели: тогда каждая пара tool_use → tool_result
+        // целиком либо в резюме, либо в хвосте, и история чередует user/assistant.
+        int cut = Math.min(msgs.size() - 1, msgs.size() - 2 * keepTurns);
+        while (cut &gt; 1 &amp;&amp; !MessageParam.Role.ASSISTANT.equals(msgs.get(cut).role())) {
+            cut--;
+        }
+        if (cut &lt;= 1) {
+            return Optional.empty(); // сжимать нечего: всё — «последние ходы»
+        }
+        Message resp = model.create(MessageCreateParams.builder()
+                .model(modelId == null ? "claude-haiku-4-5" : modelId).maxTokens(4000)
+                .system(SUMMARY_PROMPT)
+                .addUserMessage(render(msgs.subList(0, cut)))
+                .build());
+        String summary = Agent.text(resp);
+        StopReason stop = resp.stopReason().orElse(null);
+        if (!StopReason.END_TURN.equals(stop) || summary.isEmpty()) {
+            // Обрезанное или пустое резюме хуже никакого: история заменилась бы дырой.
+            throw new IllegalStateException("compact: no summary (stop_reason " + stop + ")");
+        }
+        // Первый блок первого сообщения — исходная задача: её не пересказываем, а держим дословно.
+        var head = MessageParam.builder().role(MessageParam.Role.USER).contentOfBlockParams(List.of(
+                blocks(msgs.get(0)).get(0),
+                ContentBlockParam.ofText("&lt;summary_of_earlier_work&gt;\n" + summary + "\n&lt;/summary_of_earlier_work&gt;\n"
+                        + "Earlier turns were compacted. Re-read your notes before acting; "
+                        + "re-fetch files you need instead of relying on memory.")))
+                .build();
+        List&lt;MessageParam&gt; out = new ArrayList&lt;&gt;(List.of(head));
+        msgs.subList(cut, msgs.size()).forEach(m -&gt; out.add(withoutThinking(m)));
+        return Optional.of(out);
+    }
+
+    static List&lt;ContentBlockParam&gt; blocks(MessageParam m) {
+        var c = m.content();
+        return c.isString() ? List.of(ContentBlockParam.ofText(c.asString())) : c.asBlockParams();
+    }
+
+    /**
+     * Убирает thinking-блоки из сохранённых ходов: их подпись привязана к прежнему префиксу,
+     * а мы его заменили резюме. Убрать все — допустимо, модель лишь теряет те рассуждения;
+     * оставить — ошибка на моделях с проверкой префикса.
+     */
+    static MessageParam withoutThinking(MessageParam m) {
+        var kept = blocks(m).stream().filter(b -&gt; !b.isThinking() &amp;&amp; !b.isRedactedThinking()).toList();
+        return m.toBuilder().contentOfBlockParams(kept).build();
+    }
+
+    /**
+     * Превращает историю в текст для суммаризатора: ему не нужны блоки tool_use
+     * и определения инструментов, а длинные выводы заодно обрезаются.
+     */
+    static String render(List&lt;MessageParam&gt; msgs) {
+        var b = new StringBuilder();
+        for (var m : msgs) {
+            for (var blk : blocks(m)) {
+                if (blk.isText()) {
+                    b.append("[%s] %s%n".formatted(m.role().asString(), blk.asText().text()));
+                } else if (blk.isToolUse()) {
+                    var tu = blk.asToolUse();
+                    b.append("[tool_use %s] %s%n".formatted(tu.name(), Agent.json(tu._input())));
+                } else if (blk.isToolResult()) {
+                    var tr = blk.asToolResult();
+                    String tag = tr.isError().orElse(false) ? "tool_error" : "tool_result";
+                    tr.content().ifPresent(c -&gt; {
+                        List&lt;String&gt; texts = c.isString() ? List.of(c.asString())
+                                : c.asBlocks().stream().filter(x -&gt; x.isText()).map(x -&gt; x.asText().text()).toList();
+                        texts.forEach(t -&gt; b.append("[%s] %s%n".formatted(tag, Agent.truncate(t, 2000, " …"))));
+                    });
+                }
+            }
+        }
+        return b.toString();
+    }
+}
+</code></pre>
+  <pre data-only="go"><code class="lang-go">// Compactor сжимает историю, когда контекст перерос порог: старые ходы заменяет
 // резюме от дешёвой модели, последние KeepTurns ходов оставляет дословно.
 type Compactor struct {
 	Model     Model           // тот же Budgeted, что у агента: суммаризация тоже стоит денег
@@ -665,7 +1236,7 @@ func render(msgs []anthropic.MessageParam) string {
 	}
 	return b.String()
 }</code></pre>
-  <p>В цикл компактор встраивается одной строкой перед вызовом модели — она уже есть в <code>Run</code> выше: <code>a.Compact.Maybe(ctx, msgs, ctxTok)</code>. Суммаризатор ходит через тот же <code>Budgeted</code>, что и агент: компакция тоже стоит денег. Если резюме не пришло (обрезано, отказ, ошибка сети), история не трогается, ошибка учитывается в <code>CompactErrors</code>, и компакция повторяется на следующем шаге — так же документация Anthropic советует поступать с серверной компакцией. В тесте <code>examples/m06-agents</code> fake-модель проходит 60 документов за 66 шагов. Шесть компакций держат пиковый контекст около 12K токенов при пороге 12K, без компакции пик — около 60K. Заодно fake проверяет, что каждый запрос валиден для API: пары <code>tool_use</code>/<code>tool_result</code> и чередование ролей.</p>
+  <p>В цикл компактор встраивается одной строкой перед вызовом модели — она уже есть в <span data-only="go"><code>Run</code> выше: <code>a.Compact.Maybe(ctx, msgs, ctxTok)</code></span><span data-only="java"><code>run</code> выше: <code>compact.maybe(msgs, ctxTok)</code></span>. Суммаризатор ходит через тот же <code>Budgeted</code>, что и агент: компакция тоже стоит денег. Если резюме не пришло (обрезано, отказ, ошибка сети), история не трогается, ошибка учитывается в <span data-only="go"><code>CompactErrors</code></span><span data-only="java"><code>compactErrors</code></span>, и компакция повторяется на следующем шаге — так же документация Anthropic советует поступать с серверной компакцией. В тесте <span data-only="go"><code>examples/m06-agents</code></span><span data-only="java"><code>examples/java/m06-agents</code></span> fake-модель проходит 60 документов за 66 шагов. Шесть компакций держат пиковый контекст около 12K токенов при пороге 12K, без компакции пик — около 60K. Заодно fake проверяет, что каждый запрос валиден для API: пары <code>tool_use</code>/<code>tool_result</code> и чередование ролей.</p>
 
   <h3>Компакция и память на стороне API</h3>
   <p>У Anthropic есть серверные версии тех же рычагов. Состав и статус — по документации Claude Developer Platform на октябрь 2026:</p>
@@ -680,7 +1251,54 @@ func render(msgs []anthropic.MessageParam) string {
 
   <h3>Заметки и память агента</h3>
   <p><b>Структурированные заметки</b> (рычаг write) — агент сам ведёт файл с планом, прогрессом и решениями и перечитывает его после компакции. Пример из статьи Anthropic: Claude, играющий в Pokémon, на протяжении тысяч шагов ведёт счёт прогресса («прокачать покемона до 10-го уровня»), карту исследованных мест и заметки о боях, а после сброса контекста продолжает по ним. Заметки живут внутри задачи. <b>Память</b> (memory tool, файлы или БД) — между задачами и сессиями: предпочтения пользователя, уроки прошлых запусков.</p>
-  <pre><code class="lang-go">// Notes — заметки агента в одном файле (NOTES.md, progress): чтение и полная перезапись.
+  <pre data-only="java"><code class="lang-java">/**
+ * Заметки агента в одном файле (NOTES.md, progress): чтение и полная перезапись.
+ * Дописывания нет намеренно: с лимитом размера агент вынужден сжимать заметки, а не копить лог.
+ */
+public record Notes(Path path, int maxBytes) {
+
+    public AgentTool tool() {
+        return new AgentTool(AgentTool.def("notes",
+                "Your persistent notes file; it survives context compaction and restarts. "
+                        + "op=read returns the whole file. op=write REPLACES the whole file with content. "
+                        + "Limit %d bytes. Keep: goal, plan, done/todo lists, decisions with reasons, open questions. ".formatted(maxBytes)
+                        + "Do not paste tool outputs: store paths and IDs to re-fetch them. Read notes after a compaction.",
+                Map.of("op", Map.of("type", "string", "enum", List.of("read", "write")),
+                        "content", Map.of("type", "string", "description", "full new content, required for write")),
+                List.of("op")),
+                this::run);
+    }
+
+    String run(String input) throws IOException {
+        JsonNode in = ObjectMappers.jsonMapper().readTree(input);
+        String op = in.path("op").asText();
+        String content = in.path("content").asText("");
+        switch (op) {
+            case "read" -&gt; {
+                try {
+                    return Files.readString(path);
+                } catch (NoSuchFileException e) {
+                    return "(no notes yet)";
+                }
+            }
+            case "write" -&gt; {
+                byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+                if (bytes.length &gt; maxBytes) {
+                    throw new IllegalArgumentException(("notes are %d bytes, limit is %d: condense them — merge done items, "
+                            + "drop details you can re-fetch, keep decisions and next steps").formatted(bytes.length, maxBytes));
+                }
+                // Запись через временный файл и atomic move: обрыв посреди записи не оставит полфайла.
+                Path tmp = path.resolveSibling(path.getFileName() + ".tmp");
+                Files.write(tmp, bytes);
+                Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+                return "saved %d/%d bytes".formatted(bytes.length, maxBytes);
+            }
+            default -&gt; throw new IllegalArgumentException("unknown op \"" + op + "\": use read or write");
+        }
+    }
+}
+</code></pre>
+  <pre data-only="go"><code class="lang-go">// Notes — заметки агента в одном файле (NOTES.md, progress): чтение и полная перезапись.
 // Дописывания нет намеренно: с лимитом размера агент вынужден сжимать заметки, а не копить лог.
 type Notes struct {
 	Path     string
@@ -743,14 +1361,41 @@ func (n Notes) run(_ context.Context, input json.RawMessage) (string, error) {
   <ul>
     <li><b>Перезапись вместо дописывания.</b> С <code>append</code> заметки превращаются в лог и сами становятся шумом. Перезапись с лимитом заставляет агента сжимать: объединять сделанное и выбрасывать то, что можно восстановить.</li>
     <li><b>Ссылки вместо содержимого</b>: путь к файлу и ID, а не вывод инструмента.</li>
-    <li><b>Атомарная запись</b> через временный файл и <code>rename</code>: обрыв процесса посреди записи не оставит полфайла, а именно по этому файлу будет восстанавливаться следующая сессия.</li>
+    <li><b>Атомарная запись</b> через временный файл и <span data-only="go"><code>rename</code></span><span data-only="java"><code>Files.move(..., ATOMIC_MOVE)</code></span>: обрыв процесса посреди записи не оставит полфайла, а именно по этому файлу будет восстанавливаться следующая сессия.</li>
     <li><b>Файл инструкций репозитория</b> (<code>CLAUDE.md</code>/<code>AGENTS.md</code>) — «всегда загруженная» часть контекста coding agent, см. <a href="m04.html#coding-agents">модуль 4</a>. Его пишут люди, он попадает в каждый вызов, поэтому держите его коротким: каждый токен оплачивается на каждом шаге.</li>
     <li><b>Память между сессиями требует гигиены</b>: устаревание (дата последнего чтения, чистка старого), никаких секретов и PII (модуль 11), защита от path traversal. И помните про poisoning: ошибочный «факт» в памяти будет воспроизводиться во всех будущих сессиях.</li>
   </ul>
 
   <h3>Субагенты с изолированным контекстом</h3>
   <p>Рычаг isolate: тяжёлое чтение (поиск по коду, разбор логов, исследование) уходит в субагента со своим списком сообщений, своими инструментами и своим бюджетом. Субагент может потратить десятки тысяч токенов, а родителю вернуть выжимку на 1–2K (оценка Anthropic). В основном контексте остаётся вывод, а не путь к нему.</p>
-  <pre><code class="lang-go">// AsTool превращает агента в инструмент для родителя. Каждый вызов — свой список сообщений
+  <pre data-only="java"><code class="lang-java">// Метод record Agent: агент как инструмент родителя.
+/**
+ * Превращает агента в инструмент для родителя. Каждый вызов — свой список сообщений
+ * (чистый контекст), свой бюджет поверх бюджета родителя, и наверх уходит только итог,
+ * урезанный до maxResult символов: десятки тысяч токенов чтения остаются у субагента.
+ */
+public AgentTool asTool(String name, String desc, double maxUsd, int maxResult) {
+    return new AgentTool(AgentTool.def(name, desc,
+            Map.of("task", Map.of("type", "string", "description",
+                    "Self-contained task: goal, scope and boundaries, expected output format. The subagent sees nothing else.")),
+            List.of("task")),
+            input -&gt; {
+                String task = ObjectMappers.jsonMapper().readTree(input).path("task").asText("");
+                if (task.isEmpty()) {
+                    throw new IllegalArgumentException("pass a non-empty task");
+                }
+                // Лимит на этот вызов, расходы видит и родитель; историю run создаст с нуля.
+                Agent sub = withModel(new Budgeted(model, maxUsd));
+                try {
+                    return truncate(sub.run(task).text, maxResult, "\n…[truncated]");
+                } catch (AgentException e) {
+                    throw new IllegalStateException("subagent stopped after %d iterations: %s; narrow the task"
+                            .formatted(e.result.iters, e.getMessage()), e);
+                }
+            });
+}
+</code></pre>
+  <pre data-only="go"><code class="lang-go">// AsTool превращает агента в инструмент для родителя. Каждый вызов — свой список сообщений
 // (чистый контекст), свой бюджет поверх бюджета родителя, и наверх уходит только итог,
 // урезанный до maxResult байт: десятки тысяч токенов чтения остаются у субагента.
 func (a Agent) AsTool(name, desc string, maxUSD float64, maxResult int) Tool {
@@ -784,7 +1429,29 @@ func (a Agent) AsTool(name, desc string, maxUSD float64, maxResult int) Tool {
 	}
 }</code></pre>
   <p>Сборка целиком: общий бюджет сессии, дешёвый исследователь только с инструментами чтения, основной агент с заметками и компакцией:</p>
-  <pre><code class="lang-go">client := anthropic.NewClient() // ключ из ANTHROPIC_API_KEY
+  <pre data-only="java"><code class="lang-java">AnthropicClient client = AnthropicOkHttpClient.fromEnv(); // ключ из ANTHROPIC_API_KEY
+var root = new Budgeted(client.messages()::create, 5);
+
+var researcher = new Agent(root, "claude-haiku-4-5",
+        "Answer the question using the read-only tools. Return facts with file paths, at most 300 words.",
+        Map.of(/* grep, read_file — только чтение */), 15, null, null);
+var notes = new Notes(Path.of("NOTES.md"), 8 &lt;&lt; 10);
+var lead = new Agent(root, "claude-opus-5",
+        "You fix bugs in this repository. Keep NOTES.md current: plan, done, decisions, next step.",
+        Map.of("notes", notes.tool(),
+               "research", researcher.asTool("research", "Delegate a read-only investigation; returns a short report.", 0.30, 6000)),
+        80,
+        new Compactor(root, "claude-haiku-4-5", 120_000, 6),
+        Confirm.stdin());
+try {
+    var res = lead.run("Find and fix the deadlock in inventory.Reserve");
+    System.out.printf("%d iters, %d compactions, peak %d tokens, $%.2f%n%s%n",
+            res.iters, res.compactions, res.peakCtx, root.spent(), res.text);
+} catch (Agent.AgentException e) { // бюджет, max iterations, ошибка API — с частичным результатом
+    System.out.printf("stopped after %d iters, $%.2f: %s%n", e.result.iters, root.spent(), e.getMessage());
+}
+</code></pre>
+  <pre data-only="go"><code class="lang-go">client := anthropic.NewClient() // ключ из ANTHROPIC_API_KEY
 root := &amp;agent.Budgeted{Model: &amp;client.Messages, MaxUSD: 5}
 
 researcher := agent.Agent{
@@ -846,7 +1513,64 @@ fmt.Printf("%d iters, %d compactions, peak %d tokens, $%.2f: %v\n%s\n",
 
   <h3>Восстановление после обрыва и критерии остановки</h3>
   <p>Если всё состояние лежит в файлах и git, обрыв процесса стоит максимум одной сессии: перезапуск выполняет тот же ритуал и продолжает с того же места. Отсюда harness — цикл сессий, в котором решение «готово» принимает код, а не модель:</p>
-  <pre><code class="lang-go">// Check — состояние длинной задачи по мнению кода, а не модели: прогон тестов, число
+  <pre data-only="java"><code class="lang-java">/** Короткие сессии со свежим контекстом и проверкой прогресса кодом. */
+public final class Sessions {
+    private Sessions() {}
+
+    /**
+     * Состояние длинной задачи по мнению кода, а не модели: прогон тестов, число пунктов
+     * с passes=true в features.json, валидность артефактов. progress — отпечаток прогресса
+     * (например, «37/52 + хэш HEAD»), по нему видно, что сессия что-то сдвинула.
+     */
+    public record Progress(boolean done, String progress) {}
+
+    @FunctionalInterface
+    public interface Check {
+        Progress check() throws Exception;
+    }
+
+    public static final class StuckException extends Exception {
+        StuckException(int sessions) {
+            super("agent: no progress in consecutive sessions (after " + sessions + ")");
+        }
+    }
+
+    /**
+     * Крутит короткие сессии агента со свежим контекстом, пока check не скажет «готово».
+     * Между сессиями состояние живёт только в файлах (progress, notes) и git, поэтому обрыв
+     * процесса стоит максимум одной сессии: перезапуск продолжает с того же места.
+     * Возвращает число проведённых сессий.
+     */
+    public static int runSessions(Agent a, String task, Check check, int maxSessions, int patience) throws Exception {
+        String last = "";
+        int idle = 0;
+        for (int s = 0; s &lt; maxSessions; s++) {
+            Progress p = check.check();
+            if (p.done()) {
+                return s;
+            }
+            if (s &gt; 0 &amp;&amp; p.progress().equals(last)) {
+                if (++idle &gt;= patience) {
+                    throw new StuckException(s); // сессии жгут бюджет, не двигая задачу: зовём человека
+                }
+            } else {
+                idle = 0;
+            }
+            last = p.progress();
+            try {
+                a.run(task);
+            } catch (Agent.MaxItersException e) {
+                // Лимит итераций — нормальный конец сессии: следующая продолжит по файлам.
+            } // остальные AgentException (бюджет, недоступный API) — стоп, летят наверх
+        }
+        if (!check.check().done()) {
+            throw new IllegalStateException("agent: session limit reached, task not done");
+        }
+        return maxSessions;
+    }
+}
+</code></pre>
+  <pre data-only="go"><code class="lang-go">// Check — состояние длинной задачи по мнению кода, а не модели: прогон тестов, число
 // пунктов с passes=true в features.json, валидность артефактов. progress — отпечаток
 // прогресса (например, «37/52 + хэш HEAD»), по нему видно, что сессия что-то сдвинула.
 type Check func(ctx context.Context) (done bool, progress string, err error)
@@ -886,11 +1610,12 @@ func RunSessions(ctx context.Context, a *Agent, task string, check Check, maxSes
   <ul>
     <li><b>Готово</b> — по проверке кодом: все пункты списка с <code>passes: true</code>, тесты зелёные, артефакты валидны. «Модель сказала, что закончила» — не критерий, это ровно режим отказа «объявить победу».</li>
     <li><b>Застряли</b> — отпечаток прогресса не меняется <code>patience</code> сессий подряд: сессии жгут бюджет, не двигая задачу. Стоп и эскалация человеку.</li>
-    <li><b>Бюджет</b> — один <code>Budgeted</code> на всю задачу: <code>ErrBudget</code> останавливает не только сессию, но и цикл сессий.</li>
+    <li><b>Бюджет</b> — один <code>Budgeted</code> на всю задачу: <span data-only="go"><code>ErrBudget</code></span><span data-only="java"><code>BudgetExceededException</code></span> останавливает не только сессию, но и цикл сессий.</li>
     <li><b>Лимит сессий</b> — последняя страховка от бесконечного цикла.</li>
     <li><b>Идемпотентность мутаций обязательна</b>: прерванная сессия могла выполнить действие и не успеть записать это в progress.</li>
   </ul>
-  <div class="callout go"><span class="title">Аналогия из Go</span>Long-horizon harness — это воркер очереди с доставкой at-least-once. Задачу могут прервать и выполнить повторно, поэтому обработчик идемпотентен; прогресс фиксируется после каждого шага, как offset в Kafka; «готово» определяется по состоянию в хранилище, а не по логу воркера. Сессия агента — один обработанный батч.</div>
+  <div class="callout go" data-only="java"><span class="title">Аналогия из Java</span>Long-horizon harness — это консьюмер очереди (<code>@KafkaListener</code>) с доставкой at-least-once. Задачу могут прервать и выполнить повторно, поэтому обработчик идемпотентен; прогресс фиксируется после каждого шага, как commit offset в Kafka; «готово» определяется по состоянию в хранилище, а не по логу воркера. Сессия агента — один обработанный батч.</div>
+  <div class="callout go" data-only="go"><span class="title">Аналогия из Go</span>Long-horizon harness — это воркер очереди с доставкой at-least-once. Задачу могут прервать и выполнить повторно, поэтому обработчик идемпотентен; прогресс фиксируется после каждого шага, как offset в Kafka; «готово» определяется по состоянию в хранилище, а не по логу воркера. Сессия агента — один обработанный батч.</div>
 
   <h2 id="multi">Мультиагентные системы</h2>
   <p>Схема оркестратор + субагенты: главный агент планирует, порождает субагентов с узкими задачами (каждый — со своим системным промптом, инструментами и <em>чистым контекстом</em>), получает от них сжатые результаты и синтезирует ответ. Это orchestrator-workers, где workers — сами агенты.</p>
@@ -913,7 +1638,8 @@ func RunSessions(ctx context.Context, a *Agent, task string, check Check, maxSes
     <li><b>Потеря на границе</b>: выжимка выбросила важное. Субагент может писать полный результат в файл/хранилище и возвращать ссылку.</li>
     <li><b>Отладка</b>: недетерминированные траектории × N. Без трейсинга всего дерева вызовов (модуль 9) разбирать инциденты невозможно.</li>
   </ul>
-  <div class="callout go"><span class="title">Аналогия из Go</span>Оркестратор с субагентами — <code>errgroup.WithContext</code> + <code>SetLimit(n)</code>: fan-out с ограничением параллелизма, общая отмена и сбор результатов. И так же, как с горутинами, общая изменяемая память между субагентами — источник гонок; общайтесь сообщениями (результатами), а не общим состоянием.</div>
+  <div class="callout go" data-only="java"><span class="title">Аналогия из Java</span>Оркестратор с субагентами — <code>StructuredTaskScope</code> (preview) или <code>ExecutorService</code> на virtual threads + <code>Semaphore(n)</code>: fan-out с ограничением параллелизма, общая отмена и сбор результатов через <code>Future</code>. И так же, как с потоками, общая изменяемая память между субагентами — источник гонок; общайтесь сообщениями (результатами), а не общим состоянием.</div>
+  <div class="callout go" data-only="go"><span class="title">Аналогия из Go</span>Оркестратор с субагентами — <code>errgroup.WithContext</code> + <code>SetLimit(n)</code>: fan-out с ограничением параллелизма, общая отмена и сбор результатов. И так же, как с горутинами, общая изменяемая память между субагентами — источник гонок; общайтесь сообщениями (результатами), а не общим состоянием.</div>
 
   <h2 id="mcp">MCP: Model Context Protocol</h2>
   <p><b>MCP</b> — открытый протокол (Anthropic, ноябрь 2024), стандартизирующий, как LLM-приложения подключают внешние инструменты и данные. Проблема, которую он решает, — M×N интеграций: M приложений (Claude Desktop, Claude Code, IDE, ваш бот) × N систем (GitHub, Postgres, Jira). С MCP каждая система пишет один сервер, каждое приложение — один клиент. Аналогия, которую любят в докладах, — «USB-C для LLM»; точнее для бэкендера — это как LSP для редакторов.</p>
@@ -948,7 +1674,7 @@ func RunSessions(ctx context.Context, a *Agent, task string, check Check, maxSes
     <tr><td>Как</td><td>Host запускает сервер дочерним процессом; JSON-RPC построчно через stdin/stdout</td><td>Один HTTP-эндпоинт (например <code>/mcp</code>): клиент шлёт POST, сервер отвечает JSON или SSE-потоком; сессия — заголовок <code>Mcp-Session-Id</code></td></tr>
     <tr><td>Где</td><td>Локальные инструменты: файлы, git, локальная БД, CLI</td><td>Удалённые/общие серверы, SaaS-интеграции, мультитенантность</td></tr>
     <tr><td>Авторизация</td><td>Неявная: процесс с правами пользователя, секреты через env</td><td>OAuth 2.1 (сервер — resource server, токен в <code>Authorization: Bearer</code>)</td></tr>
-    <tr><td>Подводные камни</td><td>Любой <code>fmt.Println</code> в stdout ломает протокол — логи только в stderr</td><td>Балансировка со sticky-сессиями, таймауты прокси на SSE, CORS, DNS rebinding для localhost</td></tr>
+    <tr><td>Подводные камни</td><td>Любой <span data-only="go"><code>fmt.Println</code></span><span data-only="java"><code>System.out.println</code></span> в stdout ломает протокол — логи только в stderr</td><td>Балансировка со sticky-сессиями, таймауты прокси на SSE, CORS, DNS rebinding для localhost</td></tr>
   </table>
   <p>Старый транспорт HTTP+SSE (два эндпоинта) устарел и заменён Streamable HTTP; в новых серверах его не используйте.</p>
 
@@ -981,9 +1707,176 @@ func RunSessions(ctx context.Context, a *Agent, task string, check Check, maxSes
     <li>Токен пользователя вместо сервисного суперключа, token exchange и step-up для необратимых действий — <a href="m07.html#agency">модуль 7</a>.</li>
   </ul>
 
-  <h2 id="mcp-go">Свой MCP-сервер на Go</h2>
-  <p>Официальный SDK: <code>github.com/modelcontextprotocol/go-sdk</code> (пакет <code>mcp</code>). Ниже сервер со всеми тремя серверными примитивами: инструмент read-only SQL к Postgres, resource со схемой БД и prompt недельного отчёта. Схема входа инструмента выводится из Go-структуры по тегам <code>json</code>/<code>jsonschema</code>. Код собирается с <code>go-sdk v1.8.0</code> (на момент написания, октябрь 2026; эта версия по умолчанию говорит на протоколе <code>2026-07-28</code> и поддерживает старые версии вплоть до <code>2024-11-05</code>), полная версия с тестом — в <code>examples/m06-agents/cmd/pg-mcp</code>. SDK развивается — при обновлении сверяйте сигнатуры на pkg.go.dev.</p>
-  <pre><code class="lang-go">package main
+  <h2 id="mcp-go" data-only="go">Свой MCP-сервер на Go</h2>
+  <h2 id="mcp-go" data-only="java">Свой MCP-сервер на Java</h2>
+  <p data-only="java">Официальный Java SDK: <code>io.modelcontextprotocol.sdk:mcp-core</code> плюс <code>mcp-json-jackson2</code> (Jackson 2, как в Spring Boot 3.5; артефакт <code>mcp</code> тянет Jackson 3). Ниже сервер со всеми тремя серверными примитивами: инструмент read-only SQL к Postgres, resource со схемой БД и prompt недельного отчёта. Схема входа инструмента задаётся JSON Schema строкой; в Spring AI её выводит из сигнатуры <code>@Tool</code>-метода стартер <code>spring-ai-starter-mcp-server</code>. Код собирается с SDK <code>2.0.1</code> (на момент написания, октябрь 2026), полная версия с тестом — в <code>examples/java/m06-agents</code> (пакет <code>course.m06agents.pgmcp</code>). SDK развивается — при обновлении сверяйте сигнатуры по javadoc.</p>
+  <p data-only="go">Официальный SDK: <code>github.com/modelcontextprotocol/go-sdk</code> (пакет <code>mcp</code>). Ниже сервер со всеми тремя серверными примитивами: инструмент read-only SQL к Postgres, resource со схемой БД и prompt недельного отчёта. Схема входа инструмента выводится из Go-структуры по тегам <code>json</code>/<code>jsonschema</code>. Код собирается с <code>go-sdk v1.8.0</code> (на момент написания, октябрь 2026; эта версия по умолчанию говорит на протоколе <code>2026-07-28</code> и поддерживает старые версии вплоть до <code>2024-11-05</code>), полная версия с тестом — в <code>examples/m06-agents/cmd/pg-mcp</code>. SDK развивается — при обновлении сверяйте сигнатуры на pkg.go.dev.</p>
+  <pre data-only="java"><code class="lang-java">package course.m06agents.pgmcp;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.modelcontextprotocol.json.McpJsonMapper;
+import io.modelcontextprotocol.json.jackson2.JacksonMcpJsonMapper;
+import io.modelcontextprotocol.server.McpServer;
+import io.modelcontextprotocol.server.McpServerFeatures.SyncPromptSpecification;
+import io.modelcontextprotocol.server.McpServerFeatures.SyncResourceSpecification;
+import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
+import io.modelcontextprotocol.server.McpSyncServer;
+import io.modelcontextprotocol.server.transport.StdioServerTransportProvider;
+import io.modelcontextprotocol.spec.McpSchema;
+import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Pattern;
+
+/**
+ * MCP-сервер из m06.html#mcp-go: read-only SQL к Postgres (tool), описание схемы (resource)
+ * и шаблон недельного отчёта (prompt).
+ *
+ * &lt;pre&gt;
+ * PG_RO_DSN='jdbc:postgresql://localhost:5432/analytics?user=mcp_ro' \
+ *   mvn -q -pl m06-agents exec:java -Dexec.mainClass=course.m06agents.pgmcp.PgMcpServer
+ * &lt;/pre&gt;
+ */
+public final class PgMcpServer {
+    private PgMcpServer() {}
+
+    /** Источник соединений: DriverManager, HikariDataSource::getConnection или null-заглушка в тестах. */
+    @FunctionalInterface
+    public interface Db {
+        Connection connect() throws SQLException;
+    }
+
+    public record QueryOut(List&lt;String&gt; columns, List&lt;List&lt;Object&gt;&gt; rows, boolean truncated) {}
+
+    static final String INPUT_SCHEMA = """
+            {"type":"object","required":["sql"],"properties":{
+              "sql":{"type":"string","description":"one PostgreSQL SELECT statement, no trailing semicolon"},
+              "limit":{"type":"integer","description":"max rows to return, default 100, max 500"}}}""";
+
+    static final Pattern ISO_WEEK = Pattern.compile("^\\d{4}-W(0[1-9]|[1-4]\\d|5[0-3])$");
+
+    static final String SCHEMA_DOC = """
+            # analytics
+            - orders(id, user_id → users.id, created_at timestamptz, status: new|paid|refunded, total_cents bigint)
+            - users(id, created_at, country char(2)) — без PII: email и имена в другой БД
+            - payments(id, order_id → orders.id, paid_at, amount_cents, provider)
+            Деньги — в центах; «выручка» = sum(total_cents) по status = 'paid'.""";
+
+    public static void main(String[] args) throws InterruptedException {
+        // Роль в DSN должна иметь только SELECT — это главная защита, всё остальное — пояса.
+        // ponytail: соединение на вызов; под нагрузкой — пул HikariCP с maximumPoolSize=4.
+        String dsn = System.getenv("PG_RO_DSN");
+        var json = new JacksonMcpJsonMapper(new ObjectMapper());
+        newServer(McpServer.sync(new StdioServerTransportProvider(json)), () -&gt; DriverManager.getConnection(dsn), json);
+        Thread.currentThread().join(); // транспорт читает stdin в своих потоках; stdout занят протоколом
+    }
+
+    /** spec — McpServer.sync(...) над stdio или Streamable HTTP транспортом: примитивы одни и те же. */
+    public static McpSyncServer newServer(McpServer.SyncSpecification&lt;?&gt; spec, Db db, McpJsonMapper json) {
+        var tool = McpSchema.Tool.builder()
+                .name("pg_query")
+                .description("Run a read-only SQL SELECT against the analytics Postgres database. "
+                        + "Use for questions about orders, users and payments. Results are capped at 500 rows "
+                        + "and 5s execution; aggregate in SQL instead of fetching raw rows. "
+                        + "On errors the message lists what to fix.")
+                .inputSchema(json, INPUT_SCHEMA)
+                .annotations(McpSchema.ToolAnnotations.builder().readOnlyHint(true).build())
+                .build();
+
+        // Resource: данные, которые host сам кладёт в контекст (application-controlled).
+        var schema = new SyncResourceSpecification(
+                McpSchema.Resource.builder().uri("schema://analytics").name("analytics-schema").mimeType("text/markdown")
+                        .description("Tables, columns and join keys of the analytics database. Attach before writing SQL.")
+                        .build(),
+                (ex, req) -&gt; new McpSchema.ReadResourceResult(
+                        List.of(new McpSchema.TextResourceContents(req.uri(), "text/markdown", SCHEMA_DOC))));
+
+        // Prompt: шаблон, который пользователь выбирает явно (слэш-команда в клиенте).
+        var weekly = new SyncPromptSpecification(
+                new McpSchema.Prompt("weekly_report", "Orders and revenue report for one ISO week",
+                        List.of(new McpSchema.PromptArgument("week", "ISO week, e.g. 2026-W40", true))),
+                (ex, req) -&gt; {
+                    String week = String.valueOf(req.arguments().get("week"));
+                    if (!ISO_WEEK.matcher(week).matches()) { // аргумент попадёт в промпт — валидируем как любой ввод
+                        throw new IllegalArgumentException("week must look like 2026-W40, got \"" + week + "\"");
+                    }
+                    return new McpSchema.GetPromptResult("Weekly report for " + week, List.of(new McpSchema.PromptMessage(
+                            McpSchema.Role.USER, new McpSchema.TextContent("Build a report for ISO week " + week
+                                    + ": orders count, revenue, average order value, and the change against the previous week. "
+                                    + "Read the schema://analytics resource first, aggregate in SQL with pg_query, show the queries you ran."))));
+                });
+
+        return spec
+                .serverInfo("pg-readonly", "v0.2.0")
+                .jsonMapper(json)
+                .validateToolInputs(true) // аргументы проверяются по inputSchema ещё до обработчика
+                .capabilities(McpSchema.ServerCapabilities.builder().tools(false).resources(false, false).prompts(false).build())
+                .tools(new SyncToolSpecification(tool, (ex, req) -&gt; query(db, json, req.arguments())))
+                .resources(schema)
+                .prompts(weekly)
+                .build();
+    }
+
+    /** Ошибка обработчика — это результат с isError, а не протокольная ошибка: модель её увидит. */
+    static CallToolResult error(String msg) {
+        return CallToolResult.builder().addTextContent(msg).isError(true).build();
+    }
+
+    static CallToolResult query(Db db, McpJsonMapper json, Map&lt;String, Object&gt; args) {
+        String q = String.valueOf(args.getOrDefault("sql", "")).strip();
+        if (q.contains(";")) {
+            return error("multiple statements are not allowed; remove ';'");
+        }
+        int limit = args.get("limit") instanceof Number n ? n.intValue() : 0;
+        if (limit &lt;= 0 || limit &gt; 500) {
+            limit = 100;
+        }
+        try (Connection c = db.connect()) {
+            c.setAutoCommit(false);
+            c.setReadOnly(true); // BEGIN READ ONLY
+            try (Statement st = c.createStatement()) {
+                st.execute("SET LOCAL statement_timeout = '5s'");
+                try (ResultSet rs = st.executeQuery("SELECT * FROM (" + q + ") AS q LIMIT " + (limit + 1))) {
+                    var meta = rs.getMetaData();
+                    List&lt;String&gt; cols = new ArrayList&lt;&gt;();
+                    for (int i = 1; i &lt;= meta.getColumnCount(); i++) {
+                        cols.add(meta.getColumnLabel(i));
+                    }
+                    List&lt;List&lt;Object&gt;&gt; rows = new ArrayList&lt;&gt;();
+                    boolean truncated = false;
+                    while (rs.next()) {
+                        if (rows.size() == limit) {
+                            truncated = true;
+                            break;
+                        }
+                        List&lt;Object&gt; row = new ArrayList&lt;&gt;();
+                        for (int i = 1; i &lt;= cols.size(); i++) {
+                            Object v = rs.getObject(i);
+                            row.add(v == null || v instanceof Number || v instanceof Boolean ? v : v.toString());
+                        }
+                        rows.add(row);
+                    }
+                    var out = new QueryOut(cols, rows, truncated);
+                    return CallToolResult.builder().structuredContent(out).addTextContent(json.writeValueAsString(out)).build();
+                }
+            } finally {
+                c.rollback(); // только чтение — коммитить нечего
+            }
+        } catch (SQLException e) {
+            return error("query failed: " + e.getMessage() + ". Check table/column names with information_schema");
+        } catch (Exception e) {
+            return error(e.getMessage());
+        }
+    }
+}
+</code></pre>
+  <pre data-only="go"><code class="lang-go">package main
 
 import (
 	"context"
@@ -1121,19 +2014,80 @@ func queryHandler(db *sql.DB) func(context.Context, *mcp.CallToolRequest, QueryI
 		return nil, out, rows.Err()
 	}
 }</code></pre>
-  <p>Что делает SDK: из <code>QueryIn</code>/<code>QueryOut</code> генерирует <code>inputSchema</code>/<code>outputSchema</code>, валидирует аргументы, результат кладёт в <code>structuredContent</code> (и текстовую копию в <code>content</code>), а ошибку обработчика отдаёт как результат с <code>isError: true</code>, а не как JSON-RPC ошибку — так модель её увидит и сможет исправить запрос (так в v1.8.0; если вернуть <code>*jsonrpc.Error</code>, SDK отдаст именно протокольную ошибку).</p>
-  <p><b>Resource</b> <code>schema://analytics</code> — курируемое описание схемы. Host прикрепляет его к контексту сам или по выбору пользователя (рычаг select без лишнего вызова инструмента). Курируемый текст лучше сырого <code>information_schema</code>: в нём единицы измерения, смысл статусов и определение выручки — то, что модель иначе угадывала бы. <b>Prompt</b> <code>weekly_report</code> — шаблон, который пользователь выбирает явно (в Claude Code промпты MCP-серверов доступны как слэш-команды). Аргумент попадает в текст промпта, поэтому валидируется как любой ввод. Аннотация <code>ReadOnlyHint</code> у инструмента — подсказка host'у, а не гарантия: о том, как её использовать, — ниже.</p>
+  <p data-only="java">Что делает SDK: с <code>validateToolInputs(true)</code> проверяет аргументы по <code>inputSchema</code> ещё до обработчика, а <code>structuredContent</code> и текстовую копию в <code>content</code> мы кладём сами. Ошибку обработчика возвращайте как <code>CallToolResult</code> с <code>isError(true)</code>, а не исключением: так модель её увидит и сможет исправить запрос. Исключение из обработчика prompt или resource SDK отдаёт как протокольную ошибку JSON-RPC — для невалидного аргумента промпта это и нужно. Источник соединений — функциональный интерфейс <code>Db</code>: в проде <code>HikariDataSource::getConnection</code>, а <code>setReadOnly(true)</code> при выключенном autocommit даёт <code>BEGIN READ ONLY</code>.</p>
+  <p data-only="go">Что делает SDK: из <code>QueryIn</code>/<code>QueryOut</code> генерирует <code>inputSchema</code>/<code>outputSchema</code>, валидирует аргументы, результат кладёт в <code>structuredContent</code> (и текстовую копию в <code>content</code>), а ошибку обработчика отдаёт как результат с <code>isError: true</code>, а не как JSON-RPC ошибку — так модель её увидит и сможет исправить запрос (так в v1.8.0; если вернуть <code>*jsonrpc.Error</code>, SDK отдаст именно протокольную ошибку).</p>
+  <p><b>Resource</b> <code>schema://analytics</code> — курируемое описание схемы. Host прикрепляет его к контексту сам или по выбору пользователя (рычаг select без лишнего вызова инструмента). Курируемый текст лучше сырого <code>information_schema</code>: в нём единицы измерения, смысл статусов и определение выручки — то, что модель иначе угадывала бы. <b>Prompt</b> <code>weekly_report</code> — шаблон, который пользователь выбирает явно (в Claude Code промпты MCP-серверов доступны как слэш-команды). Аргумент попадает в текст промпта, поэтому валидируется как любой ввод. Аннотация <span data-only="go"><code>ReadOnlyHint</code></span><span data-only="java"><code>readOnlyHint</code></span> у инструмента — подсказка host'у, а не гарантия: о том, как её использовать, — ниже.</p>
   <div class="callout warn"><span class="title">Read-only — это слои, а не один флаг</span>(1) роль БД только с <code>SELECT</code> и без доступа к таблицам с PII; (2) <code>BEGIN READ ONLY</code>; (3) <code>statement_timeout</code>; (4) лимит строк; (5) запрет <code>;</code>. Обёртка <code>SELECT * FROM (…)</code> не защищает от всего (функции с побочными эффектами, <code>pg_sleep</code>, тяжёлые <code>CROSS JOIN</code>) — поэтому решает пункт 1, а остальные ограничивают ущерб. Для продакшн-данных ещё лучше — реплика.</div>
 
   <h3>Streamable HTTP вместо stdio</h3>
-  <pre><code class="lang-go">handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
+  <pre data-only="java"><code class="lang-java">// Spring Boot (spring-boot-starter-web): транспорт Streamable HTTP — это обычный сервлет.
+@Bean
+ServletRegistrationBean&lt;HttpServletStreamableServerTransportProvider&gt; mcp(DataSource ds) {
+    var json = new JacksonMcpJsonMapper(new ObjectMapper());
+    var transport = HttpServletStreamableServerTransportProvider.builder()
+            .jsonMapper(json).mcpEndpoint("/mcp").build();
+    PgMcpServer.newServer(McpServer.sync(transport), ds::getConnection, json);
+    return new ServletRegistrationBean&lt;&gt;(transport, "/mcp");
+}
+// server.address=127.0.0.1; проверку OAuth-токена и audience делает Spring Security
+// (oauth2ResourceServer) — фильтр перед сервлетом, как requireBearer-middleware.
+</code></pre>
+  <pre data-only="go"><code class="lang-go">handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
 mux := http.NewServeMux()
 mux.Handle("/mcp", requireBearer(handler)) // ваш middleware: проверка OAuth-токена и audience
 log.Fatal(http.ListenAndServe("127.0.0.1:8080", mux))</code></pre>
 
-  <h3>Тест сервера через in-memory транспорт</h3>
-  <p><code>mcp.NewInMemoryTransports()</code> возвращает пару связанных транспортов. Сервер подключается первым, клиент вторым: handshake <code>initialize</code> клиент делает внутри <code>Connect</code>. Тест проходит весь путь JSON-RPC — <code>tools/list</code>, <code>tools/call</code>, <code>resources/read</code>, <code>prompts/get</code> — без Postgres, stdio и сети, поэтому живёт в обычном <code>go test</code> и CI.</p>
-  <pre><code class="lang-go">// Сервер и клиент в одном процессе через in-memory транспорт: без Postgres и без stdio.
+  <h3 data-only="go">Тест сервера через in-memory транспорт</h3>
+  <h3 data-only="java">Тест сервера через stdio</h3>
+  <p data-only="java">В Java SDK in-memory транспорта нет, поэтому тест поднимает сервер так же, как host: дочерним процессом через <code>StdioClientTransport</code> (тот же <code>java</code> и classpath тестов). Handshake <code>initialize</code> клиент делает в <code>initialize()</code>. Тест проходит весь путь JSON-RPC — <code>tools/list</code>, <code>tools/call</code>, <code>resources/read</code>, <code>prompts/get</code> — без Postgres и сети и живёт в обычном <code>mvn test</code> и CI; старт второй JVM добавляет около секунды.</p>
+  <p data-only="go"><code>mcp.NewInMemoryTransports()</code> возвращает пару связанных транспортов. Сервер подключается первым, клиент вторым: handshake <code>initialize</code> клиент делает внутри <code>Connect</code>. Тест проходит весь путь JSON-RPC — <code>tools/list</code>, <code>tools/call</code>, <code>resources/read</code>, <code>prompts/get</code> — без Postgres, stdio и сети, поэтому живёт в обычном <code>go test</code> и CI.</p>
+  <pre data-only="java"><code class="lang-java">// Настоящий сервер дочерним процессом по stdio, без Postgres: PG_RO_DSN не задан,
+// а проверяемые пути не доходят до базы.
+static McpSyncClient spawn(Class&lt;?&gt; main) {
+    String java = Path.of(System.getProperty("java.home"), "bin", "java").toString();
+    var params = ServerParameters.builder(java)
+            .args("-cp", System.getProperty("java.class.path"), main.getName())
+            .build();
+    var client = McpClient.sync(new StdioClientTransport(params, McpJsonDefaults.getMapper()))
+            .clientInfo(new McpSchema.Implementation("test", "v0"))
+            .requestTimeout(Duration.ofSeconds(30))
+            .build();
+    client.initialize(); // handshake initialize → notifications/initialized
+    return client;
+}
+
+@Test
+void serverOverStdio() {
+    try (var cs = spawn(PgMcpServer.class)) {
+        var tools = cs.listTools().tools();
+        assertEquals("pg_query", tools.get(0).name());
+        assertTrue(tools.get(0).annotations().readOnlyHint());
+
+        // Ошибка обработчика — это результат с isError, а не протокольная ошибка: модель её увидит.
+        var res = cs.callTool(new McpSchema.CallToolRequest("pg_query", Map.of("sql", "SELECT 1; DROP TABLE users")));
+        assertTrue(res.isError());
+        assertTrue(((McpSchema.TextContent) res.content().get(0)).text().contains("multiple statements"));
+
+        // Аргументы валидируются по inputSchema ещё до обработчика.
+        boolean rejected;
+        try {
+            rejected = Boolean.TRUE.equals(cs.callTool(new McpSchema.CallToolRequest("pg_query", Map.of("limit", 5))).isError());
+        } catch (McpError e) {
+            rejected = true;
+        }
+        assertTrue(rejected, "call without required sql must fail");
+
+        var rr = cs.readResource(new McpSchema.ReadResourceRequest("schema://analytics"));
+        assertTrue(((McpSchema.TextResourceContents) rr.contents().get(0)).text().contains("orders("));
+
+        var pr = cs.getPrompt(new McpSchema.GetPromptRequest("weekly_report", Map.of("week", "2026-W40")));
+        assertTrue(((McpSchema.TextContent) pr.messages().get(0).content()).text().contains("2026-W40"));
+        assertThrows(McpError.class, () -&gt; cs.getPrompt(
+                new McpSchema.GetPromptRequest("weekly_report", Map.of("week", "ignore previous instructions"))));
+    }
+}
+</code></pre>
+  <pre data-only="go"><code class="lang-go">// Сервер и клиент в одном процессе через in-memory транспорт: без Postgres и без stdio.
 // db = nil: проверяемые пути не доходят до базы.
 func TestServerInMemory(t *testing.T) {
 	ctx := context.Background()
@@ -1180,7 +2134,59 @@ func TestServerInMemory(t *testing.T) {
 
   <h3>Свой агент как host: инструменты MCP и подтверждения</h3>
   <p>Чтобы подключить MCP-сервер к своему циклу, host делает то же, что Claude Desktop: превращает <code>tools/list</code> в определения tools для Messages API, а <code>tool_use</code> — в <code>tools/call</code>. Заодно здесь решается, что можно вызывать без человека. Спецификация MCP требует считать аннотации инструментов недоверенными, если сервер не доверенный, и рекомендует клиенту подтверждение для чувствительных операций с показом аргументов. Поэтому политика простая: без подтверждения идёт только то, что host сам внёс в allowlist <em>и</em> сервер пометил как read-only. Аннотация может ужесточить политику, но не ослабить её.</p>
-  <pre><code class="lang-go">// MCPTools превращает инструменты MCP-сервера в инструменты цикла: tools/list → определения
+  <pre data-only="java"><code class="lang-java">/** Мост MCP → инструменты цикла. */
+public final class McpTools {
+    private McpTools() {}
+
+    /** Ошибка инструмента (isError): модель увидит текст сервера и исправится. */
+    public static final class ToolErrorException extends Exception {
+        ToolErrorException(String msg) {
+            super(msg);
+        }
+    }
+
+    /**
+     * Превращает инструменты MCP-сервера в инструменты цикла: tools/list → определения
+     * для Messages API, tool_use → tools/call. Политику подтверждений задаёт host: autoApprove —
+     * allowlist имён, которые можно вызывать без человека. Аннотации сервера — подсказка от
+     * недоверенной стороны: они могут ужесточить политику, но не ослабить её.
+     */
+    @SuppressWarnings("unchecked")
+    public static Map&lt;String, AgentTool&gt; from(McpSyncClient client, Set&lt;String&gt; autoApprove) {
+        Map&lt;String, AgentTool&gt; tools = new HashMap&lt;&gt;();
+        String cursor = null;
+        do {
+            McpSchema.ListToolsResult page = client.listTools(cursor);
+            for (McpSchema.Tool t : page.tools()) {
+                Map&lt;String, Object&gt; schema = t.inputSchema() == null ? Map.of() : t.inputSchema();
+                var props = (Map&lt;String, Object&gt;) schema.getOrDefault("properties", Map.of());
+                var required = (List&lt;String&gt;) schema.getOrDefault("required", List.of());
+                String name = t.name();
+                boolean readOnly = t.annotations() != null &amp;&amp; Boolean.TRUE.equals(t.annotations().readOnlyHint());
+                tools.put(name, new AgentTool(
+                        AgentTool.def(name, t.description(), props, required),
+                        !autoApprove.contains(name) || !readOnly,
+                        input -&gt; {
+                            Map&lt;String, Object&gt; args = ObjectMappers.jsonMapper().readValue(input, new TypeReference&lt;&gt;() {});
+                            // Протокольная ошибка или обрыв соединения — McpError/RuntimeException из SDK.
+                            McpSchema.CallToolResult res = client.callTool(new McpSchema.CallToolRequest(name, args));
+                            String text = res.content().stream()
+                                    .filter(c -&gt; c instanceof McpSchema.TextContent)
+                                    .map(c -&gt; ((McpSchema.TextContent) c).text())
+                                    .collect(Collectors.joining());
+                            if (Boolean.TRUE.equals(res.isError())) {
+                                throw new ToolErrorException(text);
+                            }
+                            return text;
+                        }));
+            }
+            cursor = page.nextCursor();
+        } while (cursor != null);
+        return tools;
+    }
+}
+</code></pre>
+  <pre data-only="go"><code class="lang-go">// MCPTools превращает инструменты MCP-сервера в инструменты цикла: tools/list → определения
 // для Messages API, tool_use → tools/call. Политику подтверждений задаёт host: autoApprove —
 // allowlist имён, которые можно вызывать без человека. Аннотации сервера — подсказка от
 // недоверенной стороны: они могут ужесточить политику, но не ослабить её.
@@ -1231,7 +2237,16 @@ func MCPTools(ctx context.Context, s *mcp.ClientSession, autoApprove map[string]
 	return tools, nil
 }</code></pre>
   <p>Подключение: host запускает сервер дочерним процессом и отдаёт его инструменты циклу, а подтверждения идут через уже знакомый <code>Confirm</code> с точными аргументами вызова:</p>
-  <pre><code class="lang-go">ctx := context.Background()
+  <pre data-only="java"><code class="lang-java">var transport = new StdioClientTransport(ServerParameters.builder("pg-mcp").build(), McpJsonDefaults.getMapper());
+try (var session = McpClient.sync(transport).clientInfo(new McpSchema.Implementation("my-agent", "0.1.0")).build()) {
+    session.initialize();
+    var tools = McpTools.from(session, Set.of("pg_query"));
+    AnthropicClient llm = AnthropicOkHttpClient.fromEnv();
+    var a = new Agent(llm.messages()::create, "claude-opus-5", "", tools, 20, null, Confirm.stdin());
+    System.out.println(a.run("How many orders were paid last week?").text);
+}
+</code></pre>
+  <pre data-only="go"><code class="lang-go">ctx := context.Background()
 client := mcp.NewClient(&amp;mcp.Implementation{Name: "my-agent", Version: "v0.1.0"}, nil)
 session, err := client.Connect(ctx, &amp;mcp.CommandTransport{Command: exec.Command("pg-mcp")}, nil)
 if err != nil {
@@ -1250,7 +2265,16 @@ fmt.Println(res.Text, err)</code></pre>
 
   <h3>Подключение к Claude Desktop и Claude Code</h3>
   <p>Claude Desktop: файл <code>claude_desktop_config.json</code> (macOS: <code>~/Library/Application Support/Claude/</code>), путь к бинарнику — абсолютный, после правки — перезапуск приложения:</p>
-  <pre><code class="lang-json">{
+  <pre data-only="java"><code class="lang-json">{
+  "mcpServers": {
+    "pg-readonly": {
+      "command": "java",
+      "args": ["-jar", "/Users/alex/mcp/pg-mcp.jar"],
+      "env": { "PG_RO_DSN": "jdbc:postgresql://localhost:5432/analytics?user=mcp_ro&amp;sslmode=disable" }
+    }
+  }
+}</code></pre>
+  <pre data-only="go"><code class="lang-json">{
   "mcpServers": {
     "pg-readonly": {
       "command": "/Users/alex/go/bin/pg-mcp",
@@ -1260,7 +2284,11 @@ fmt.Println(res.Text, err)</code></pre>
   }
 }</code></pre>
   <p>Claude Code: командой (scope local/project/user) или файлом <code>.mcp.json</code> в корне репозитория (тот же формат <code>mcpServers</code>, коммитится для команды; секреты — через переменные окружения, а не в файл):</p>
-  <pre><code class="lang-bash">go install ./cmd/pg-mcp
+  <pre data-only="java"><code class="lang-bash">mvn -q package   # исполняемый jar: spring-boot-maven-plugin или maven-shade-plugin
+claude mcp add pg-readonly --env PG_RO_DSN="$PG_RO_DSN" -- java -jar "$PWD/target/pg-mcp.jar"
+claude mcp add --transport http docs https://mcp.example.com/mcp   # удалённый сервер
+claude mcp list                                                    # проверить статус</code></pre>
+  <pre data-only="go"><code class="lang-bash">go install ./cmd/pg-mcp
 claude mcp add pg-readonly --env PG_RO_DSN="$PG_RO_DSN" -- "$(go env GOPATH)/bin/pg-mcp"
 claude mcp add --transport http docs https://mcp.example.com/mcp   # удалённый сервер
 claude mcp list                                                    # проверить статус</code></pre>
@@ -1272,7 +2300,7 @@ claude mcp list                                                    # прове�
     <tr><th>Уровень</th><th>Что агент делает сам</th><th>Пример</th></tr>
     <tr><td>0. Советчик</td><td>Ничего; предлагает действия, человек выполняет</td><td>Чат-помощник SRE</td></tr>
     <tr><td>1. Подтверждение каждого действия</td><td>Читает сам, каждое изменение — по кнопке</td><td>Режим default (Manual) в Claude Code</td></tr>
-    <tr><td>2. Allowlist</td><td>Безопасные/обратимые действия сам, опасные — с подтверждением</td><td><code>go test</code> — сам, <code>git push</code> — спросить</td></tr>
+    <tr><td>2. Allowlist</td><td>Безопасные/обратимые действия сам, опасные — с подтверждением</td><td><span data-only="go"><code>go test</code></span><span data-only="java"><code>mvn test</code></span> — сам, <code>git push</code> — спросить</td></tr>
     <tr><td>3. Автономно в sandbox</td><td>Всё внутри изолированной среды, результат — артефакт на ревью (PR)</td><td>Фоновый coding-агент</td></tr>
     <tr><td>4. Полная автономия</td><td>Действует во внешнем мире без человека</td><td>Редко оправдано; только обратимые действия + мониторинг</td></tr>
   </table>
@@ -1290,14 +2318,14 @@ claude mcp list                                                    # прове�
 
   <h2 id="practice">Практика</h2>
   <div class="task">
-    <h3>Задание 1: агент-дебаггер на Go</h3>
-    <p>Соберите CLI-агента на основе кода выше с тремя инструментами: <code>logs_search</code> (grep по файлу логов с фильтрами, вывод обрезан), <code>read_file</code> (с номерами строк и диапазоном), <code>run_tests</code> (запускает <code>go test</code> в указанном пакете, помечен <code>Dangerous</code> только если пакет вне allowlist). Дайте ему синтетический сервис с багом (например, deadlock из-за порядка блокировок) и логами.</p>
+    <h3>Задание 1: агент-дебаггер на <span data-only="go">Go</span><span data-only="java">Java</span></h3>
+    <p>Соберите CLI-агента на основе кода выше с тремя инструментами: <code>logs_search</code> (grep по файлу логов с фильтрами, вывод обрезан), <code>read_file</code> (с номерами строк и диапазоном), <code>run_tests</code> (запускает <span data-only="go"><code>go test</code> в указанном пакете, помечен <code>Dangerous</code></span><span data-only="java"><code>mvn test -pl</code> в указанном модуле, помечен <code>dangerous</code></span> только если <span data-only="go">пакет</span><span data-only="java">модуль</span> вне allowlist). Дайте ему синтетический сервис с багом (например, deadlock из-за порядка блокировок) и логами.</p>
     <p><b>Готово, когда:</b> агент находит причину за ≤ 15 итераций; печатается итог: итерации, input/output токены, cache read, стоимость в $; включение prompt caching снижает стоимость в разы (в симуляции выше — в ~2,5 раза за 7 шагов, на длинных траекториях сильнее) (проверьте по <code>usage.cache_read_input_tokens</code>); ошибка инструмента (несуществующий файл) приводит к исправлению, а не к падению.</p>
     <label class="check"><input type="checkbox" data-save="m06-t1"> Сделал</label>
   </div>
   <div class="task">
     <h3>Задание 2: MCP-сервер «поиск по документации»</h3>
-    <p>На <code>go-sdk</code> сделайте stdio-сервер с инструментами <code>docs_search(query, limit)</code> (BM25 или pgvector из модуля 5) и <code>docs_get(path)</code>, плюс resource со списком документов. Подключите к Claude Code через <code>.mcp.json</code> и к Claude Desktop.</p>
+    <p>На <span data-only="go"><code>go-sdk</code></span><span data-only="java">MCP Java SDK (или Spring AI MCP server)</span> сделайте stdio-сервер с инструментами <code>docs_search(query, limit)</code> (BM25 или pgvector из модуля 5) и <code>docs_get(path)</code>, плюс resource со списком документов. Подключите к Claude Code через <code>.mcp.json</code> и к Claude Desktop.</p>
     <p><b>Готово, когда:</b> сервер проходит проверку в MCP Inspector; в Claude Code на вопрос по вашей документации модель сама вызывает поиск и цитирует путь; ничего не пишется в stdout кроме протокола; ошибки (пустой запрос, несуществующий путь) возвращаются с подсказкой, как исправить.</p>
     <label class="check"><input type="checkbox" data-save="m06-t2"> Сделал</label>
   </div>
@@ -1328,7 +2356,7 @@ claude mcp list                                                    # прове�
   <details class="q"><summary>Модель вернула в одном ответе три tool_use. Как правильно ответить?</summary><div class="a"><p>Выполнить все три (конкурентно, если они независимы и read-only) и вернуть три <code>tool_result</code> с соответствующими <code>tool_use_id</code> в <em>одном</em> user-сообщении. Упавший инструмент — <code>tool_result</code> с <code>is_error: true</code>, а не пропуск.</p></div></details>
   <details class="q"><summary>Parallelization (sectioning) vs orchestrator-workers — в чём разница?</summary><div class="a"><p>В sectioning подзадачи зафиксированы кодом заранее. В orchestrator-workers их набор и число определяет LLM-оркестратор под конкретный вход. Второе гибче, но непредсказуемо по стоимости и требует лимитов.</p></div></details>
   <details class="q"><summary>Какие три роли в архитектуре MCP и где живёт LLM?</summary><div class="a"><p>Host (приложение с LLM и пользователем), client (соединение 1:1 с сервером внутри host), server (экспонирует tools/resources/prompts). LLM живёт в host; сервер её не видит, а через sampling может лишь попросить host сгенерировать текст.</p></div></details>
-  <details class="q"><summary>Почему stdio MCP-сервер «ломается» от отладочного Println?</summary><div class="a"><p>stdout — канал протокола: клиент ждёт там только построчные JSON-RPC сообщения. Любой посторонний вывод — невалидное сообщение. Логи — в stderr (пакет <code>log</code> по умолчанию пишет туда) или в файл.</p></div></details>
+  <details class="q"><summary>Почему stdio MCP-сервер «ломается» от отладочного <span data-only="go">Println</span><span data-only="java"><code>System.out.println</code></span>?</summary><div class="a"><p>stdout — канал протокола: клиент ждёт там только построчные JSON-RPC сообщения. Любой посторонний вывод — невалидное сообщение. Логи — в stderr (<span data-only="go">пакет <code>log</code> по умолчанию пишет туда</span><span data-only="java">настройте appender Logback на <code>System.err</code>; учтите, что консольный appender Spring Boot по умолчанию пишет в stdout</span>) или в файл.</p></div></details>
   <details class="q"><summary>Что такое tool poisoning и rug pull?</summary><div class="a"><p>Tool poisoning — вредоносные инструкции в описании инструмента, которые видит модель, но не пользователь. Rug pull — сервер меняет описание после одобрения. Защита: доверенные и запиненные серверы, показ и фиксация описаний (hash), alert на изменения, минимальный набор инструментов, sandbox.</p></div></details>
   <details class="q"><summary>Чем context editing отличается от compaction?</summary><div class="a"><p>Context editing механически удаляет старые tool results/thinking по порогу — без вызова LLM, без пересказа. Compaction суммаризирует историю в резюме — сохраняет смысл, но теряет детали и стоит вызова. Для межсессионной памяти нужен третий механизм — memory (файлы/БД).</p></div></details>
   <details class="q"><summary>Какой инструмент идемпотентен: toggle_feature_flag или set_feature_flag(value)?</summary><div class="a"><p><code>set_feature_flag(value)</code>: повторный вызов даёт тот же результат. Агент повторяет вызовы после таймаутов и compaction, поэтому toggle — источник трудноуловимых багов.</p></div></details>
@@ -1359,7 +2387,8 @@ claude mcp list                                                    # прове�
     <li><a href="https://docs.claude.com/en/docs/agents-and-tools/tool-use/overview" target="_blank" rel="noopener">Claude Docs — Tool use</a> и разделы про context editing, compaction, memory tool</li>
     <li><a href="https://github.com/anthropics/anthropic-sdk-go" target="_blank" rel="noopener">anthropic-sdk-go</a></li>
     <li><a href="https://modelcontextprotocol.io/" target="_blank" rel="noopener">Model Context Protocol — документация и спецификация</a> (архитектура, транспорты, авторизация, security best practices)</li>
-    <li><a href="https://github.com/modelcontextprotocol/go-sdk" target="_blank" rel="noopener">modelcontextprotocol/go-sdk</a> и <a href="https://pkg.go.dev/github.com/modelcontextprotocol/go-sdk/mcp" target="_blank" rel="noopener">pkg.go.dev</a></li>
+    <li data-only="go"><a href="https://github.com/modelcontextprotocol/go-sdk" target="_blank" rel="noopener">modelcontextprotocol/go-sdk</a> и <a href="https://pkg.go.dev/github.com/modelcontextprotocol/go-sdk/mcp" target="_blank" rel="noopener">pkg.go.dev</a></li>
+    <li data-only="java"><a href="https://github.com/modelcontextprotocol/java-sdk" target="_blank" rel="noopener">modelcontextprotocol/java-sdk</a> и <a href="https://docs.spring.io/spring-ai/reference/api/mcp/mcp-overview.html" target="_blank" rel="noopener">Spring AI MCP</a></li>
     <li><a href="https://docs.anthropic.com/en/docs/claude-code/mcp" target="_blank" rel="noopener">Claude Code — подключение MCP-серверов</a></li>
     <li><a href="https://invariantlabs.ai/blog/mcp-security-notification-tool-poisoning-attacks" target="_blank" rel="noopener">Invariant Labs — Tool Poisoning Attacks</a></li>
     <li><a href="https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/" target="_blank" rel="noopener">Simon Willison — The lethal trifecta</a></li>
@@ -1391,18 +2420,20 @@ claude mcp list                                                    # прове�
     { kind: 'tools', label: 'tools', t: 2600 },
     { kind: 'user', label: 'задача', t: 150 },
   ];
+  const JV = Course.STACK === 'java';
+  const SRC = JV ? '/srv/inventory/src/main/java/inventory/ReserveService.java' : '/srv/inventory/reserve.go';
   const CALLS = [
     { think: 'Начну с ошибок checkout за последний час.', act: 'logs_search(service="checkout", level="error", since="1h")', out: 420,
-      obs: '214 строк: "context deadline exceeded" ×160, "pq: deadlock detected" ×37, прочее ×17', obsT: 6100 },
-    { think: 'deadline exceeded — следствие. Смотрю трейс самой ранней ошибки.', act: 'traces_get(id="7f3a…")', out: 300,
+      obs: JV ? '214 строк: "SocketTimeoutException: Read timed out" ×160, "PSQLException: deadlock detected" ×37, прочее ×17' : '214 строк: "context deadline exceeded" ×160, "pq: deadlock detected" ×37, прочее ×17', obsT: 6100 },
+    { think: (JV ? 'Read timed out' : 'deadline exceeded') + ' — следствие. Смотрю трейс самой ранней ошибки.', act: 'traces_get(id="7f3a…")', out: 300,
       obs: 'checkout → inventory.Reserve 4.9s, из них 4.6s — ожидание блокировки строки items', obsT: 3200 },
-    { think: 'Нужен код резервирования.', act: 'read_file("/srv/inventory/reserve.go", lines="1-180")', out: 250,
+    { think: 'Нужен код резервирования.', act: 'read_file("' + SRC + '", lines="1-180")', out: 250,
       obs: 'UPDATE items … FOR UPDATE в цикле по позициям корзины в порядке добавления', obsT: 4500 },
     { think: 'Гипотеза: встречный порядок блокировок в двух корзинах → deadlock. Есть ли сортировка?', act: 'code_grep("ORDER BY id FOR UPDATE", path="/srv/inventory")', out: 380,
       obs: 'совпадений нет', obsT: 300 },
-    { think: 'Когда это появилось?', act: 'git_log("/srv/inventory/reserve.go", n=5)', out: 200,
+    { think: 'Когда это появилось?', act: 'git_log("' + SRC + '", n=5)', out: 200,
       obs: 'a1b2c3 (2 дня назад) "batch reserve: lock items one by one"', obsT: 800 },
-    { think: 'Проверю гипотезу тестом конкурентного резервирования.', act: 'run_tests("./inventory/...", run="TestConcurrentReserve")', out: 220,
+    { think: 'Проверю гипотезу тестом конкурентного резервирования.', act: JV ? 'run_tests("inventory", run="ReserveServiceTest#concurrentReserve")' : 'run_tests("./inventory/...", run="TestConcurrentReserve")', out: 220,
       obs: 'FAIL: deadlock detected (2 из 20 прогонов)', obsT: 1500 },
     { final: 'Причина: коммит a1b2c3 блокирует строки items в порядке корзины; встречные корзины дают deadlock, остальные запросы ждут и падают по дедлайну. Фикс: сортировать id перед SELECT … FOR UPDATE или блокировать одним запросом ORDER BY id.', out: 900 },
   ];
@@ -1669,7 +2700,7 @@ claude mcp list                                                    # прове�
   const svg = document.getElementById('mcp-svg');
   const out = document.getElementById('mcp-out');
   const tr = document.getElementById('mcp-tr');
-  const LANES = { llm: [95, 'Модель', 'Messages API'], host: [320, 'Host + MCP client', 'Claude Desktop / ваш сервис'], srv: [545, 'MCP server', 'pg-readonly (Go)'] };
+  const LANES = { llm: [95, 'Модель', 'Messages API'], host: [320, 'Host + MCP client', 'Claude Desktop / ваш сервис'], srv: [545, 'MCP server', 'pg-readonly (' + (Course.STACK === 'java' ? 'Java' : 'Go') + ')'] };
   const M = [
     { f: 'host', t: 'srv', l: 'initialize (id:1)', rpc: true, j: { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2026-07-28', capabilities: { roots: { listChanged: true }, sampling: {}, elicitation: {} }, clientInfo: { name: 'claude-desktop', version: '…' } } } },
     { f: 'srv', t: 'host', l: 'result: capabilities', rpc: true, j: { jsonrpc: '2.0', id: 1, result: { protocolVersion: '2026-07-28', capabilities: { tools: { listChanged: true }, logging: {} }, serverInfo: { name: 'pg-readonly', version: 'v0.1.0' } } } },

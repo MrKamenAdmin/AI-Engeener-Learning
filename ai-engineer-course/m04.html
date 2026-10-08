@@ -26,45 +26,66 @@
   <div class="module-hero">
     <div class="eyebrow">Модуль 4</div>
     <h1>Инструменты</h1>
-    <p class="lead">Python для Go-разработчика без вводного курса: соответствия конструкций, окружение на uv, pydantic, async. Затем рабочие инструменты AI engineer: FastAPI-обёртка со стримингом, pandas для анализа evals, SDK провайдеров, фреймворки (LangChain, LlamaIndex, LangGraph) с честным разбором минусов и Jupyter — где он уместен, а где нет. В конце — coding agents (Claude Code, Codex CLI, Cursor и другие): как работать с ними циклом «план → тесты → код → ревью», что писать в AGENTS.md и CLAUDE.md, как ограничить права и где они ошибаются.</p>
-    <div class="meta-row"><span class="chip">≈ 8 часов</span><span class="chip">Python + Go</span><span class="chip">4 визуализации</span><span class="chip">на момент написания: октябрь 2026</span></div>
+    <p class="lead">Python для <span data-only="go">Go</span><span data-only="java">Java</span>-разработчика без вводного курса: соответствия конструкций, окружение на uv, pydantic, async. Затем рабочие инструменты AI engineer: FastAPI-обёртка со стримингом, pandas для анализа evals, SDK провайдеров, фреймворки (LangChain, LlamaIndex, LangGraph) с честным разбором минусов и Jupyter — где он уместен, а где нет. В конце — coding agents (Claude Code, Codex CLI, Cursor и другие): как работать с ними циклом «план → тесты → код → ревью», что писать в AGENTS.md и CLAUDE.md, как ограничить права и где они ошибаются.</p>
+    <div class="meta-row"><span class="chip">≈ 8 часов</span><span class="chip">Python + <span data-only="go">Go</span><span data-only="java">Java</span></span><span class="chip">4 визуализации</span><span class="chip">на момент написания: октябрь 2026</span></div>
   </div>
 
-  <h2 id="why">Зачем Go-разработчику Python</h2>
-  <p>Прод-сервис вокруг LLM вполне можно и стоит писать на Go: вызов API, стриминг, лимиты, очереди, RAG на pgvector — всё это Go делает отлично, и у Anthropic есть официальный Go SDK. Но часть работы живёт в Python, и притворяться, что её нет, дорого:</p>
+  <h2 id="why" data-only="go">Зачем Go-разработчику Python</h2>
+  <h2 id="why" data-only="java">Зачем Java-разработчику Python</h2>
+  <p data-only="java">Прод-сервис вокруг LLM вполне можно и стоит писать на Java: вызов API, стриминг, лимиты, очереди, RAG на pgvector — всё это Spring Boot делает отлично, у Anthropic есть официальный Java SDK, а поверх него — LangChain4j и Spring AI. Но часть работы живёт в Python, и притворяться, что её нет, дорого:</p>
+  <p data-only="go">Прод-сервис вокруг LLM вполне можно и стоит писать на Go: вызов API, стриминг, лимиты, очереди, RAG на pgvector — всё это Go делает отлично, и у Anthropic есть официальный Go SDK. Но часть работы живёт в Python, и притворяться, что её нет, дорого:</p>
   <ul>
-    <li><b>Evals и анализ.</b> Разметка, подсчёт метрик по срезам, сравнение версий промпта, графики. pandas и Jupyter здесь стандарт, и коллеги-ML будут ждать от вас <code>.ipynb</code> или скрипт, а не Go-бинарь.</li>
+    <li><b>Evals и анализ.</b> Разметка, подсчёт метрик по срезам, сравнение версий промпта, графики. pandas и Jupyter здесь стандарт, и коллеги-ML будут ждать от вас <code>.ipynb</code> или скрипт, а не <span data-only="go">Go-бинарь</span><span data-only="java">jar</span>.</li>
     <li><b>Новые возможности приходят в Python SDK первыми</b> или одновременно с TypeScript; примеры в документации провайдеров — в первую очередь на Python.</li>
     <li><b>Экосистема:</b> fine-tuning (модуль 10), эмбеддинг-модели и rerankers локально, парсинг PDF, токенизаторы, фреймворки для агентов и RAG.</li>
     <li><b>Собеседования.</b> Live-coding на AI engineer часто на Python: «напиши функцию, которая вызывает модель и парсит ответ», «посчитай precision по этому DataFrame».</li>
   </ul>
-  <p>Рабочая стратегия: сервисы на Go, эксперименты, evals и анализ — на Python. Цель модуля — чтобы Python не тормозил вас: читать чужой код, писать скрипты и небольшие сервисы идиоматично, знать, где подвохи для человека с Go-рефлексами.</p>
+  <p data-only="java">Рабочая стратегия: сервисы на Java и Spring, эксперименты, evals и анализ — на Python. Цель модуля — чтобы Python не тормозил вас: читать чужой код, писать скрипты и небольшие сервисы идиоматично, знать, где подвохи для человека с Java-рефлексами: типы, которые никто не проверяет без тайпчекера, исключения без <code>throws</code> в сигнатуре, кооперативная конкурентность вместо потоков и упаковка без Maven.</p>
+  <p data-only="go">Рабочая стратегия: сервисы на Go, эксперименты, evals и анализ — на Python. Цель модуля — чтобы Python не тормозил вас: читать чужой код, писать скрипты и небольшие сервисы идиоматично, знать, где подвохи для человека с Go-рефлексами.</p>
 
-  <h2 id="cheatsheet">Шпаргалка Go ↔ Python</h2>
-  <p>Фильтруйте по разделу или ищите по слову. Колонка «Подвох» — то, на чём спотыкаются именно Go-разработчики.</p>
+  <h2 id="cheatsheet" data-only="go">Шпаргалка Go ↔ Python</h2>
+  <h2 id="cheatsheet" data-only="java">Шпаргалка Java ↔ Python</h2>
+  <p>Фильтруйте по разделу или ищите по слову. Колонка «Подвох» — то, на чём спотыкаются именно <span data-only="go">Go</span><span data-only="java">Java</span>-разработчики.</p>
 
   <div class="viz" id="viz-tr">
-    <p class="viz-title">Переводчик Go → Python</p>
-    <p class="viz-sub">Поиск работает по всем колонкам: попробуйте «error», «struct», «канал», «venv».</p>
+    <p class="viz-title">Переводчик <span data-only="go">Go</span><span data-only="java">Java</span> → Python</p>
+    <p class="viz-sub" data-only="go">Поиск работает по всем колонкам: попробуйте «error», «struct», «канал», «venv».</p>
+    <p class="viz-sub" data-only="java">Поиск работает по всем колонкам: попробуйте «exception», «record», «stream», «venv».</p>
     <input type="text" id="tr-q" placeholder="поиск: goroutine, defer, map, json…" aria-label="Поиск по шпаргалке">
     <div class="tr-filter" id="tr-cats"></div>
-    <table id="tr-table"><thead><tr><th>Раздел</th><th>Go</th><th>Python</th><th>Подвох</th></tr></thead><tbody></tbody></table>
+    <table id="tr-table"><thead><tr><th>Раздел</th><th><span data-only="go">Go</span><span data-only="java">Java</span></th><th>Python</th><th>Подвох</th></tr></thead><tbody></tbody></table>
     <div class="readout" id="tr-count"></div>
   </div>
 
   <h3>Модули и пакеты</h3>
-  <p>В Go пакет = директория, модуль = <code>go.mod</code>. В Python модуль = файл <code>.py</code>, пакет = директория (исторически с <code>__init__.py</code>), а «проект» описывается <code>pyproject.toml</code>. Импорты разрешаются через <code>sys.path</code>, а не через путь модуля, поэтому классическая боль — «работает из корня, не работает из поддиректории». Лечится src-layout и установкой проекта в окружение в editable-режиме (uv делает это сам). Экспорт не по регистру, а по соглашению: <code>_name</code> — «приватное», но доступно всем.</p>
+  <p data-only="java">В Java пакет — это пространство имён и директория, а единица сборки — Maven-модуль с <code>pom.xml</code>. В Python модуль = файл <code>.py</code>, пакет = директория (исторически с <code>__init__.py</code>), а «проект» описывается <code>pyproject.toml</code>. Импорты разрешаются через <code>sys.path</code> — аналог classpath, но собранный в рантайме из текущей директории и окружения, а не из описания сборки. Отсюда классическая боль — «работает из корня, не работает из поддиректории». Лечится src-layout и установкой проекта в окружение в editable-режиме (uv делает это сам). Модификаторов доступа нет: <code>_name</code> — «приватное» по соглашению, но доступно всем, и компилятор этого не проверит.</p>
+  <p data-only="go">В Go пакет = директория, модуль = <code>go.mod</code>. В Python модуль = файл <code>.py</code>, пакет = директория (исторически с <code>__init__.py</code>), а «проект» описывается <code>pyproject.toml</code>. Импорты разрешаются через <code>sys.path</code>, а не через путь модуля, поэтому классическая боль — «работает из корня, не работает из поддиректории». Лечится src-layout и установкой проекта в окружение в editable-режиме (uv делает это сам). Экспорт не по регистру, а по соглашению: <code>_name</code> — «приватное», но доступно всем.</p>
 
-  <h3>Типы и dataclass vs struct</h3>
-  <p>Python динамически типизирован, аннотации (<code>def f(x: int) -&gt; str</code>) интерпретатор <b>не проверяет</b>. Проверку делает внешний тайпчекер (mypy, pyright), и в команде с Go-культурой его стоит включить в CI со строгим режимом. <code>@dataclass</code> — ближайший аналог struct: поля, конструктор, сравнение. Но он не валидирует значения: <code>User(age="десять")</code> создастся спокойно. Для данных с границы доверия (JSON от клиента, ответ модели) нужен pydantic.</p>
+  <h3 data-only="go">Типы и dataclass vs struct</h3>
+  <h3 data-only="java">Типы: dataclass и pydantic vs records</h3>
+  <p data-only="java">Python динамически типизирован: аннотации (<code>def f(x: int) -&gt; str</code>) интерпретатор <b>не проверяет</b>, они ближе к Javadoc, чем к <code>javac</code>. Проверку делает внешний тайпчекер (mypy, pyright), и в команде с Java-культурой его стоит включить в CI в строгом режиме, иначе ошибки, которые у вас ловит компилятор, всплывут в рантайме. <code>@dataclass(frozen=True)</code> — ближайший аналог record: поля, конструктор, <code>__eq__</code>, <code>__hash__</code>, <code>__repr__</code>. Но он не валидирует значения: <code>User(age="десять")</code> создастся спокойно, а в Java не скомпилировалось бы. Для данных с границы доверия (JSON от клиента, ответ модели) нужен pydantic: это record, Jackson и Bean Validation в одной библиотеке.</p>
+  <p data-only="go">Python динамически типизирован, аннотации (<code>def f(x: int) -&gt; str</code>) интерпретатор <b>не проверяет</b>. Проверку делает внешний тайпчекер (mypy, pyright), и в команде с Go-культурой его стоит включить в CI со строгим режимом. <code>@dataclass</code> — ближайший аналог struct: поля, конструктор, сравнение. Но он не валидирует значения: <code>User(age="десять")</code> создастся спокойно. Для данных с границы доверия (JSON от клиента, ответ модели) нужен pydantic.</p>
 
-  <h3>Исключения vs error</h3>
-  <p>Нет <code>if err != nil</code>, ошибки летят исключениями вверх по стеку, пока их не поймают. Для Go-разработчика это ощущается как паника, которую принято ловить. Правила хорошего тона: ловить конкретные классы (<code>except anthropic.RateLimitError</code>), а не голый <code>except Exception</code>; не глотать молча; оборачивать с сохранением причины: <code>raise MyError("…") from e</code> (аналог <code>fmt.Errorf("…: %w", err)</code>, цепочка видна в traceback). Ресурсы закрывает <code>with</code> (context manager) — это <code>defer</code>, привязанный к блоку, а не к функции.</p>
+  <h3 data-only="go">Исключения vs error</h3>
+  <h3 data-only="java">Исключения: все unchecked</h3>
+  <p data-only="java">Исключения Java-разработчику привычны, но в Python все они unchecked: сигнатура функции не говорит, что она бросает, и никто не заставит обработать ошибку. Правила те же, что в хорошем Java-коде: ловить конкретные классы (<code>except anthropic.RateLimitError</code>), а не голый <code>except Exception</code>; не глотать молча; оборачивать с сохранением причины: <code>raise MyError("…") from e</code> (аналог <code>new MyException("…", e)</code>, цепочка видна в traceback, как <code>Caused by:</code>). Ресурсы закрывает <code>with</code> (context manager) — это try-with-resources, а <code>__enter__</code>/<code>__exit__</code> — аналог <code>AutoCloseable</code>.</p>
+  <p data-only="go">Нет <code>if err != nil</code>, ошибки летят исключениями вверх по стеку, пока их не поймают. Для Go-разработчика это ощущается как паника, которую принято ловить. Правила хорошего тона: ловить конкретные классы (<code>except anthropic.RateLimitError</code>), а не голый <code>except Exception</code>; не глотать молча; оборачивать с сохранением причины: <code>raise MyError("…") from e</code> (аналог <code>fmt.Errorf("…: %w", err)</code>, цепочка видна в traceback). Ресурсы закрывает <code>with</code> (context manager) — это <code>defer</code>, привязанный к блоку, а не к функции.</p>
 
   <h2 id="env">Окружение: uv, venv, pyproject</h2>
-  <p>Главная боль Python для гоферов — окружения. В Go зависимости изолированы модулем и собираются в бинарь. В Python пакеты ставятся в интерпретатор, поэтому на каждый проект нужен venv (virtual environment — отдельная директория с копией/ссылкой на интерпретатор и своими site-packages). Исторический зоопарк: pip, virtualenv, pip-tools, poetry, pipenv, conda, pyenv. В 2026 году разумный дефолт один — <b>uv</b> от Astral: менеджер версий Python, venv, зависимостей и lock-файла в одном быстром бинаре (он написан на Rust).</p>
+  <p data-only="java">Главная боль Python для Java-разработчика — окружения. В Maven зависимости лежат в общем <code>~/.m2</code>, но classpath у каждого проекта свой и собирается из <code>pom.xml</code>, а результат — самодостаточный jar. В Python пакеты ставятся в интерпретатор, поэтому на каждый проект нужен venv (virtual environment — отдельная директория с копией/ссылкой на интерпретатор и своими site-packages). Исторический зоопарк: pip, virtualenv, pip-tools, poetry, pipenv, conda, pyenv. В 2026 году разумный дефолт один — <b>uv</b> от Astral: менеджер версий Python (как SDKMAN), venv, зависимостей и lock-файла (как Maven) в одном быстром бинаре (он написан на Rust).</p>
+  <p data-only="go">Главная боль Python для гоферов — окружения. В Go зависимости изолированы модулем и собираются в бинарь. В Python пакеты ставятся в интерпретатор, поэтому на каждый проект нужен venv (virtual environment — отдельная директория с копией/ссылкой на интерпретатор и своими site-packages). Исторический зоопарк: pip, virtualenv, pip-tools, poetry, pipenv, conda, pyenv. В 2026 году разумный дефолт один — <b>uv</b> от Astral: менеджер версий Python, venv, зависимостей и lock-файла в одном быстром бинаре (он написан на Rust).</p>
 
-  <table>
+  <table data-only="java">
+    <tr><th>Java / Maven</th><th>uv</th><th>Что делает</th></tr>
+    <tr><td>Spring Initializr, <code>mvn archetype:generate</code></td><td><code>uv init</code></td><td>Создаёт <code>pyproject.toml</code>, <code>.python-version</code></td></tr>
+    <tr><td><code>&lt;dependency&gt;</code> в <code>pom.xml</code></td><td><code>uv add anthropic pandas</code></td><td>Добавляет зависимость, обновляет <code>uv.lock</code>, ставит в <code>.venv</code></td></tr>
+    <tr><td>BOM и <code>dependencyManagement</code> (у Gradle — <code>gradle.lockfile</code>)</td><td><code>uv.lock</code></td><td>Точные версии и хеши; коммитить</td></tr>
+    <tr><td><code>mvn exec:java</code>, <code>java -jar</code></td><td><code>uv run python main.py</code></td><td>Запуск в окружении проекта, синхронизирует его перед запуском</td></tr>
+    <tr><td>SDKMAN, <code>JAVA_HOME</code></td><td><code>uv python install 3.13</code></td><td>Ставит нужную версию интерпретатора</td></tr>
+    <tr><td><code>jbang app install</code></td><td><code>uv tool install ruff</code> / <code>uvx ruff</code></td><td>CLI-инструменты в изолированных окружениях</td></tr>
+    <tr><td>Spotless, Checkstyle, <code>javac</code> + Error Prone</td><td><code>ruff format</code>, <code>ruff check</code>, <code>mypy</code>/<code>pyright</code></td><td>Форматирование, линтер, типы</td></tr>
+  </table>
+  <table data-only="go">
     <tr><th>Go</th><th>uv</th><th>Что делает</th></tr>
     <tr><td><code>go mod init</code></td><td><code>uv init</code></td><td>Создаёт <code>pyproject.toml</code>, <code>.python-version</code></td></tr>
     <tr><td><code>go get pkg</code></td><td><code>uv add anthropic pandas</code></td><td>Добавляет зависимость, обновляет <code>uv.lock</code>, ставит в <code>.venv</code></td></tr>
@@ -76,20 +97,58 @@
   </table>
 
   <div class="callout tip"><span class="title">Скрипты без проекта: PEP 723</span>
-    <p>Для одноразового скрипта (прогнать eval, выгрузить данные) проект не нужен. Зависимости объявляются в комментарии в начале файла, и <code>uv run script.py</code> сам создаст временное окружение. Это ближе всего к опыту «один файл → <code>go run</code>».</p>
+    <p>Для одноразового скрипта (прогнать eval, выгрузить данные) проект не нужен. Зависимости объявляются в комментарии в начале файла, и <code>uv run script.py</code> сам создаст временное окружение. Это ближе всего к опыту «один файл → <span data-only="go"><code>go run</code></span><span data-only="java">JBang с <code>//DEPS</code> в шапке</span>».</p>
   </div>
 
-  <h2 id="async">async/await vs goroutines</h2>
-  <p>Самое важное концептуальное различие. В Go конкурентность прозрачна: любая функция может быть запущена в горутине, рантайм сам переключает их на блокирующих вызовах, горутины реально работают параллельно на всех ядрах. В Python asyncio — <b>кооперативная</b> многозадачность в одном потоке:</p>
+  <h2 id="async" data-only="go">async/await vs goroutines</h2>
+  <h2 id="async" data-only="java">async/await vs virtual threads</h2>
+  <p data-only="java">Самое важное концептуальное различие. В Java 21 конкурентность снова прозрачна: любой блокирующий код можно запустить в виртуальном потоке, JVM сама снимает его с потока-носителя на блокирующем I/O, а потоки реально работают параллельно на всех ядрах. Ближайший Java-аналог asyncio — реактивный стек (WebFlux, Reactor): <code>Mono</code>/<code>Flux</code> так же «заражают» сигнатуры, а блокирующий вызов внутри так же ломает всё. В Python asyncio — <b>кооперативная</b> многозадачность в одном потоке:</p>
+  <p data-only="go">Самое важное концептуальное различие. В Go конкурентность прозрачна: любая функция может быть запущена в горутине, рантайм сам переключает их на блокирующих вызовах, горутины реально работают параллельно на всех ядрах. В Python asyncio — <b>кооперативная</b> многозадачность в одном потоке:</p>
   <ul>
     <li>Функция должна быть объявлена <code>async def</code>, и вызывать её нужно через <code>await</code>. Это «окрашивание функций»: async заражает весь стек вызовов вверх.</li>
     <li>Переключение происходит только в точках <code>await</code>. Синхронный блокирующий вызов внутри корутины (<code>requests.get</code>, <code>time.sleep</code>, синхронный клиент БД, тяжёлый CPU-код) <b>останавливает весь event loop</b>: все остальные запросы сервиса ждут. Это самая частая прод-ошибка в FastAPI-сервисах.</li>
     <li>Параллелизма на CPU нет из-за GIL (Global Interpreter Lock). Для I/O-bound LLM-вызовов это не важно: тысячи одновременных запросов в одном потоке — нормально. Для CPU-задач — процессы (<code>ProcessPoolExecutor</code>) или нативные библиотеки (numpy, pandas отпускают GIL внутри). Free-threaded сборка CPython без GIL существует с 3.13, но экосистема к ней ещё привыкает.</li>
-    <li>Каналов как примитива языка нет; есть <code>asyncio.Queue</code>. Отмена — не context, а <code>task.cancel()</code>, которое бросает <code>CancelledError</code> в точке <code>await</code>; таймаут — <code>asyncio.timeout()</code>.</li>
+    <li data-only="java">Вместо <code>BlockingQueue</code> — <code>asyncio.Queue</code>. Отмена — <code>task.cancel()</code>, которое бросает <code>CancelledError</code> в точке <code>await</code> (похоже на <code>interrupt()</code> и <code>InterruptedException</code>, только срабатывает исключительно на <code>await</code>); таймаут — <code>asyncio.timeout()</code>.</li>
+  <li data-only="go">Каналов как примитива языка нет; есть <code>asyncio.Queue</code>. Отмена — не context, а <code>task.cancel()</code>, которое бросает <code>CancelledError</code> в точке <code>await</code>; таймаут — <code>asyncio.timeout()</code>.</li>
   </ul>
 
   <div class="tabs">
-    <div class="tab-panel" data-tab="Python"><pre><code class="lang-python">import asyncio
+    <div class="tab-panel" data-tab="Python" data-only="java"><pre><code class="lang-python">import asyncio
+import anthropic
+
+client = anthropic.AsyncAnthropic()  # у SDK есть sync и async клиенты — в async-коде только async
+
+async def classify(ticket: str) -&gt; str:
+    resp = await client.messages.create(
+        model="claude-haiku-4-5",
+        max_tokens=16,
+        system="Ответь одним словом: billing, tech, refund или other.",
+        messages=[{"role": "user", "content": ticket}],
+    )
+    return resp.content[0].text.strip()
+
+async def main(tickets: list[str]) -&gt; list[str | BaseException]:
+    sem = asyncio.Semaphore(10)
+
+    async def guarded(t: str) -&gt; str:
+        async with sem:
+            return await classify(t)
+
+    # gather(return_exceptions=True) ≈ invokeAll без fail-fast: ошибки возвращаются значениями
+    return await asyncio.gather(*(guarded(t) for t in tickets), return_exceptions=True)
+
+# Ошибка, которую ловят на ревью:
+async def bad_handler() -&gt; None:
+    import time
+    time.sleep(2)             # блокирует ВЕСЬ event loop на 2 с
+    await asyncio.sleep(2)    # правильно: отдаёт управление другим задачам
+    # синхронную библиотеку без async-версии — в поток:
+    # result = await asyncio.to_thread(sync_call, arg)
+
+if __name__ == "__main__":
+    print(asyncio.run(main(["Не прошла оплата картой", "Приложение падает при входе"])))
+</code></pre></div>
+    <div class="tab-panel" data-tab="Python" data-only="go"><pre><code class="lang-python">import asyncio
 import anthropic
 
 client = anthropic.AsyncAnthropic()  # у SDK есть sync и async клиенты — в async-коде только async
@@ -124,7 +183,40 @@ async def bad_handler() -&gt; None:
 if __name__ == "__main__":
     print(asyncio.run(main(["Не прошла оплата картой", "Приложение падает при входе"])))
 </code></pre></div>
-    <div class="tab-panel" data-tab="Go"><pre><code class="lang-go">// То же на Go: никакой «окраски» функций, блокирующий вызов блокирует только свою горутину.
+    <div class="tab-panel" data-tab="Java" data-only="java"><pre><code class="lang-java">// То же на Java 21: никакой «окраски» функций, блокирующий вызов блокирует только свой виртуальный поток.
+record Outcome(String label, Throwable error) {}
+
+static List&lt;Outcome&gt; classifyAll(AnthropicClient client, List&lt;String&gt; tickets) {
+    var sem = new Semaphore(10);
+    List&lt;Future&lt;String&gt;&gt; futures;
+    try (var exec = Executors.newVirtualThreadPerTaskExecutor()) { // close() ждёт все задачи
+        futures = tickets.stream().map(t -&gt; exec.submit(() -&gt; {
+            sem.acquire();
+            try {
+                Message resp = client.messages().create(MessageCreateParams.builder()
+                        .model("claude-haiku-4-5")
+                        .maxTokens(16)
+                        .system("Ответь одним словом: billing, tech, refund или other.")
+                        .addUserMessage(t)
+                        .build());
+                return resp.content().stream()
+                        .flatMap(b -&gt; b.text().stream())
+                        .map(tb -&gt; tb.text().strip())
+                        .collect(Collectors.joining());
+            } finally {
+                sem.release();
+            }
+        })).toList();
+    }
+    // Без fail-fast, как gather(return_exceptions=True): ошибка — значение в списке.
+    return futures.stream()
+            .map(f -&gt; f.state() == Future.State.SUCCESS
+                    ? new Outcome(f.resultNow(), null)
+                    : new Outcome(null, f.exceptionNow()))
+            .toList();
+}
+</code></pre></div>
+    <div class="tab-panel" data-tab="Go" data-only="go"><pre><code class="lang-go">// То же на Go: никакой «окраски» функций, блокирующий вызов блокирует только свою горутину.
 func classifyAll(ctx context.Context, client *anthropic.Client, tickets []string) ([]string, []error) {
 	out := make([]string, len(tickets))
 	errs := make([]error, len(tickets))
@@ -156,12 +248,15 @@ func classifyAll(ctx context.Context, client *anthropic.Client, tickets []string
 </code></pre></div>
   </div>
 
-  <div class="callout go"><span class="title">Аналогии, которые работают</span>
+  <div class="callout go" data-only="java"><span class="title">Аналогии, которые работают</span>
+    <p><code>asyncio.TaskGroup</code> (3.11+) ≈ <code>StructuredTaskScope.ShutdownOnFailure</code>: первая ошибка отменяет остальные задачи, выход из блока ждёт всех. <code>asyncio.gather(..., return_exceptions=True)</code> ≈ <code>invokeAll</code> с разбором каждого <code>Future</code>: ошибки — значения. <code>asyncio.Semaphore</code> ≈ <code>java.util.concurrent.Semaphore</code>. <code>asyncio.timeout(s)</code> ≈ <code>future.get(timeout)</code> или <code>orTimeout</code> у <code>CompletableFuture</code>, только область действия — блок <code>async with</code>. <code>asyncio.to_thread</code> ≈ отдать блокирующий вызов в executor. Главное отличие: на виртуальных потоках блокирующий вызов безопасен, в asyncio — нет.</p>
+  </div>
+  <div class="callout go" data-only="go"><span class="title">Аналогии, которые работают</span>
     <p><code>asyncio.TaskGroup</code> (3.11+) ≈ <code>errgroup.WithContext</code>: первая ошибка отменяет остальные задачи, выход из блока ждёт всех. <code>asyncio.gather(..., return_exceptions=True)</code> ≈ errgroup, где горутины пишут ошибку в срез и возвращают nil. <code>asyncio.Semaphore</code> ≈ <code>semaphore.Weighted</code> с весом 1. <code>asyncio.timeout(s)</code> ≈ <code>context.WithTimeout</code>, только область действия — блок <code>async with</code>, а не переданный вниз объект.</p>
   </div>
 
   <h2 id="pydantic">Pydantic: типы на границе доверия</h2>
-  <p>Pydantic — библиотека моделей данных с валидацией в рантайме. Для AI engineering это центральный инструмент: FastAPI строит на нём валидацию запросов и OpenAPI, а для LLM он делает три вещи — описывает схему ожидаемого ответа, генерирует из неё JSON Schema для structured outputs и валидирует то, что модель вернула. В Go ближайший аналог — struct с тегами <code>json</code> + <code>validate</code> плюс генерация схемы через <code>invopop/jsonschema</code>; в Python это одна библиотека.</p>
+  <p>Pydantic — библиотека моделей данных с валидацией в рантайме. Для AI engineering это центральный инструмент: FastAPI строит на нём валидацию запросов и OpenAPI, а для LLM он делает три вещи — описывает схему ожидаемого ответа, генерирует из неё JSON Schema для structured outputs и валидирует то, что модель вернула. <span data-only="go">В Go ближайший аналог — struct с тегами <code>json</code> + <code>validate</code> плюс генерация схемы через <code>invopop/jsonschema</code>; в Python это одна библиотека.</span><span data-only="java">В Java ближайший аналог — record + Jackson + Bean Validation (<code>@Size</code>, <code>@Min</code>) плюс генерация схемы через victools <code>jsonschema-generator</code>; в Python это одна библиотека.</span></p>
 
   <pre><code class="lang-python">from typing import Literal
 import anthropic
@@ -259,7 +354,7 @@ if __name__ == "__main__":
   <p>Обратите внимание: ошибки инфраструктуры (429 после всех ретраев) записываются отдельно и <b>не считаются</b> провалом модели. Смешать их — классическая ошибка, из-за которой «новый промпт стал хуже» в день, когда у провайдера была перегрузка.</p>
 
   <h2 id="fastapi">FastAPI: сервис-обёртка над LLM</h2>
-  <p>FastAPI — де-факто стандарт для Python-сервисов вокруг моделей: async из коробки, валидация через pydantic, автоматическая OpenAPI-документация. Для Go-разработчика: это <code>net/http</code> + роутер + <code>encoding/json</code> + валидатор + swagger-генератор в одном, с объявлением через аннотации типов. Запускается ASGI-сервером (uvicorn) — это аналог <code>http.Server</code>.</p>
+  <p>FastAPI — де-факто стандарт для Python-сервисов вокруг моделей: async из коробки, валидация через pydantic, автоматическая OpenAPI-документация. <span data-only="go">Для Go-разработчика: это <code>net/http</code> + роутер + <code>encoding/json</code> + валидатор + swagger-генератор в одном, с объявлением через аннотации типов. Запускается ASGI-сервером (uvicorn) — это аналог <code>http.Server</code>.</span><span data-only="java">Для Java-разработчика: это Spring WebFlux + Jackson + Bean Validation + springdoc-openapi в одном, с маршрутами через декораторы (как <code>@PostMapping</code>) и валидацией по аннотациям типов вместо DI-контейнера и бинов. Запускается ASGI-сервером (uvicorn) — это аналог встроенного Netty или Tomcat.</span></p>
 
   <pre><code class="lang-python">import json
 import anthropic
@@ -315,12 +410,12 @@ async def healthz() -&gt; dict:
       <li><b>Синхронный вызов в async-хендлере.</b> <code>anthropic.Anthropic()</code> (sync) внутри <code>async def</code> блокирует event loop: один медленный запрос — и весь воркер стоит. Либо async-клиент, либо хендлер объявить обычным <code>def</code> (FastAPI выполнит его в пуле потоков).</li>
       <li><b>Воркеры.</b> Один процесс uvicorn = один event loop = одно ядро. Для CPU-части (токенизация, парсинг) нужны несколько воркеров. Для чистого I/O одного процесса хватает на сотни одновременных стримов.</li>
       <li><b>Ошибка после 200.</b> Статус и заголовки уже отправлены, когда начался стрим. Ошибку можно передать только событием внутри потока — клиент должен это обрабатывать.</li>
-      <li><b>Клиент на каждый запрос.</b> Создание <code>AsyncAnthropic()</code> в хендлере — новый пул соединений и TLS-рукопожатие каждый раз. Клиент — синглтон, как <code>http.Client</code> в Go.</li>
+      <li><b>Клиент на каждый запрос.</b> Создание <code>AsyncAnthropic()</code> в хендлере — новый пул соединений и TLS-рукопожатие каждый раз. Клиент — синглтон, как <span data-only="go"><code>http.Client</code> в Go</span><span data-only="java">бин <code>AnthropicClient</code> или <code>HttpClient</code> в Spring</span>.</li>
     </ul>
   </div>
 
   <h2 id="pandas">pandas для анализа evals</h2>
-  <p>pandas — таблицы в памяти (DataFrame) с векторными операциями. Для Go-разработчика это «SQL поверх слайса структур без циклов»: <code>groupby</code> — GROUP BY, <code>merge</code> — JOIN, <code>pivot_table</code> — сводная таблица, <code>query</code> — WHERE. Главная ментальная перестройка: не писать циклы по строкам (<code>iterrows</code> медленный и неидиоматичный), а оперировать колонками целиком.</p>
+  <p>pandas — таблицы в памяти (DataFrame) с векторными операциями. <span data-only="go">Для Go-разработчика это «SQL поверх слайса структур без циклов»:</span><span data-only="java">Для Java-разработчика это «SQL поверх <code>List&lt;record&gt;</code> без циклов», как Stream API с <code>Collectors.groupingBy</code>, только короче и векторно:</span> <code>groupby</code> — GROUP BY, <code>merge</code> — JOIN, <code>pivot_table</code> — сводная таблица, <code>query</code> — WHERE. Главная ментальная перестройка: не писать циклы по строкам (<code>iterrows</code> медленный и неидиоматичный), а оперировать колонками целиком.</p>
 
   <p>Ниже — 72 результата eval-прогона классификатора тикетов: три версии промпта × четыре категории × 6 примеров. Сгруппируйте по-разному и посмотрите, как меняются выводы. Усы на графике pass rate — 95% доверительный интервал Уилсона.</p>
 
@@ -370,7 +465,10 @@ print(f"v3 починил {fixed}, сломал {broken}")  # для McNemar в�
 print(df.query("prompt_version == 'v3' and passed == 0")[["example_id", "category", "expected", "got"]])
 </code></pre>
 
-  <div class="callout go"><span class="title">SQL-аналогии</span>
+  <div class="callout go" data-only="java"><span class="title">SQL- и Stream-аналогии</span>
+    <p><code>df.groupby("v").agg(...)</code> = <code>SELECT v, avg(passed), count(*) … GROUP BY v</code> = <code>Collectors.groupingBy(Row::v, Collectors.averagingInt(Row::passed))</code>. <code>df.merge(other, on="example_id", how="left")</code> = <code>LEFT JOIN … USING (example_id)</code>. <code>pivot_table</code> = <code>GROUP BY category, version</code>, развёрнутый в колонки. Если привычнее SQL, есть DuckDB: <code>duckdb.sql("select … from df")</code> работает прямо по DataFrame. Для больших данных (десятки миллионов строк) смотрят в сторону Polars — колоночный движок на Rust с ленивым API, похожим на Stream API.</p>
+  </div>
+  <div class="callout go" data-only="go"><span class="title">SQL-аналогии</span>
     <p><code>df.groupby("v").agg(...)</code> = <code>SELECT v, avg(passed), count(*) … GROUP BY v</code>. <code>df.merge(other, on="example_id", how="left")</code> = <code>LEFT JOIN … USING (example_id)</code>. <code>pivot_table</code> = <code>GROUP BY category, version</code>, развёрнутый в колонки. Если привычнее SQL, есть DuckDB: <code>duckdb.sql("select … from df")</code> работает прямо по DataFrame. Для больших данных (десятки миллионов строк) смотрят в сторону Polars — колоночный движок на Rust с ленивым API.</p>
   </div>
 
@@ -445,7 +543,7 @@ print(chat.choices[0].message.content, chat.choices[0].finish_reason,
   </table>
 
   <div class="callout"><span class="title">OpenAI-совместимый API как lingua franca</span>
-    <p>Формат Chat Completions стал де-факто стандартом: его отдают vLLM, Ollama, многие облака и gateway'и. Соблазн — писать всё под него и менять только <code>base_url</code>. Цена — потеря специфичных возможностей (явный prompt caching, thinking-блоки, особенности tool use), а они часто и есть основная экономия. Разумный компромисс — собственный тонкий интерфейс в коде (<code>Generate(ctx, req) (Resp, error)</code>) с адаптером на каждого провайдера, а не «наименьший общий знаменатель» на уровне протокола.</p>
+    <p>Формат Chat Completions стал де-факто стандартом: его отдают vLLM, Ollama, многие облака и gateway'и. Соблазн — писать всё под него и менять только <code>base_url</code>. Цена — потеря специфичных возможностей (явный prompt caching, thinking-блоки, особенности tool use), а они часто и есть основная экономия. Разумный компромисс — собственный тонкий интерфейс в коде (<span data-only="go"><code>Generate(ctx, req) (Resp, error)</code></span><span data-only="java"><code>Resp generate(Req req)</code></span>) с адаптером на каждого провайдера, а не «наименьший общий знаменатель» на уровне протокола.</p>
   </div>
 
   <h2 id="frameworks">LangChain, LlamaIndex, LangGraph</h2>
@@ -480,7 +578,33 @@ print(chat.choices[0].message.content, chat.choices[0].finish_reason,
     <div class="readout" id="fw-out"></div>
   </div>
 
-  <div class="callout go"><span class="title">А в Go?</span>
+  <div class="callout go" data-only="java"><span class="title">А в Java?</span>
+    <p>Экосистема на JVM заметно богаче, чем у большинства языков, кроме Python. <b>LangChain4j</b> — не порт, а самостоятельная библиотека: единый интерфейс моделей, AiServices (Java-интерфейс с аннотациями превращается в вызов модели), tools через <code>@Tool</code>, RAG-конвейер, интеграции с векторными хранилищами. <b>Spring AI</b> — то же в стиле Spring: <code>ChatClient</code>, advisors (память, RAG, логирование как цепочка перехватчиков), tool calling, <code>VectorStore</code>, автоконфигурация и метрики Micrometer из коробки. Если команда живёт в Spring Boot, интеграции и наблюдаемость приходят почти бесплатно.</p>
+    <p>Цена та же, что у LangChain: промпты, собранные внутри advisors и AiServices, отставание от новых возможностей API, абстракция «chat model», которая прячет prompt caching, thinking и особенности tool use. Совет Anthropic работает и здесь: начните с официального SDK (<code>anthropic-java</code>) и своего агентного цикла на 100–200 строк (вы напишете его в модуле 6), а фреймворк берите точечно — загрузчики и сплиттеры документов LangChain4j, <code>VectorStore</code> Spring AI — и включите логирование запросов к модели с первого дня.</p>
+  </div>
+  <pre data-only="java"><code class="lang-java">// LangChain4j: декларативный сервис поверх модели. Удобно, но промпт собирает фреймворк.
+interface Triage {
+    @SystemMessage("Классифицируй тикет: billing, tech, refund или other. Ответь одним словом.")
+    String classify(@UserMessage String ticket);
+}
+
+ChatModel model = AnthropicChatModel.builder()
+        .apiKey(System.getenv("ANTHROPIC_API_KEY"))
+        .modelName("claude-haiku-4-5")
+        .logRequests(true)  // с первого дня: видеть, что реально уходит в модель
+        .logResponses(true)
+        .build();
+Triage triage = AiServices.create(Triage.class, model);
+String label = triage.classify("Не прошла оплата картой");
+
+// Spring AI: ChatClient из автоконфигурации (spring-ai-starter-model-anthropic).
+String label2 = chatClient.prompt()
+        .system("Классифицируй тикет: billing, tech, refund или other. Ответь одним словом.")
+        .user("Не прошла оплата картой")
+        .call()
+        .content();
+</code></pre>
+  <div class="callout go" data-only="go"><span class="title">А в Go?</span>
     <p>Экосистема меньше: есть langchaingo (порт LangChain от сообщества), Eino от CloudWeGo, Genkit с поддержкой Go. Но в Go культура «тонкие библиотеки + свой код» и так сильнее, и это совпадает с советом Anthropic: SDK провайдера, свой агентный цикл на 100–200 строк (вы напишете его в модуле 6), pgvector, OpenTelemetry. Агентный цикл — это <code>for</code> с <code>switch resp.StopReason</code>; граф состояний — таблица переходов и состояние в Postgres. Фреймворк здесь чаще мешает, чем помогает.</p>
   </div>
 
@@ -493,10 +617,10 @@ print(chat.choices[0].message.content, chat.choices[0].finish_reason,
     <li><b>Утечки.</b> Выводы ячеек сохраняются в файле: ответы модели с ПДн, случайно напечатанный ключ API уезжают в репозиторий.</li>
     <li><b>Нет жизненного цикла сервиса:</b> ни graceful shutdown, ни лимитов, ни наблюдаемости.</li>
   </ul>
-  <p>Нормальный путь: ноутбук → код, который доказал ценность, выносится в модуль с функциями → скрипт с аргументами (PEP 723) → тесты и CI → при необходимости сервис (FastAPI или Go). Ноутбук остаётся как отчёт об эксперименте, импортирующий этот модуль.</p>
+  <p>Нормальный путь: ноутбук → код, который доказал ценность, выносится в модуль с функциями → скрипт с аргументами (PEP 723) → тесты и CI → при необходимости сервис (FastAPI или <span data-only="go">Go</span><span data-only="java">Spring Boot</span>). Ноутбук остаётся как отчёт об эксперименте, импортирующий этот модуль.</p>
 
   <h2 id="coding-agents">Coding agents в работе AI-инженера</h2>
-  <p><b>Coding agent</b> — LLM в агентном цикле с инструментами разработчика: читать и искать по коду, править файлы, запускать команды (<code>go test</code>, <code>git diff</code>), вызывать MCP-серверы. Это тот же цикл tool use из модуля 2, только «мир» агента — ваш репозиторий (как цикл устроен изнутри, разберём в модуле 6). Код — область, где агенты работают лучше всего: компилятор и тесты дают объективную обратную связь без человека. Отсюда главный принцип: <b>доверие к изменению от агента строится на проверяемости, а не на уверенном тоне отчёта</b>. То, что автоматически не проверяется (промпты, тексты, конкурентность, безопасность), требует evals и человека.</p>
+  <p><b>Coding agent</b> — LLM в агентном цикле с инструментами разработчика: читать и искать по коду, править файлы, запускать команды (<span data-only="go"><code>go test</code></span><span data-only="java"><code>mvn verify</code></span>, <code>git diff</code>), вызывать MCP-серверы. Это тот же цикл tool use из модуля 2, только «мир» агента — ваш репозиторий (как цикл устроен изнутри, разберём в модуле 6). Код — область, где агенты работают лучше всего: компилятор и тесты дают объективную обратную связь без человека. Отсюда главный принцип: <b>доверие к изменению от агента строится на проверяемости, а не на уверенном тоне отчёта</b>. То, что автоматически не проверяется (промпты, тексты, конкурентность, безопасность), требует evals и человека.</p>
 
   <h3>Классы инструментов</h3>
   <table>
@@ -511,17 +635,52 @@ print(chat.choices[0].message.content, chat.choices[0].finish_reason,
   <ol>
     <li><b>Исследование</b> без права правок (в Claude Code — plan mode, <code>--permission-mode plan</code>). Большое исследование — субагенту, чтобы не засорять основной контекст.</li>
     <li><b>План</b> письменно: файлы, функции, тесты, чего не трогать. Правка плана стоит одного сообщения, правка 600 строк диффа — часа.</li>
-    <li><b>Тесты сначала</b>: агент пишет табличный тест, запускает, тест падает по правильной причине. Тесты коммитятся отдельно, до реализации.</li>
-    <li><b>Реализация маленькими шагами</b>: «сделай так, чтобы тесты прошли; тесты не меняй». Коммит после зелёных <code>go vet</code> и <code>go test -race</code>.</li>
-    <li><b>Ревью диффа</b>: сначала <code>git diff --stat</code> (не вышел ли за план), потом отдельно дифф <code>*_test.go</code> (не ослаблены ли проверки), потом всё. Агент пишет, человек отвечает за мерж.</li>
+    <li><b>Тесты сначала</b>: агент пишет <span data-only="go">табличный тест</span><span data-only="java">параметризованный тест (<code>@ParameterizedTest</code>)</span>, запускает, тест падает по правильной причине. Тесты коммитятся отдельно, до реализации.</li>
+    <li><b>Реализация маленькими шагами</b>: «сделай так, чтобы тесты прошли; тесты не меняй». Коммит после <span data-only="go">зелёных <code>go vet</code> и <code>go test -race</code></span><span data-only="java">зелёного <code>mvn verify</code> (компиляция, линтеры, тесты)</span>.</li>
+    <li><b>Ревью диффа</b>: сначала <code>git diff --stat</code> (не вышел ли за план), потом отдельно дифф <span data-only="go"><code>*_test.go</code></span><span data-only="java"><code>*Test.java</code></span> (не ослаблены ли проверки), потом всё. Агент пишет, человек отвечает за мерж.</li>
   </ol>
-  <div class="callout go"><span class="title">Аналогия из Go</span>Тесты до кода для агента — то же, что интерфейс до реализации: контракт фиксируется раньше, чем появится код, под который его захочется подогнать. А <code>go test</code> в цикле агента — компилятор для поведения: модель не нужно уговаривать, ей достаточно красного вывода.</div>
+  <div class="callout go" data-only="java"><span class="title">Аналогия из Java</span>Тесты до кода для агента — то же, что интерфейс до реализации: контракт фиксируется раньше, чем появится код, под который его захочется подогнать. А <code>mvn verify</code> в цикле агента — компилятор для поведения: модель не нужно уговаривать, ей достаточно красного отчёта surefire.</div>
+  <div class="callout go" data-only="go"><span class="title">Аналогия из Go</span>Тесты до кода для агента — то же, что интерфейс до реализации: контракт фиксируется раньше, чем появится код, под который его захочется подогнать. А <code>go test</code> в цикле агента — компилятор для поведения: модель не нужно уговаривать, ей достаточно красного вывода.</div>
 
   <h3>Настройка репозитория: AGENTS.md, права, хуки</h3>
   <p><b>Файл инструкций</b> агент загружает в контекст в начале каждой сессии. <b>AGENTS.md</b> — открытый формат (обычный Markdown), его читают Codex, Cursor, Copilot и большинство других агентов; вложенные файлы в подкаталогах уточняют правила, приоритет у ближайшего. Claude Code читает <b>CLAUDE.md</b> (а AGENTS.md — если CLAUDE.md нет); для команды со смешанными инструментами удобно держать правила в AGENTS.md, а в CLAUDE.md написать строку <code>@AGENTS.md</code> и специфику Claude Code. Пишите только то, чего агент не выведет из кода: команды проверки, карту, неочевидные конвенции, запреты, критерий «готово». Каждая строка едет в контекст каждой сессии — это «всегда загруженная» часть контекста (<a href="m06.html#context">модуль 6</a>), документация Claude Code советует держаться в пределах ~200 строк.</p>
   <p>Но инструкция — не гарантия: документация Claude Code прямо называет CLAUDE.md контекстом, а не принудительной конфигурацией. То, что должно выполняться всегда, живёт в двух механизмах вне модели. <b>Права</b>: режим решает, спрашивать ли человека (в Claude Code — от Manual с подтверждениями до <code>auto</code>, где действия проверяет модель-классификатор, и <code>bypassPermissions</code> — только в изолированном контейнере), правила allow/ask/deny уточняют его, а <b>sandbox</b> средствами ОС ограничивает, до каких файлов и доменов вообще дотянутся shell-команды. Правила для команд хрупкие (вариация синтаксиса их обходит), поэтому граница безопасности — sandbox или контейнер. <b>Хуки</b>: ваши команды на событиях агента; <code>PreToolUse</code> с кодом выхода 2 блокирует вызов инструмента, <code>Stop</code> с кодом 2 не даёт агенту закончить ход и возвращает ему stderr.</p>
   <div class="tabs">
-    <div class="tab-panel" data-tab="AGENTS.md"><pre><code># docrag — RAG по документации (Go, Postgres + pgvector)
+    <div class="tab-panel" data-tab="AGENTS.md" data-only="java"><pre><code># docrag — RAG по документации (Java 21, Spring Boot, Postgres + pgvector)
+
+## Команды
+- `docker compose up -d db` — Postgres для интеграционных тестов (или Testcontainers)
+- `make check` — ./mvnw -q verify: spotless:check, компиляция с Error Prone, тесты; запускай перед «готово»
+- `make eval-smoke` — ~40 вопросов из golden set; обязателен при правке prompts/ и src/main/java/docrag/generate/
+
+## Структура и конвенции
+- docrag.retrieve — гибридный поиск; docrag.generate — промпт и вызов Claude; prompts/ — версии промптов
+- Ошибки: доменные исключения с причиной (new XxxException("...", e)); логи только SLF4J; имена моделей — из generate/Models.java
+
+## Нельзя
+- Менять evals/data/ (эталон) и применённые migrations/*.sql (Flyway); ослаблять тесты, ставить @Disabled
+- Добавлять зависимости в pom.xml без вопроса, читать .env, ходить в прод
+
+## Готово, когда
+- make check зелёный; при правке prompts/ — eval-smoke не хуже baseline; дифф ≤ 300 строк
+</code></pre></div>
+    <div class="tab-panel" data-tab=".claude/settings.json" data-only="java"><pre><code class="lang-json">{
+  "permissions": {
+    "allow": ["Bash(make check)", "Bash(./mvnw test *)", "Bash(git diff *)"],
+    "ask":   ["Bash(git push *)", "Edit(/pom.xml)", "Edit(/migrations/**)"],
+    "deny":  ["Read(./.env)", "Edit(/evals/data/**)", "Bash(kubectl *)"]
+  },
+  "sandbox": {
+    "enabled": true,
+    "filesystem": { "denyRead": ["./.env", "~/.ssh", "~/.aws", "~/.kube"] },
+    "network": { "allowedDomains": ["repo.maven.apache.org"] }
+  },
+  "hooks": {
+    "Stop": [{ "hooks": [{ "type": "command", "timeout": 900,
+      "command": "cd \"$CLAUDE_PROJECT_DIR\" &amp;&amp; java -jar tools/agentgate.jar" }] }]
+  }
+}</code></pre></div>
+    <div class="tab-panel" data-tab="AGENTS.md" data-only="go"><pre><code># docrag — RAG по документации (Go, Postgres + pgvector)
 
 ## Команды
 - `docker compose up -d db` — Postgres для интеграционных тестов
@@ -539,7 +698,7 @@ print(chat.choices[0].message.content, chat.choices[0].finish_reason,
 ## Готово, когда
 - make check зелёный; при правке prompts/ — eval-smoke не хуже baseline; дифф ≤ 300 строк
 </code></pre></div>
-    <div class="tab-panel" data-tab=".claude/settings.json"><pre><code class="lang-json">{
+    <div class="tab-panel" data-tab=".claude/settings.json" data-only="go"><pre><code class="lang-json">{
   "permissions": {
     "allow": ["Bash(make check)", "Bash(go test *)", "Bash(git diff *)"],
     "ask":   ["Bash(git push *)", "Bash(go get *)", "Edit(/migrations/**)"],
@@ -557,7 +716,34 @@ print(chat.choices[0].message.content, chat.choices[0].finish_reason,
 }</code></pre></div>
   </div>
   <p>Stop-хук <code>agentgate</code> превращает «готово, когда» из AGENTS.md в код: смотрит, что изменилось относительно <code>main</code>, и решает, какие проверки обязательны.</p>
-  <pre><code class="lang-go">// Plan по изменениям возвращает обязательные проверки (цели Makefile — те же,
+  <pre data-only="java"><code class="lang-java">// plan по изменениям возвращает обязательные проверки (цели Makefile — те же,
+// что перечислены в AGENTS.md) и нарушения, которые агент должен откатить.
+public static Plan plan(List&lt;Change&gt; cs) {
+    boolean javaCode = false, prompts = false;
+    List&lt;String&gt; violations = new ArrayList&lt;&gt;();
+    for (Change c : cs) {
+        String p = c.path();
+        if (p.startsWith("evals/data/")) {
+            violations.add(p + ": эталон evals меняет человек отдельным PR, а не агент вместе с кодом");
+        } else if (p.startsWith("migrations/") &amp;&amp; c.status() != 'A') {
+            violations.add(p + ": применённую миграцию не правят, добавьте новую");
+        } else if (p.startsWith("prompts/")) {
+            prompts = true;
+        } else if (p.endsWith(".java") || p.equals("pom.xml") || p.endsWith("/pom.xml")) {
+            javaCode = true;
+        }
+    }
+    List&lt;List&lt;String&gt;&gt; checks = new ArrayList&lt;&gt;();
+    if (javaCode) {
+        checks.add(List.of("make", "check")); // mvn verify: компиляция, линтеры, тесты
+    }
+    if (prompts) {
+        checks.add(List.of("make", "eval-smoke")); // промпт не проверить юнит-тестом
+    }
+    return new Plan(checks, violations);
+}
+</code></pre>
+  <pre data-only="go"><code class="lang-go">// Plan по изменениям возвращает обязательные проверки (цели Makefile — те же,
 // что перечислены в AGENTS.md) и нарушения, которые агент должен откатить.
 func Plan(cs []Change) (checks [][]string, violations []string) {
 	var goCode, prompts bool
@@ -582,7 +768,7 @@ func Plan(cs []Change) (checks [][]string, violations []string) {
 	return checks, violations
 }
 </code></pre>
-  <p>Полная версия (запуск git и проверок, коды выхода 0/1/2, табличные тесты на fake-раннере) — в <code>examples/m04-tools</code> репозитория курса. Нарушения и упавшие проверки хук пишет в stderr с хвостом лога, и агент продолжает работу. От зацикливания Claude Code защищён сам: после 8 продолжений от Stop-хуков подряд он завершает ход (счётчик сбрасывается при каждом вызове инструмента; порог меняет <code>CLAUDE_CODE_STOP_HOOK_BLOCK_CAP</code>, по состоянию на октябрь 2026). <code>make eval-smoke</code> ходит в API модели с ключом, поэтому его запускает хук (хуки работают вне sandbox), а не агент из своего shell.</p>
+  <p>Полная версия (запуск git и проверок, коды выхода 0/1/2, <span data-only="go">табличные тесты</span><span data-only="java">параметризованные JUnit-тесты</span> на fake-раннере) — в <span data-only="go"><code>examples/m04-tools</code></span><span data-only="java"><code>examples/java/m04-tools</code></span> репозитория курса. Нарушения и упавшие проверки хук пишет в stderr с хвостом лога, и агент продолжает работу. От зацикливания Claude Code защищён сам: после 8 продолжений от Stop-хуков подряд он завершает ход (счётчик сбрасывается при каждом вызове инструмента; порог меняет <code>CLAUDE_CODE_STOP_HOOK_BLOCK_CAP</code>, по состоянию на октябрь 2026). <code>make eval-smoke</code> ходит в API модели с ключом, поэтому его запускает хук (хуки работают вне sandbox), а не агент из своего shell.</p>
 
   <h3>Безопасность</h3>
   <ul>
@@ -595,8 +781,8 @@ func Plan(cs []Change) (checks [][]string, violations []string) {
   <table>
     <tr><th>Провал</th><th>Как ловить</th></tr>
     <tr><td><b>Огромный дифф</b> «заодно отрефакторил»</td><td>План со списком файлов; лимит ~300 строк в AGENTS.md; <code>git diff --stat</code> первым делом</td></tr>
-    <tr><td><b>Тесты подогнаны под код</b>: изменён assert, <code>t.Skip</code>, удалён «нестабильный» тест</td><td>Тесты отдельным коммитом до кода; дифф <code>*_test.go</code> отдельно; сломайте код руками — тест обязан упасть</td></tr>
-    <tr><td><b>Галлюцинированный API</b>: несуществующий метод, устаревший параметр, выдуманное имя модели или пакета</td><td>Методы ловит компилятор Go (в Python нужен mypy/pyright в цикле). Имена моделей и параметры — константы с правилом в AGENTS.md. Новые строки <code>go.mod</code> — глазами: модели «вспоминают» несуществующие пакеты (Spracklen et al., 2025), а атакующий может их зарегистрировать (slopsquatting)</td></tr>
+    <tr><td><b>Тесты подогнаны под код</b>: изменён assert, <span data-only="go"><code>t.Skip</code></span><span data-only="java"><code>@Disabled</code></span>, удалён «нестабильный» тест</td><td>Тесты отдельным коммитом до кода; дифф <span data-only="go"><code>*_test.go</code></span><span data-only="java"><code>*Test.java</code></span> отдельно; сломайте код руками — тест обязан упасть</td></tr>
+    <tr><td><b>Галлюцинированный API</b>: несуществующий метод, устаревший параметр, выдуманное имя модели или пакета</td><td>Методы ловит компилятор <span data-only="go">Go</span><span data-only="java">Java</span> (в Python нужен mypy/pyright в цикле). Имена моделей и параметры — константы с правилом в AGENTS.md. Новые строки <span data-only="go"><code>go.mod</code></span><span data-only="java"><code>pom.xml</code></span> — глазами: модели «вспоминают» несуществующие пакеты (Spracklen et al., 2025), а атакующий может их зарегистрировать (slopsquatting)</td></tr>
     <tr><td><b>Дрейф от задачи</b>: правит соседнее, меняет CI, «чтобы прошло»</td><td>«Что не трогать» в плане; CODEOWNERS на CI и эталон evals</td></tr>
     <tr><td><b>«Готово» без проверки</b></td><td>Stop-хук, который сам запускает проверки; финальный судья — CI</td></tr>
     <tr><td><b>Деградация длинной сессии</b> (context rot)</td><td>Одна задача — одна сессия; после двух неудачных поправок — сброс и новый запрос</td></tr>
@@ -605,7 +791,7 @@ func Plan(cs []Change) (checks [][]string, violations []string) {
 
   <h3>Специфика AI-инженерии</h3>
   <ul>
-    <li><b>Агент правит промпт — обязателен прогон evals.</b> Зелёный <code>go test</code> ничего не говорит о поведении модели. То же для кода вокруг модели: сборки контекста, параметров вызова, парсинга ответа, retrieval. Smoke-набор — до мержа, полный — в CI (<a href="m08.html#ci">модуль 8</a>).</li>
+    <li><b>Агент правит промпт — обязателен прогон evals.</b> Зелёный <span data-only="go"><code>go test</code></span><span data-only="java"><code>mvn verify</code></span> ничего не говорит о поведении модели. То же для кода вокруг модели: сборки контекста, параметров вызова, парсинга ответа, retrieval. Smoke-набор — до мержа, полный — в CI (<a href="m08.html#ci">модуль 8</a>).</li>
     <li><b>Агент правит эталон evals — конфликт интересов.</b> Если в одном диффе меняются и код, и ожидаемые ответы, зелёный результат ничего не доказывает. Эталон меняет человек отдельным PR; обеспечивают это deny-правило, CODEOWNERS и хук.</li>
     <li><b>Агент генерирует eval-кейсы</b> — полезно для покрытия (перефразировки, граничные случаи, атаки, вопросы без ответа), но: ожидаемый ответ задаёт человек или источник, а не модель (иначе её ошибки становятся эталоном); проверяйте разнообразие и то, что текущая версия падает хотя бы на части кейсов; не тащите в фикстуры реальные логи с ПДн; помечайте <code>"source": "synthetic"</code>. Подробно — в модулях 8 и 10.</li>
   </ul>
@@ -624,11 +810,11 @@ func Plan(cs []Change) (checks [][]string, violations []string) {
     </div>
     <div class="controls" id="ct-area">
       <b>Затронуто:</b>
-      <label><input type="checkbox" data-k="code" checked> Go-код</label>
+      <label><input type="checkbox" data-k="code" checked> <span data-only="go">Go</span><span data-only="java">Java</span>-код</label>
       <label><input type="checkbox" data-k="prompts"> промпты</label>
       <label><input type="checkbox" data-k="golden"> эталон evals</label>
       <label><input type="checkbox" data-k="migr"> миграции</label>
-      <label><input type="checkbox" data-k="deps"> go.mod</label>
+      <label><input type="checkbox" data-k="deps"> <span data-only="go">go.mod</span><span data-only="java">pom.xml</span></label>
       <label><input type="checkbox" data-k="cfg"> CI, конфиги</label>
     </div>
     <div class="controls" id="ct-checks">
@@ -653,11 +839,11 @@ func Plan(cs []Change) (checks [][]string, violations []string) {
     <label class="check"><input type="checkbox" data-save="m04-t3"> В pandas: сводка по версиям (pass rate, p95 латентности, стоимость на 1000 запросов), pivot по категориям, число «починенных» и «сломанных» примеров при парном сравнении</label>
   </div>
   <div class="task">
-    <h3>Задание 2: FastAPI vs Go</h3>
-    <p>Реализуйте один и тот же эндпоинт стриминга ответа (SSE) на FastAPI и на Go <code>net/http</code> (код из модуля 0). Нагрузите оба 100 одновременными стримами (например, <code>k6</code> или <code>hey</code> против мок-сервера провайдера, отдающего токены с задержкой).</p>
+    <h3>Задание 2: FastAPI vs <span data-only="go">Go</span><span data-only="java">Spring Boot</span></h3>
+    <p>Реализуйте один и тот же эндпоинт стриминга ответа (SSE) на FastAPI и на <span data-only="go">Go <code>net/http</code> (код из модуля 0)</span><span data-only="java">Spring Boot (<code>SseEmitter</code> на virtual threads или WebFlux, код из модуля 0)</span>. Нагрузите оба 100 одновременными стримами (например, <code>k6</code> или <code>hey</code> против мок-сервера провайдера, отдающего токены с задержкой).</p>
     <label class="check"><input type="checkbox" data-save="m04-t4"> Закрытие клиента прерывает запрос к провайдеру в обеих реализациях (проверено по логам мок-сервера)</label>
     <label class="check"><input type="checkbox" data-save="m04-t5"> Намеренно вставили <code>time.sleep(1)</code> в async-хендлер FastAPI и измерили, как упала пропускная способность; объяснили почему</label>
-    <label class="check"><input type="checkbox" data-save="m04-t6"> Записали 5 пунктов: что было проще в Python, что в Go</label>
+    <label class="check"><input type="checkbox" data-save="m04-t6"> Записали 5 пунктов: что было проще в Python, что в <span data-only="go">Go</span><span data-only="java">Java</span></label>
   </div>
   <div class="task">
     <h3>Задание 3: фреймворк на вкус</h3>
@@ -684,9 +870,11 @@ func Plan(cs []Change) (checks [][]string, violations []string) {
   </div>
 
   <h2 id="selfcheck">Самопроверка</h2>
-  <details class="q"><summary>Почему <code>time.sleep(2)</code> внутри <code>async def</code>-хендлера FastAPI — серьёзная ошибка, а в Go <code>time.Sleep</code> в хендлере — нет?</summary><div class="a"><p>asyncio кооперативный и однопоточный: переключение задач происходит только на <code>await</code>. Синхронный sleep блокирует event loop, и все остальные запросы этого воркера ждут. В Go рантайм паркует только текущую горутину, остальные продолжают работать на других потоках.</p></div></details>
+  <details class="q" data-only="java"><summary>Почему <code>time.sleep(2)</code> внутри <code>async def</code>-хендлера FastAPI — серьёзная ошибка, а <code>Thread.sleep</code> в контроллере Spring на виртуальных потоках — нет?</summary><div class="a"><p>asyncio кооперативный и однопоточный: переключение задач происходит только на <code>await</code>. Синхронный sleep блокирует event loop, и все остальные запросы этого воркера ждут. В Java с <code>spring.threads.virtual.enabled=true</code> каждый запрос — свой виртуальный поток: sleep или блокирующий I/O паркуют только его, а поток-носитель берёт другие задачи. Оговорка Java 21 — pinning: блокировка внутри <code>synchronized</code> держит носитель (в Java 24 это исправлено).</p></div></details>
+  <details data-only="go" class="q"><summary>Почему <code>time.sleep(2)</code> внутри <code>async def</code>-хендлера FastAPI — серьёзная ошибка, а в Go <code>time.Sleep</code> в хендлере — нет?</summary><div class="a"><p>asyncio кооперативный и однопоточный: переключение задач происходит только на <code>await</code>. Синхронный sleep блокирует event loop, и все остальные запросы этого воркера ждут. В Go рантайм паркует только текущую горутину, остальные продолжают работать на других потоках.</p></div></details>
   <details class="q"><summary>Чем dataclass отличается от pydantic BaseModel и когда что брать?</summary><div class="a"><p>dataclass — контейнер с генерацией конструктора, без валидации значений в рантайме. BaseModel валидирует и приводит типы, парсит JSON, генерирует JSON Schema. Для внутренних структур — dataclass (быстро, просто), для данных с границы доверия (HTTP-запросы, ответы модели, конфиги) — pydantic.</p></div></details>
-  <details class="q"><summary>Какой аналог <code>fmt.Errorf("…: %w", err)</code> в Python?</summary><div class="a"><p><code>raise NewError("…") from err</code>. Исходное исключение сохраняется в <code>__cause__</code> и печатается в traceback. Проверка типа в цепочке делается через <code>except</code> по классу, аналога <code>errors.Is</code> по всей цепочке из коробки нет — обычно ловят на нужном уровне.</p></div></details>
+  <details class="q" data-only="java"><summary>Какой аналог <code>new MyException("…", cause)</code> в Python?</summary><div class="a"><p><code>raise MyError("…") from cause</code>. Исходное исключение сохраняется в <code>__cause__</code> и печатается в traceback, как <code>Caused by:</code> в Java. Ловят по классу в <code>except</code>; обхода цепочки вроде <code>getCause()</code> в цикле из коробки нет — обычно ловят на нужном уровне.</p></div></details>
+  <details data-only="go" class="q"><summary>Какой аналог <code>fmt.Errorf("…: %w", err)</code> в Python?</summary><div class="a"><p><code>raise NewError("…") from err</code>. Исходное исключение сохраняется в <code>__cause__</code> и печатается в traceback. Проверка типа в цепочке делается через <code>except</code> по классу, аналога <code>errors.Is</code> по всей цепочке из коробки нет — обычно ловят на нужном уровне.</p></div></details>
   <details class="q"><summary>Зачем нужен venv и почему uv его не отменяет?</summary><div class="a"><p>Python ставит пакеты в окружение интерпретатора, и без изоляции проекты конфликтуют версиями зависимостей. venv — отдельное окружение на проект. uv не отменяет venv, а управляет им: создаёт <code>.venv</code>, синхронизирует с lock-файлом, ставит нужную версию Python.</p></div></details>
   <details class="q"><summary>Что делает <code>df.pivot_table(index="category", columns="prompt_version", values="passed", aggfunc="mean")</code>?</summary><div class="a"><p>Группирует по паре (категория, версия), считает среднее passed (то есть pass rate) и раскладывает версии по колонкам: строки — категории, колонки — версии, в ячейках — pass rate. Аналог GROUP BY по двум полям с последующим разворотом.</p></div></details>
   <details class="q"><summary>Почему при сравнении двух промптов на одном наборе полезно смотреть на «починенные» и «сломанные» примеры, а не только на разницу pass rate?</summary><div class="a"><p>Одинаковая разница может получиться из «починил 5, сломал 0» и из «починил 25, сломал 20». Второй случай — нестабильный промпт, который меняет поведение на половине набора. Парный тест McNemar использует только эти два числа и чувствительнее сравнения двух независимых долей.</p></div></details>
@@ -694,7 +882,7 @@ func Plan(cs []Change) (checks [][]string, violations []string) {
   <details class="q"><summary>Что не так с ноутбуком, который «работает у меня»?</summary><div class="a"><p>Ячейки могли выполняться не по порядку, а часть состояния — прийти из удалённых ячеек. Проверка: Restart &amp; Run All. Для воспроизводимости код выносится в модули, ноутбук только импортирует и визуализирует.</p></div></details>
 
   <details class="q"><summary>В AGENTS.md написано «не меняй evals/data/». Почему этого недостаточно и что сделать?</summary><div class="a"><p>Файл инструкций — это контекст, а не принудительная конфигурация (так прямо сказано в документации Claude Code). В длинной сессии, при противоречивых указаниях или под prompt injection модель может нарушить любой пункт. Гарантию дают механизмы вне модели: deny-правило <code>Edit(/evals/data/**)</code>, хук, который блокирует завершение при изменённом эталоне, CODEOWNERS и проверка в CI. Строку в AGENTS.md оставляют как объяснение «почему», чтобы агент не тратил шаги на попытки.</p></div></details>
-  <details class="q"><summary>Агент изменил <code>prompts/answer.v2.txt</code>, <code>make check</code> зелёный. Можно мержить?</summary><div class="a"><p>Нет. <code>go test</code> проверяет код, а не поведение модели: промпт меняет ответы так, что ни один юнит-тест этого не увидит. Нужен прогон evals (smoke-набор до мержа, полный в CI) со сравнением с baseline, ревью диффа промпта человеком, а после мержа — canary. Это правило для всего, что влияет на вход и выход модели: сборки контекста, параметров вызова, retrieval.</p></div></details>
+  <details class="q"><summary>Агент изменил <code>prompts/answer.v2.txt</code>, <code>make check</code> зелёный. Можно мержить?</summary><div class="a"><p>Нет. <span data-only="go"><code>go test</code></span><span data-only="java"><code>mvn verify</code></span> проверяет код, а не поведение модели: промпт меняет ответы так, что ни один юнит-тест этого не увидит. Нужен прогон evals (smoke-набор до мержа, полный в CI) со сравнением с baseline, ревью диффа промпта человеком, а после мержа — canary. Это правило для всего, что влияет на вход и выход модели: сборки контекста, параметров вызова, retrieval.</p></div></details>
   <details class="q"><summary>Чем режим разрешений агента отличается от sandbox и почему нужны оба?</summary><div class="a"><p>Режим решает, спрашивать ли человека перед действием (Manual, acceptEdits, auto и т. д.). Sandbox решает, до чего действие может дотянуться: файлы, сеть, процессы — на уровне ОС или контейнера. Подтверждения устают и ошибаются, классификатор вероятностен, а правила для команд обходятся вариациями синтаксиса. Sandbox ограничивает ущерб, даже если решение пропустить действие было неверным. <code>bypassPermissions</code> без внешней изоляции снимает оба уровня сразу.</p></div></details>
 
   <h2 id="interview">Вопросы с собеседований</h2>
@@ -707,13 +895,19 @@ func Plan(cs []Change) (checks [][]string, violations []string) {
   <details class="q interview"><summary>Как вы анализируете результаты eval-прогона? Покажите на pandas.</summary><div class="a">
     <p>Загружаю результаты в DataFrame, отделяю инфраструктурные ошибки. Сводка по версиям через <code>groupby().agg()</code>: pass rate, n, p50/p95 латентности, стоимость. Срезы через <code>pivot_table</code> по категории и версии — ищу, где регрессия прячется за общим ростом. Парное сравнение по <code>example_id</code>: сколько починено и сколько сломано, McNemar для значимости. Доверительные интервалы (Уилсон или bootstrap), решение по нижней границе. И обязательно глазами смотрю на провалы — <code>df.query("passed == 0")</code> — потому что метрика говорит «сколько», а не «почему». Ошибки judge-модели тоже проверяю выборочно.</p>
   </div></details>
-  <details class="q interview"><summary>Сервис на Go или на Python? Как бы вы выбрали для LLM-продукта?</summary><div class="a">
+  <details class="q interview" data-only="java"><summary>Сервис на Java или на Python? Как бы вы выбрали для LLM-продукта?</summary><div class="a">
+    <p>Сервисный слой — на том, на чём сильна команда и инфраструктура: вызов API, стриминг, лимиты, очереди — это I/O, и Java 21 с виртуальными потоками даёт простую конкурентность без реактивщины, строгую типизацию, зрелый Spring-стек, наблюдаемость через Micrometer и OpenTelemetry и официальный SDK. Python нужен там, где экосистема: evals, анализ, fine-tuning, локальные модели, сложный парсинг документов. Частая здравая архитектура — сервисы на Spring Boot плюс Python-воркеры или офлайн-пайплайны, связь через очередь или HTTP. Против Python-сервиса по умолчанию: GIL и async-подвохи, упаковка и зависимости. За: скорость итерации, если команда — ML/DS. Против Java в отдельных случаях: холодный старт и память для serverless (лечится CDS, AOT, GraalVM native image). Выбор фиксирую в ADR, а не спорю о вкусах.</p>
+  </div></details>
+  <details data-only="go" class="q interview"><summary>Сервис на Go или на Python? Как бы вы выбрали для LLM-продукта?</summary><div class="a">
     <p>Сервисный слой — на том, на чём сильна команда и инфраструктура: вызов API, стриминг, лимиты, очереди — это I/O, и Go здесь даёт простую конкурентность, предсказуемую память, один бинарь и строгую типизацию. Python нужен там, где экосистема: evals, анализ, fine-tuning, локальные модели, сложный парсинг документов. Частая здравая архитектура — Go-сервисы плюс Python-воркеры или офлайн-пайплайны, связь через очередь или HTTP. Против Python-сервиса по умолчанию: GIL и async-подвохи, упаковка и зависимости. За: скорость итерации, если команда — ML/DS. Выбор фиксирую в ADR, а не спорю о вкусах.</p>
   </div></details>
   <details class="q interview"><summary>Зачем абстрагировать провайдера LLM и как не переусердствовать?</summary><div class="a">
     <p>Нужно для fallback между моделями и провайдерами, A/B-тестов, тестов с фейковым клиентом и защиты от vendor lock-in. Переусердствовать — значит свести всё к наименьшему общему знаменателю и потерять prompt caching, thinking, особенности tool use, которые дают основную экономию и качество. Решение: узкий интерфейс под задачи продукта (генерация, стриминг, tool-цикл) с явными опциями, которые адаптер провайдера поддерживает или игнорирует; провайдер-специфичные возможности доступны через расширения. И evals на каждого провайдера — переключение без них опасно, промпты не переносятся один в один.</p>
   </div></details>
-  <details class="q interview"><summary>Чем asyncio отличается от горутин, и что вы бы сказали, если бы вас спросили, «что лучше для LLM-сервиса»?</summary><div class="a">
+  <details class="q interview" data-only="java"><summary>Чем asyncio отличается от виртуальных потоков Java, и что вы бы сказали, если бы вас спросили, «что лучше для LLM-сервиса»?</summary><div class="a">
+    <p>asyncio — кооперативная многозадачность в одном потоке, переключение только в <code>await</code>, функции «окрашены» (async заражает стек), CPU-параллелизма нет из-за GIL. Виртуальные потоки — планировщик M:N в JVM поверх пула носителей на всех ядрах: обычный блокирующий код без окраски, блокирующий I/O паркует только свой поток. Для I/O-bound нагрузки LLM-сервиса оба справляются с тысячами одновременных запросов. Разница в надёжности: в Python одна синхронная библиотека способна положить воркер, и это надо контролировать ревью и линтерами. В Java 21 похожий, но более узкий класс ошибок — pinning (блокировка внутри <code>synchronized</code>, нативные вызовы); его видно в JFR по событию <code>jdk.VirtualThreadPinned</code>, а в Java 24 <code>synchronized</code> больше не пинит. Для CPU-частей (токенизация, обработка документов) у JVM преимущество без дополнительных процессов.</p>
+  </div></details>
+  <details data-only="go" class="q interview"><summary>Чем asyncio отличается от горутин, и что вы бы сказали, если бы вас спросили, «что лучше для LLM-сервиса»?</summary><div class="a">
     <p>asyncio — кооперативная многозадачность в одном потоке, переключение только в <code>await</code>, функции «окрашены» (async заражает стек), CPU-параллелизма нет из-за GIL. Горутины — вытесняющий планировщик M:N на всех ядрах, любая функция может быть конкурентной, блокирующий вызов не мешает другим. Для I/O-bound нагрузки LLM-сервиса оба справляются с тысячами одновременных запросов. Разница в надёжности: в Python одна синхронная библиотека способна положить воркер, и это надо контролировать ревью и линтерами; в Go такой класс ошибок отсутствует. Для CPU-частей (токенизация, обработка документов) у Go преимущество без дополнительных процессов.</p>
   </div></details>
   <details class="q interview"><summary>Как вы используете Jupyter в работе и как код из ноутбука попадает в прод?</summary><div class="a">
@@ -721,7 +915,7 @@ func Plan(cs []Change) (checks [][]string, violations []string) {
   </div></details>
 
   <details class="q interview"><summary>Как вы работаете с coding agents и как контролируете качество кода, который они пишут?</summary><div class="a">
-    <p>Агент для меня — исполнитель с быстрыми руками, а ответственность за мерж на мне. Цикл: исследование в режиме только чтения, письменный план с перечнем файлов и тем, чего не трогать, тесты до кода отдельным коммитом, реализация маленькими шагами с зелёными <code>go build</code>, <code>go vet</code>, <code>go test -race</code> после каждого, ревью диффа: сначала <code>--stat</code>, потом тесты отдельно, потом всё. В репозитории лежит короткий AGENTS.md: команды, конвенции, запреты, критерий готовности. Всё, что обязано выполняться, вынесено в права, хуки и CI: агент не может завершить работу с красными проверками или с правкой промпта без evals. Не отдаю агенту целиком то, что плохо проверяется автоматически: конкурентность, безопасность, миграции данных. Там он максимум предлагает, а решение и ревью — построчно мои. Полезная метрика для себя — доля PR от агента, которые пришлось переделывать или откатывать. Если она растёт, значит, я отдаю слишком крупные задачи.</p>
+    <p>Агент для меня — исполнитель с быстрыми руками, а ответственность за мерж на мне. Цикл: исследование в режиме только чтения, письменный план с перечнем файлов и тем, чего не трогать, тесты до кода отдельным коммитом, реализация маленькими шагами с <span data-only="go">зелёными <code>go build</code>, <code>go vet</code>, <code>go test -race</code></span><span data-only="java">зелёным <code>mvn verify</code></span> после каждого, ревью диффа: сначала <code>--stat</code>, потом тесты отдельно, потом всё. В репозитории лежит короткий AGENTS.md: команды, конвенции, запреты, критерий готовности. Всё, что обязано выполняться, вынесено в права, хуки и CI: агент не может завершить работу с красными проверками или с правкой промпта без evals. Не отдаю агенту целиком то, что плохо проверяется автоматически: конкурентность, безопасность, миграции данных. Там он максимум предлагает, а решение и ревью — построчно мои. Полезная метрика для себя — доля PR от агента, которые пришлось переделывать или откатывать. Если она растёт, значит, я отдаю слишком крупные задачи.</p>
     <p><b>На что смотрит интервьюер:</b> зрелую позицию между «AI пишет всё» и «не пользуюсь». Ключевое — доверие через проверяемость (тесты до кода, CI, evals), маленькие диффы, явное владение результатом и понимание, где агент систематически ошибается. Плюс, если кандидат называет конкретные механизмы (хуки, deny-правила, sandbox), а не только «я внимательно смотрю».</p>
   </div></details>
   <details class="q interview"><summary>Команда из 10 человек начинает пользоваться coding agents. Что вы настроите по безопасности в первый день?</summary><div class="a">
@@ -744,7 +938,8 @@ func Plan(cs []Change) (checks [][]string, violations []string) {
     <li><a href="https://github.com/openai/openai-python" target="_blank" rel="noopener">openai-python</a>; <a href="https://platform.openai.com/docs" target="_blank" rel="noopener">документация OpenAI</a></li>
     <li><a href="https://www.anthropic.com/engineering/building-effective-agents" target="_blank" rel="noopener">Anthropic — Building effective agents</a> (раздел о фреймворках)</li>
     <li><a href="https://python.langchain.com/" target="_blank" rel="noopener">LangChain</a>, <a href="https://langchain-ai.github.io/langgraph/" target="_blank" rel="noopener">LangGraph</a>, <a href="https://docs.llamaindex.ai/" target="_blank" rel="noopener">LlamaIndex</a></li>
-    <li><a href="https://github.com/tmc/langchaingo" target="_blank" rel="noopener">langchaingo</a>, <a href="https://github.com/cloudwego/eino" target="_blank" rel="noopener">Eino</a></li>
+    <li data-only="java"><a href="https://docs.langchain4j.dev/" target="_blank" rel="noopener">LangChain4j</a>, <a href="https://docs.spring.io/spring-ai/reference/" target="_blank" rel="noopener">Spring AI</a>, <a href="https://github.com/anthropics/anthropic-sdk-java" target="_blank" rel="noopener">anthropic-sdk-java</a></li>
+    <li data-only="go"><a href="https://github.com/tmc/langchaingo" target="_blank" rel="noopener">langchaingo</a>, <a href="https://github.com/cloudwego/eino" target="_blank" rel="noopener">Eino</a></li>
     <li><a href="https://jupyter.org/" target="_blank" rel="noopener">Jupyter</a>, <a href="https://marimo.io/" target="_blank" rel="noopener">marimo</a>, <a href="https://github.com/kynan/nbstripout" target="_blank" rel="noopener">nbstripout</a></li>
     <li><a href="https://hamel.dev/blog/posts/evals/" target="_blank" rel="noopener">Hamel Husain — Your AI Product Needs Evals</a> (анализ ошибок глазами)</li>
     <li><a href="https://code.claude.com/docs/en/best-practices" target="_blank" rel="noopener">Claude Code — Best practices</a> (исследование → план → код, проверяемость, управление контекстом) и <a href="https://www.anthropic.com/engineering/claude-code-best-practices" target="_blank" rel="noopener">Anthropic — Claude Code: best practices for agentic coding</a></li>
@@ -762,7 +957,7 @@ func Plan(cs []Change) (checks [][]string, violations []string) {
 <script>
 // ---------- Переводчик Go ↔ Python ----------
 (function () {
-  const ROWS = [
+  const GO_ROWS = [
     ['Модули', 'go.mod, модуль', 'pyproject.toml, проект', 'Модуль в Python — это один .py-файл'],
     ['Модули', 'пакет = директория', 'пакет = директория (с __init__.py)', 'Импорт по sys.path, а не по пути модуля: запуск из другой папки ломает импорты'],
     ['Модули', 'import "github.com/x/y"', 'import y / from y import Z', 'Имя для import может не совпадать с именем пакета в PyPI (pip install pyyaml → import yaml)'],
@@ -807,6 +1002,61 @@ func Plan(cs []Change) (checks [][]string, violations []string) {
     ['Тесты', 'httptest.Server', 'respx / pytest-httpx, TestClient FastAPI', ''],
     ['Данные', 'цикл по []struct', 'pandas DataFrame', 'Не итерируйте строки: операции по колонкам'],
   ];
+  const JAVA_ROWS = [
+    ['Модули', 'pom.xml, Maven-модуль', 'pyproject.toml, проект', 'Модуль в Python — это один .py-файл, а не единица сборки'],
+    ['Модули', 'package com.acme.x (директория)', 'пакет = директория (с __init__.py)', 'Импорт по sys.path, а не по classpath из сборки: запуск из другой папки ломает импорты'],
+    ['Модули', 'import com.x.Y;', 'import y / from y import Z', 'Имя для import может не совпадать с именем пакета в PyPI (pip install pyyaml → import yaml)'],
+    ['Модули', 'public / private', '_name — соглашение о приватности', 'Ничего не скрыто по-настоящему, компилятор не проверит'],
+    ['Окружение', '<dependency> в pom.xml', 'uv add pkg', 'Без venv пакеты ставятся глобально в интерпретатор и конфликтуют'],
+    ['Окружение', 'BOM / dependencyManagement', 'uv.lock', 'requirements.txt без хешей — не lock-файл'],
+    ['Окружение', 'mvn exec:java / java -jar', 'uv run python main.py', 'python из системы ≠ python из .venv'],
+    ['Окружение', 'SDKMAN, JAVA_HOME', 'uv python install 3.13, .python-version', ''],
+    ['Окружение', 'Spotless, Checkstyle, Error Prone', 'ruff format / ruff check', 'Типы проверяет отдельно mypy или pyright: javac здесь нет'],
+    ['Типы', 'int x = 0; / var x = 0;', 'x: int = 0', 'Аннотации не проверяются в рантайме'],
+    ['Типы', 'Object', 'Any / object', 'Any выключает проверку типов, object — нет'],
+    ['Типы', 'interface + implements', 'typing.Protocol', 'Protocol структурный: implements не нужен, достаточно совпадения методов'],
+    ['Типы', 'abstract class', 'abc.ABC + @abstractmethod', 'Ошибка — при создании экземпляра, а не при компиляции'],
+    ['Типы', '@Nullable T / Optional<T>', 'T | None', 'Аналог NPE — AttributeError в рантайме; mypy в strict ловит заранее'],
+    ['Типы', 'дженерики <T>', 'def f[T](x: T) -> T (3.12+)', 'Только для тайпчекера, рантайм о них не знает'],
+    ['Типы', 'enum Status { A, B }', 'class Status(StrEnum) / Literal["a", "b"]', 'Literal удобнее для схем pydantic'],
+    ['Структуры', 'record User(String name, int age)', '@dataclass(frozen=True) class User', 'Нет валидации значений: User(age="десять") создастся'],
+    ['Структуры', 'record + Jackson + Bean Validation', 'pydantic BaseModel', 'v1 и v2 несовместимы по API'],
+    ['Структуры', 'this', 'self — явный первый параметр', 'Забытый self — TypeError при вызове'],
+    ['Структуры', 'extends', 'наследование (множественное, с MRO)', 'Множественное наследование реально; предпочитайте композицию'],
+    ['Структуры', 'sealed interface + switch', 'Union + match (3.10+)', 'Полноту проверяет только тайпчекер (assert_never)'],
+    ['Структуры', 'equals / hashCode / toString', '__eq__ / __hash__ / __repr__', 'dataclass генерирует их сам, как record'],
+    ['Ошибки', 'checked exceptions (throws)', 'только unchecked', 'Сигнатура не говорит, что функция бросает'],
+    ['Ошибки', 'new E("…", cause)', 'raise E("…") from err', 'Без from цепочка теряет причину'],
+    ['Ошибки', 'catch (RateLimitException e)', 'except anthropic.RateLimitError as e:', 'Порядок except важен: сначала узкие классы'],
+    ['Ошибки', 'catch (Throwable t)', 'except BaseException', 'Не ловите BaseException: там KeyboardInterrupt и CancelledError'],
+    ['Ошибки', 'try-with-resources', 'with open(p) as f:', 'AutoCloseable ≈ __enter__ / __exit__'],
+    ['Конкурентность', 'executor.submit(…) в virtual thread', 'asyncio.create_task(f())', 'Задачу надо сохранить в переменную, иначе её может собрать GC'],
+    ['Конкурентность', 'StructuredTaskScope.ShutdownOnFailure', 'asyncio.TaskGroup', 'Первая ошибка отменяет остальные; ошибки — ExceptionGroup'],
+    ['Конкурентность', 'invokeAll + разбор Future', 'asyncio.gather(..., return_exceptions=True)', 'Ошибки приходят значениями в списке'],
+    ['Конкурентность', 'Semaphore', 'asyncio.Semaphore', ''],
+    ['Конкурентность', 'future.get(5, SECONDS) / orTimeout', 'async with asyncio.timeout(s):', 'Таймаут — область блока, а не параметр вызова'],
+    ['Конкурентность', 'BlockingQueue', 'asyncio.Queue', ''],
+    ['Конкурентность', 'Thread.interrupt()', 'task.cancel()', 'CancelledError прилетает только в точке await'],
+    ['Конкурентность', 'virtual threads на всех ядрах', 'один поток + GIL', 'Блокирующий вызов в async def останавливает всё; CPU — в процессы'],
+    ['Конкурентность', 'CompletableFuture / Mono', 'корутина (async def)', 'async «окрашивает» стек вызовов, как реактивные типы'],
+    ['Конкурентность', 'synchronized / ReentrantLock', 'asyncio.Lock / threading.Lock', 'Между await гонок нет, но между await — есть'],
+    ['Коллекции', 'List<T>', 'list[T]', 'Срезы копируют: a[1:3] — новый список, а не view, как subList'],
+    ['Коллекции', 'Map<K, V>', 'dict[K, V]', 'dict сохраняет порядок вставки, как LinkedHashMap; d[k] бросает KeyError, d.get(k) — None'],
+    ['Коллекции', 'stream().map(f).toList()', 'list comprehension [f(x) for x in xs]', 'Идиоматично и быстрее цикла'],
+    ['Коллекции', 'Set<T>', 'set[T]', ''],
+    ['Коллекции', 'List.of(…) (неизменяемый)', 'tuple(…)', 'Изменяемый дефолт def f(x=[]) — общий на все вызовы'],
+    ['Строки', '"%s=%d".formatted(k, v)', 'f"{k}={v}"', ''],
+    ['Строки', 'String (UTF-16)', 'str — код-поинты Unicode', 'len("👍") == 1 в Python, а "👍".length() == 2 в Java'],
+    ['JSON', 'mapper.readValue(s, T.class)', 'json.loads(s) / Model.model_validate_json(s)', 'json.loads даёт dict без проверки схемы'],
+    ['HTTP', 'Spring MVC/WebFlux + Jackson + Bean Validation', 'FastAPI (ASGI) + uvicorn', 'async def-хендлер с sync-вызовом блокирует воркер'],
+    ['HTTP', 'HttpClient / WebClient (бин-синглтон)', 'httpx.AsyncClient / SDK-клиент (синглтон)', 'requests — синхронный, в async-коде нельзя'],
+    ['Тесты', 'JUnit 5 + @ParameterizedTest', 'pytest + @pytest.mark.parametrize', 'Фикстуры pytest — DI через имена аргументов'],
+    ['Тесты', 'Mockito', 'unittest.mock / pytest-mock', 'mock.patch подменяет имя там, где оно импортировано, а не где определено'],
+    ['Тесты', 'MockWebServer / WireMock', 'respx / pytest-httpx, TestClient FastAPI', ''],
+    ['Данные', 'Stream API + Collectors.groupingBy', 'pandas DataFrame', 'Не итерируйте строки: операции по колонкам'],
+  ];
+  const ROWS = Course.STACK === 'java' ? JAVA_ROWS : GO_ROWS;
+  if (Course.STACK === 'java') document.getElementById('tr-q').placeholder = 'поиск: record, stream, try, json…';
   const cats = ['Все', ...new Set(ROWS.map(r => r[0]))];
   let cat = 'Все', q = '';
   const tbody = document.querySelector('#tr-table tbody'), cnt = document.getElementById('tr-count');
@@ -850,7 +1100,7 @@ func Plan(cs []Change) (checks [][]string, violations []string) {
       ({ chain: 'LangChain: единый интерфейс моделей, шаблоны, парсеры, сотни интеграций.', rag: 'LlamaIndex: загрузка и парсинг документов, чанкинг, индексы, query engines — RAG за день, удобно сравнивать стратегии.', agent: 'LangGraph: граф состояний, checkpointing, human-in-the-loop из коробки.' })[task] +
       '\nЦена: включите трейсинг с первого дня, пиньте версии, закладывайте переписывание горячих путей, если прототип выживет.' },
     graph: { name: 'LangGraph или свой граф состояний', color: 'var(--violet)', text: () =>
-      'Сложный агент с высокими требованиями к контролю: нужны персистентность шагов, возобновление, human-in-the-loop, аудит.\nLangGraph — низкоуровневый движок графа, «магии» мало, это приемлемо в проде, если команда на Python.\nАльтернатива — свой конечный автомат: таблица переходов, состояние в Postgres, OTel-спаны на каждый шаг. На Go это обычно проще, чем кажется.' },
+      'Сложный агент с высокими требованиями к контролю: нужны персистентность шагов, возобновление, human-in-the-loop, аудит.\nLangGraph — низкоуровневый движок графа, «магии» мало, это приемлемо в проде, если команда на Python.\nАльтернатива — свой конечный автомат: таблица переходов, состояние в Postgres, OTel-спаны на каждый шаг. ' + (Course.STACK === 'java' ? 'На Java это обычно проще, чем кажется: enum состояний, таблица переходов и JDBC.' : 'На Go это обычно проще, чем кажется.') },
     own: { name: 'Свой код + тонкие библиотеки', color: 'var(--warn)', text: () =>
       'Контроль важнее скорости старта: прод-нагрузка, стоимость, аудит, отладка инцидентов.\nSDK провайдера, свой агентный цикл / RAG-пайплайн, pgvector или векторная БД через её клиент, OpenTelemetry, свои evals.\nФреймворк можно использовать точечно (например, парсеры документов из LlamaIndex), но не как каркас приложения.' }
   };
@@ -986,12 +1236,13 @@ func Plan(cs []Change) (checks [][]string, violations []string) {
   const S = (tag, a, p) => { if (tag === 'text' && a.fill) a.style = 'fill:' + a.fill; return Course.svg(tag, a, p); };
   const svg = document.getElementById('ct-svg'), out = document.getElementById('ct-out');
   const areaBox = document.getElementById('ct-area'), checkBox = document.getElementById('ct-checks'), modeSel = document.getElementById('ct-mode');
+  const J = Course.STACK === 'java';
   const SIZES = [30, 80, 150, 300, 600, 1200, 2500];
   const SIZE_PTS = [2, 5, 9, 14, 22, 30, 36];
   let si = 2;
   const AREAS = {
-    code: ['Go-код', 8], prompts: ['промпты (prompts/)', 18], golden: ['эталон evals', 25],
-    migr: ['миграции БД', 20], deps: ['новые зависимости (go.mod)', 12], cfg: ['CI, конфиги, секреты', 22],
+    code: [J ? 'Java-код' : 'Go-код', 8], prompts: ['промпты (prompts/)', 18], golden: ['эталон evals', 25],
+    migr: ['миграции БД', 20], deps: [J ? 'новые зависимости (pom.xml)' : 'новые зависимости (go.mod)', 12], cfg: ['CI, конфиги, секреты', 22],
   };
   const MODES = {
     manual: ['Manual: подтверждаю действия', 0],
@@ -1016,14 +1267,14 @@ func Plan(cs []Change) (checks [][]string, violations []string) {
 
     const block = [], todo = [];
     if (a.golden) block.push('Эталон evals изменён в одном диффе с кодом: зелёные evals больше ничего не доказывают. Откатить; правка эталона — отдельный PR от человека.');
-    if (a.prompts && !m.evals) block.push('Промпт изменён без прогона evals: go test не видит поведения модели.');
-    if (code && !m.ci) block.push('Нет зелёного make check (build, vet, test): дифф не обсуждается до прогона проверок.');
+    if (a.prompts && !m.evals) block.push('Промпт изменён без прогона evals: ' + (J ? 'mvn verify' : 'go test') + ' не видит поведения модели.');
+    if (code && !m.ci) block.push('Нет зелёного make check (' + (J ? 'компиляция, линтеры, тесты' : 'build, vet, test') + '): дифф не обсуждается до прогона проверок.');
     if (a.migr && !m.review) block.push('Миграция без ревью человека: изменение схемы БД необратимо.');
     if (a.cfg && !m.review) block.push('CI и конфиги без ревью: проверьте, не ослаблены ли проверки и не попали ли в дифф ключи.');
     if (L >= 600) todo.push('Разбить на PR примерно до 300 строк, по одному логическому изменению: большой дифф ревьюят по диагонали.');
     if (code && !m.first) todo.push('Проверить тесты независимо от реализации: сломать код руками — тест должен упасть. Иначе тест мог подстроиться под код.');
     if (a.deps) todo.push('Проверить новые зависимости: пакет существует и поддерживается, имя не выдумано (slopsquatting), зависимость действительно нужна.');
-    if (!m.review) todo.push('Прочитать дифф: сначала git diff --stat (не вышел ли за план), потом *_test.go отдельно.');
+    if (!m.review) todo.push('Прочитать дифф: сначала git diff --stat (не вышел ли за план), потом ' + (J ? '*Test.java' : '*_test.go') + ' отдельно.');
     if (a.prompts && m.evals) todo.push('После мержа — canary и онлайн-метрики: офлайн-evals ловят не всё (модуль 3, модуль 8).');
     if (mode === 'bypass') todo.push('Агент работал без изоляции: дифф не показывает всё, что он сделал на машине (файлы вне репозитория, сеть). В следующий раз — контейнер или sandbox.');
     if (mode === 'cloud') todo.push('Облачный агент: проверьте, что у его окружения были только нужные права (токен на один репозиторий, без прод-секретов).');

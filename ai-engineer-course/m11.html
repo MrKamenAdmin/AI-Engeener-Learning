@@ -40,7 +40,7 @@
     <div class="eyebrow">Модуль 11</div>
     <h1>Данные и governance</h1>
     <p class="lead">Качество LLM-продукта упирается в данные: что вы распарсили и проиндексировали, что вычистили, что разметили, что храните в логах и кто имеет к этому доступ. Разбираем ingestion документов с сохранением структуры, дедупликацию, PII-редакцию, версии датасетов и разметку, data flywheel, хранение диалогов по GDPR и 152-ФЗ, EU AI Act и документацию системы. Регуляторика здесь — на уровне инженерных решений: применимость к конкретной системе определяет юрист.</p>
-    <div class="meta-row"><span class="chip">≈ 8 часов</span><span class="chip">Go + Python</span><span class="chip">3 визуализации</span><span class="chip">на момент написания: октябрь 2026</span></div>
+    <div class="meta-row"><span class="chip">≈ 8 часов</span><span class="chip"><span data-only="go">Go</span><span data-only="java">Java</span> + Python</span><span class="chip">3 визуализации</span><span class="chip">на момент написания: октябрь 2026</span></div>
   </div>
 
   <h2 id="ingestion">Ingestion: от PDF до чанка с метаданными</h2>
@@ -82,7 +82,7 @@
   <p>Маленькую таблицу кладите целиком одним чанком в markdown. Большую — группами строк с <b>шапкой в каждом чанке</b> или построчно в виде «План: Год; Срок на возврат: 14 дней; Комиссия: 0%». Справочник с точными значениями (прайс, коды ошибок) лучше положить в SQL и дать модели инструмент поиска (модуль 6): точный ответ не должен зависеть от удачи retrieval.</p>
 
   <h3>Парсинг на Python: Docling</h3>
-  <p>Парсеры живут в Python, поэтому это обычно отдельный воркер: Go-сервис кладёт файл в очередь, Python-воркер возвращает markdown и отчёт. Скрипт генерирует тестовый PDF с заголовками, списком и таблицей, разбирает его и проверяет, что структура пережила парсинг.</p>
+  <p>Парсеры живут в Python, поэтому это обычно отдельный воркер: <span data-only="go">Go</span><span data-only="java">Java</span>-сервис кладёт файл в очередь, Python-воркер возвращает markdown и отчёт. Скрипт генерирует тестовый PDF с заголовками, списком и таблицей, разбирает его и проверяет, что структура пережила парсинг.</p>
   <pre><code class="lang-python">"""PDF → markdown + таблицы + отчёт о парсинге через Docling (модуль 11, урок «Ingestion»).
 
 Запуск без аргументов генерирует тестовый sample.pdf (заголовки, список, таблица) и разбирает его:
@@ -144,7 +144,100 @@ if __name__ == "__main__":
 
   <h3>Чанкинг по структуре</h3>
   <p>Стратегии чанкинга и подбор размера по recall@k — в <a href="m05.html#chunking">модуле 5</a>, там же <code>ChunkSection</code> для прозы. Здесь недостающий кусок для проекта A: нарезать markdown после парсера по заголовкам так, чтобы <b>путь заголовков</b> ехал с каждым чанком, а <b>код-блоки и таблицы не резались</b>. Только стандартная библиотека.</p>
-  <pre><code class="lang-go">// Chunk — кусок markdown с путём заголовков. Эмбеддим Heading + "\n\n" + Text:
+  <pre data-only="java"><code class="lang-java">/** Markdown-сплиттер модуля 11: секции по заголовкам, блоки не режутся. */
+public final class MdSplit {
+    private MdSplit() {}
+
+    /**
+     * Кусок markdown с путём заголовков. Эмбеддим heading + "\n\n" + text:
+     * путь заголовков даёт чанку контекст, которого нет в самом тексте.
+     */
+    public record Chunk(String heading, String text) {}
+
+    /**
+     * Режет markdown по ATX-заголовкам (# … ######), затем пакует блоки секции (абзацы,
+     * списки, таблицы, код) в чанки до maxChars символов. Блок не режется никогда:
+     * код-блок и таблица уходят целиком, даже если длиннее maxChars.
+     * ponytail: блок длиннее maxChars остаётся одним чанком; прозу дорезайте chunkSection из модуля 5.
+     */
+    public static List&lt;Chunk&gt; splitMarkdown(String md, int maxChars) {
+        return new Splitter(maxChars).run(md);
+    }
+
+    private static final class Splitter {
+        final int max;
+        final List&lt;Chunk&gt; out = new ArrayList&lt;&gt;();
+        final List&lt;String&gt; path = new ArrayList&lt;&gt;();   // текущий путь заголовков по уровням
+        final List&lt;String&gt; blocks = new ArrayList&lt;&gt;(); // блоки текущей секции
+        final List&lt;String&gt; cur = new ArrayList&lt;&gt;();    // строки текущего блока
+        String fence = "";                             // открытый ``` или ~~~
+
+        Splitter(int max) { this.max = max; }
+
+        void endBlock() {
+            String t = String.join("\n", cur).strip();
+            if (!t.isEmpty()) blocks.add(t);
+            cur.clear();
+        }
+
+        void endSection() {
+            endBlock();
+            String heading = String.join(" › ", path.stream().filter(s -&gt; !s.isEmpty()).toList());
+            List&lt;String&gt; buf = new ArrayList&lt;&gt;();
+            int size = 0;
+            for (String b : blocks) {
+                int n = b.codePointCount(0, b.length());
+                if (size &gt; 0 &amp;&amp; size + n &gt; max) {
+                    out.add(new Chunk(heading, String.join("\n\n", buf)));
+                    buf.clear();
+                    size = 0;
+                }
+                buf.add(b);
+                size += n;
+            }
+            if (!buf.isEmpty()) out.add(new Chunk(heading, String.join("\n\n", buf)));
+            blocks.clear();
+        }
+
+        List&lt;Chunk&gt; run(String md) {
+            for (String line : md.split("\n", -1)) {
+                String trim = line.strip();
+                int lvl;
+                if (!fence.isEmpty()) { // внутри код-блока: ни заголовков, ни разрывов
+                    cur.add(line);
+                    if (trim.startsWith(fence)) {
+                        fence = "";
+                        endBlock();
+                    }
+                } else if (trim.startsWith("```") || trim.startsWith("~~~")) {
+                    endBlock();
+                    fence = trim.substring(0, 3);
+                    cur.add(line);
+                } else if ((lvl = headingLevel(trim)) &gt; 0) {
+                    endSection();
+                    while (path.size() &lt; lvl) path.add("");
+                    path.subList(lvl - 1, path.size()).clear();
+                    path.add(trim.substring(lvl).strip());
+                } else if (trim.isEmpty()) {
+                    endBlock();
+                } else {
+                    cur.add(line);
+                }
+            }
+            endSection();
+            return out;
+        }
+    }
+
+    /** "## Title" → 2; "#hashtag" и "####### x" — не заголовки. */
+    static int headingLevel(String s) {
+        int n = 0;
+        while (n &lt; s.length() &amp;&amp; s.charAt(n) == '#') n++;
+        if (n == 0 || n &gt; 6 || (n &lt; s.length() &amp;&amp; s.charAt(n) != ' ')) return 0;
+        return n;
+    }
+}</code></pre>
+  <pre data-only="go"><code class="lang-go">// Chunk — кусок markdown с путём заголовков. Эмбеддим Heading + "\n\n" + Text:
 // путь заголовков даёт чанку контекст, которого нет в самом тексте.
 type Chunk struct {
 	Heading string // "Тарифы › Возвраты › Сроки"
@@ -239,7 +332,8 @@ func nonEmpty(ss []string) []string {
 	}
 	return out
 }</code></pre>
-  <div class="callout go"><span class="title">Аналогия из Go</span>Парсинг в структуру — это <code>json.Unmarshal</code> в типизированный struct вместо регулярок по сырым байтам. А документ, который парсер вернул пустым, — проглоченный <code>err</code>: пайплайн «успешно» отработал, данных нет. Пустой результат парсинга должен быть ошибкой с алертом, а не пустым списком чанков.</div>
+  <div class="callout go" data-only="java"><span class="title">Аналогия из Java</span>Парсинг в структуру — это <code>objectMapper.readValue(json, Invoice.class)</code> в типизированный record вместо регулярок по сырой строке. А документ, который парсер вернул пустым, — проглоченное исключение в <code>catch (Exception e) {}</code>: пайплайн «успешно» отработал, данных нет. Пустой результат парсинга должен быть исключением с алертом, а не пустым списком чанков.</div>
+  <div class="callout go" data-only="go"><span class="title">Аналогия из Go</span>Парсинг в структуру — это <code>json.Unmarshal</code> в типизированный struct вместо регулярок по сырым байтам. А документ, который парсер вернул пустым, — проглоченный <code>err</code>: пайплайн «успешно» отработал, данных нет. Пустой результат парсинга должен быть ошибкой с алертом, а не пустым списком чанков.</div>
 
   <h3>Метаданные и ACL</h3>
   <p>Чанк без метаданных нельзя отфильтровать, обновить, удалить по запросу и процитировать. Минимум поверх таблицы <code>chunks</code> из модуля 5 (там уже есть <code>tenant_id</code>, <code>acl</code>, <code>embed_model</code>):</p>
@@ -276,7 +370,108 @@ LIMIT 20;</code></pre>
     <tr><td><b>Семантические</b></td><td>Косинус эмбеддингов &gt; 0.95</td><td>Пересказ тем же смыслом</td><td>Дорого; склеивает близкие, но разные факты («возврат за месяц» и «за год»)</td></tr>
   </table>
   <p>SimHash (Charikar, 2002): каждый шингл хэшируется в 64 бита, по каждому биту голосуют все шинглы (+1 за единицу, −1 за ноль), знак суммы даёт бит отпечатка. У похожих текстов почти все шинглы общие, и голосование почти совпадает. Чтобы не сравнивать документ со всем корпусом, Manku и соавторы (Google, 2007) режут отпечаток на блоки: при расстоянии ≤ 3 хотя бы один из четырёх 16-битных блоков совпадает целиком, поэтому сравниваем только с кандидатами из тех же корзин. В их работе на 8 млрд веб-страниц разумными оказались 64 бита и k = 3.</p>
-  <pre><code class="lang-go">// Normalize — общий шаг для точных и нечётких дублей: нижний регистр,
+  <pre data-only="java"><code class="lang-java">/**
+ * Ищет точные (sha256 нормализованного текста) и почти-дубли (SimHash ≤ maxDist бит).
+ * Индекс — 4 таблицы по 16-битным блокам отпечатка: при расстоянии ≤ 3 хотя бы один блок
+ * совпадает целиком (принцип Дирихле), поэтому сравниваем только с кандидатами из корзин,
+ * а не со всем корпусом (Manku et al., 2007).
+ */
+public final class Dedup {
+    /** Найденный дубль: id и расстояние Хэмминга (0 — точная копия). */
+    public record Match(String dupOf, int dist) {}
+
+    private record Entry(String id, long hash) {}
+
+    private final int maxDist; // 3 для 64 бит — значение из статьи Manku et al.; подбирайте на своей разметке
+    private final Map&lt;String, String&gt; exact = new HashMap&lt;&gt;();
+    @SuppressWarnings("unchecked")
+    private final Map&lt;Integer, List&lt;Entry&gt;&gt;[] bands = new Map[4];
+
+    public Dedup(int maxDist) {
+        this.maxDist = maxDist;
+        for (int i = 0; i &lt; bands.length; i++) bands[i] = new HashMap&lt;&gt;();
+    }
+
+    /**
+     * Общий шаг для точных и нечётких дублей: нижний регистр, только буквы и цифры,
+     * пробелы схлопнуты. Даты, id и подписи вырезайте до этого.
+     */
+    public static List&lt;String&gt; normalize(String s) {
+        List&lt;String&gt; out = new ArrayList&lt;&gt;();
+        StringBuilder w = new StringBuilder();
+        s.toLowerCase(Locale.ROOT).codePoints().forEach(cp -&gt; {
+            if (Character.isLetter(cp) || Character.isDigit(cp)) {
+                w.appendCodePoint(cp);
+            } else if (!w.isEmpty()) {
+                out.add(w.toString());
+                w.setLength(0);
+            }
+        });
+        if (!w.isEmpty()) out.add(w.toString());
+        return out;
+    }
+
+    /** 64-битный отпечаток по шинглам из 3 слов (Charikar, 2002). */
+    public static long simHash(List&lt;String&gt; words) {
+        final int k = 3;
+        int[] acc = new int[64];
+        List&lt;String&gt; shingles = new ArrayList&lt;&gt;();
+        if (words.size() &lt; k) shingles.add(String.join(" ", words));
+        for (int i = 0; i + k &lt;= words.size(); i++) shingles.add(String.join(" ", words.subList(i, i + k)));
+        for (String sh : shingles) {
+            long x = fnv64a(sh.getBytes(StandardCharsets.UTF_8));
+            for (int i = 0; i &lt; 64; i++) acc[i] += ((x &gt;&gt;&gt; i) &amp; 1) != 0 ? 1 : -1;
+        }
+        long out = 0;
+        for (int i = 0; i &lt; 64; i++) if (acc[i] &gt; 0) out |= 1L &lt;&lt; i;
+        return out;
+    }
+
+    public static int hamming(long a, long b) { return Long.bitCount(a ^ b); }
+
+    /**
+     * Возвращает найденный дубль или null; если дубля нет, документ добавляется в индекс.
+     * ponytail: корректно только для maxDist ≤ 3 (4 блока); для большего порога — больше таблиц с перестановками битов.
+     */
+    public Match add(String id, String text) {
+        List&lt;String&gt; words = normalize(text);
+        String key = sha256Hex(String.join(" ", words));
+        String prev = exact.get(key);
+        if (prev != null) return new Match(prev, 0);
+        long h = simHash(words);
+        for (int i = 0; i &lt; bands.length; i++) {
+            for (Entry e : bands[i].getOrDefault(band(h, i), List.of())) {
+                int dist = hamming(h, e.hash());
+                if (dist &lt;= maxDist) return new Match(e.id(), dist);
+            }
+        }
+        exact.put(key, id);
+        for (int i = 0; i &lt; bands.length; i++) {
+            bands[i].computeIfAbsent(band(h, i), b -&gt; new ArrayList&lt;&gt;()).add(new Entry(id, h));
+        }
+        return null;
+    }
+
+    private static int band(long h, int i) { return (int) ((h &gt;&gt;&gt; (16 * i)) &amp; 0xFFFF); }
+
+    private static long fnv64a(byte[] data) {
+        long h = 0xcbf29ce484222325L;
+        for (byte b : data) {
+            h ^= b &amp; 0xff;
+            h *= 0x100000001b3L;
+        }
+        return h;
+    }
+
+    private static String sha256Hex(String s) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(s.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+}</code></pre>
+  <pre data-only="go"><code class="lang-go">// Normalize — общий шаг для точных и нечётких дублей: нижний регистр,
 // только буквы и цифры, пробелы схлопнуты. Даты, id и подписи вырезайте до этого.
 func Normalize(s string) []string {
 	return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
@@ -365,7 +560,7 @@ func (d *Dedup) Add(id, text string) (dupOf string, dist int) {
 	}
 	return "", 0
 }</code></pre>
-  <p>В тесте <code>examples/m11-data</code> замена одного слова в абзаце из ~60 слов дала расстояние ровно 3, то есть на самом пороге. Порог подбирают на своей разметке (100–200 пар «дубль / не дубль»), а не берут из статьи. Для Python есть MinHash LSH в библиотеке <code>datasketch</code>.</p>
+  <p>В тесте <code data-only="go">examples/m11-data</code><code data-only="java">examples/java/m11-data</code> замена одного слова в абзаце из ~60 слов дала расстояние ровно 3, то есть на самом пороге. Порог подбирают на своей разметке (100–200 пар «дубль / не дубль»), а не берут из статьи. Для Python есть MinHash LSH в библиотеке <code>datasketch</code>.</p>
   <div class="callout danger"><span class="title">Дедупликация только внутри области доступа</span>Два тенанта загрузили почти одинаковые договоры-шаблоны. Глобальная дедупликация оставит чанк с ACL первого, и второй потеряет документ; склейка ACL покажет второму чужие правки. Ключ дедупликации — <code>(tenant_id, acl, content)</code>.</div>
   <h3>Шум, языки, устаревшие версии</h3>
   <ul>
@@ -393,7 +588,44 @@ func (d *Dedup) Add(id, text string) (dupOf string, dist int) {
   <h3>Код: детекторы, контрольные суммы, псевдонимы</h3>
   <p>Пересечения решаются приоритетом: сначала то, что подтверждено контрольной суммой, потом форматные детекторы. Так СНИЛС без дефисов не станет «телефоном». Это развитие <code>MaskPII</code> из <a href="m09.html#observability">модуля 9</a>, где регэксп карты маскирует любые 13–19 цифр подряд, включая номера заказов.</p>
   <div class="tabs">
-    <div class="tab-panel" data-tab="Go: детекторы"><pre><code class="lang-go">// Finding — найденный фрагмент PII: байтовые границы в исходном тексте.
+    <div class="tab-panel" data-tab="Java: детекторы" data-only="java"><pre><code class="lang-java">/** Найденный фрагмент PII: границы (индексы char) в исходном тексте. */
+public record Finding(String kind, int start, int end, String value) {}
+
+/** valid == null — проверки нет, только формат. */
+private record Detector(String kind, Pattern re, Predicate&lt;String&gt; valid) {}
+
+// Порядок = приоритет при пересечениях: сначала то, что подтверждено контрольной суммой.
+private static final List&lt;Detector&gt; DETECTORS = List.of(
+        new Detector("CARD", Pattern.compile("\\b(?:\\d{4}[ -]){3}\\d{4}\\b|\\b\\d{13,19}\\b"), Pii::luhn),
+        new Detector("SNILS", Pattern.compile("\\b\\d{3}-?\\d{3}-?\\d{3}[ -]?\\d{2}\\b"), Pii::snils),
+        new Detector("INN", Pattern.compile("\\b\\d{12}\\b|\\b\\d{10}\\b"), Pii::inn),
+        new Detector("EMAIL", Pattern.compile("[\\w.+-]+@[\\w-]+(?:\\.[\\w-]+)+"), null),
+        new Detector("PHONE", Pattern.compile("(?:\\+7|\\b8)[ (-]*\\d{3}[ )-]*\\d{3}[ -]?\\d{2}[ -]?\\d{2}\\b"), null),
+        // Паспорт РФ: 4 цифры серии + 6 цифр номера. Контрольной суммы нет — без пробела
+        // перед номером не ловим, иначе каждое 10-значное число станет «паспортом».
+        new Detector("PASSPORT", Pattern.compile("\\b\\d{2} ?\\d{2} \\d{6}\\b"), null));
+
+/** Непересекающиеся находки, отсортированные по позиции. */
+public static List&lt;Finding&gt; find(String text) {
+    List&lt;Finding&gt; all = new ArrayList&lt;&gt;();
+    for (Detector d : DETECTORS) {
+        Matcher m = d.re().matcher(text);
+        while (m.find()) {
+            String v = m.group();
+            if (d.valid() != null &amp;&amp; !d.valid().test(digitsOnly(v))) continue;
+            all.add(new Finding(d.kind(), m.start(), m.end(), v));
+        }
+    }
+    // all уже упорядочен по приоритету детектора; берём находку, если она не пересекается с принятыми.
+    // ponytail: O(n²) по числу находок — для сообщений и документов хватает, для гигабайтных дампов нужен interval tree.
+    List&lt;Finding&gt; out = new ArrayList&lt;&gt;();
+    for (Finding f : all) {
+        if (out.stream().noneMatch(o -&gt; f.start() &lt; o.end() &amp;&amp; o.start() &lt; f.end())) out.add(f);
+    }
+    out.sort(Comparator.comparingInt(Finding::start));
+    return out;
+}</code></pre></div>
+    <div class="tab-panel" data-tab="Go: детекторы" data-only="go"><pre><code class="lang-go">// Finding — найденный фрагмент PII: байтовые границы в исходном тексте.
 type Finding struct {
 	Kind       string // EMAIL, PHONE, CARD, INN, SNILS, PASSPORT
 	Start, End int
@@ -448,7 +680,55 @@ func Find(text string) []Finding {
 	sort.Slice(out, func(i, j int) bool { return out[i].Start &lt; out[j].Start })
 	return out
 }</code></pre></div>
-    <div class="tab-panel" data-tab="Go: контрольные суммы"><pre><code class="lang-go">func digitsOnly(s string) string {
+    <div class="tab-panel" data-tab="Java: контрольные суммы" data-only="java"><pre><code class="lang-java">static String digitsOnly(String s) {
+    StringBuilder b = new StringBuilder();
+    for (char c : s.toCharArray()) if (c &gt;= '0' &amp;&amp; c &lt;= '9') b.append(c);
+    return b.toString();
+}
+
+/** Контрольная сумма номеров карт (ISO/IEC 7812). */
+static boolean luhn(String d) {
+    int sum = 0;
+    for (int i = d.length() - 1; i &gt;= 0; i--) {
+        int n = d.charAt(i) - '0';
+        if ((d.length() - 1 - i) % 2 == 1) {
+            n *= 2;
+            if (n &gt; 9) n -= 9;
+        }
+        sum += n;
+    }
+    return sum % 10 == 0;
+}
+
+/** Контрольные цифры ИНН: 10 знаков (организация) или 12 (физлицо, ИП). */
+static boolean inn(String d) {
+    return switch (d.length()) {
+        case 10 -&gt; innCheck(d, 2, 4, 10, 3, 5, 9, 4, 6, 8) == d.charAt(9) - '0';
+        case 12 -&gt; innCheck(d, 7, 2, 4, 10, 3, 5, 9, 4, 6, 8) == d.charAt(10) - '0'
+                &amp;&amp; innCheck(d, 3, 7, 2, 4, 10, 3, 5, 9, 4, 6, 8) == d.charAt(11) - '0';
+        default -&gt; false;
+    };
+}
+
+private static int innCheck(String d, int... w) {
+    int s = 0;
+    for (int i = 0; i &lt; w.length; i++) s += w[i] * (d.charAt(i) - '0');
+    return s % 11 % 10;
+}
+
+/**
+ * Контрольное число СНИЛС: веса 9…1 по первым 9 цифрам, затем mod 101 (100 и 101 → 00).
+ * Номера не больше 001-001-998 не проверяются — для детектора считаем их невалидными.
+ */
+static boolean snils(String d) {
+    if (d.length() != 11 || d.substring(0, 9).compareTo("001001998") &lt;= 0) return false;
+    int s = 0;
+    for (int i = 0; i &lt; 9; i++) s += (d.charAt(i) - '0') * (9 - i);
+    s %= 101;
+    if (s == 100) s = 0;
+    return s == (d.charAt(9) - '0') * 10 + (d.charAt(10) - '0');
+}</code></pre></div>
+    <div class="tab-panel" data-tab="Go: контрольные суммы" data-only="go"><pre><code class="lang-go">func digitsOnly(s string) string {
 	return strings.Map(func(r rune) rune {
 		if r &gt;= '0' &amp;&amp; r &lt;= '9' {
 			return r
@@ -508,7 +788,60 @@ func snils(d string) bool {
 	}
 	return s == int(d[9]-'0')*10+int(d[10]-'0')
 }</code></pre></div>
-    <div class="tab-panel" data-tab="Go: маска и псевдонимы"><pre><code class="lang-go">// Redactor заменяет PII. Key == nil — маскирование ([CARD]); иначе — псевдонимизация:
+    <div class="tab-panel" data-tab="Java: маска и псевдонимы" data-only="java"><pre><code class="lang-java">/** Текст без PII и словарь токен → исходное значение. */
+public record Redacted(String text, Map&lt;String, String&gt; vault) {}
+
+/**
+ * Заменяет PII. key == null — маскирование ([CARD]); иначе — псевдонимизация:
+ * [CARD:3f9a1c2b] = HMAC(key, тип+нормализованное значение). Одно и то же значение даёт
+ * один и тот же токен во всех документах — можно считать, джойнить и искать по нему, не видя PII.
+ * Словарь (vault) нужен только для обратной подстановки: храните его отдельно,
+ * с отдельными правами и сроком жизни, или не храните вовсе, если восстановление не нужно.
+ */
+public record Redactor(byte[] key) {
+    public Redacted redact(String text) {
+        StringBuilder b = new StringBuilder();
+        Map&lt;String, String&gt; vault = new HashMap&lt;&gt;();
+        int last = 0;
+        for (Finding f : find(text)) {
+            b.append(text, last, f.start());
+            String tok = "[" + f.kind() + "]";
+            if (key != null) {
+                tok = "[" + f.kind() + ":" + pseudonym(f) + "]";
+                vault.put(tok, f.value());
+            }
+            b.append(tok);
+            last = f.end();
+        }
+        b.append(text.substring(last));
+        return new Redacted(b.toString(), vault);
+    }
+
+    private String pseudonym(Finding f) {
+        String norm = f.value().toLowerCase(Locale.ROOT);
+        if (!f.kind().equals("EMAIL")) {
+            norm = digitsOnly(f.value());
+            if (f.kind().equals("PHONE") &amp;&amp; norm.startsWith("8")) {
+                norm = "7" + norm.substring(1); // 8 912… и +7 912… — один и тот же номер
+            }
+        }
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(key, "HmacSHA256"));
+            byte[] sum = mac.doFinal((f.kind() + ":" + norm).getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(sum, 0, 4); // 32 бита: читаемо; для больших баз берите 8+ байт
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+}
+
+/** Обратная подстановка, например в ответе модели перед показом пользователю. */
+public static String restore(String text, Map&lt;String, String&gt; vault) {
+    for (var e : vault.entrySet()) text = text.replace(e.getKey(), e.getValue());
+    return text;
+}</code></pre></div>
+    <div class="tab-panel" data-tab="Go: маска и псевдонимы" data-only="go"><pre><code class="lang-go">// Redactor заменяет PII. Key == nil — маскирование ([CARD]); иначе — псевдонимизация:
 // [CARD:3f9a1c2b] = HMAC(key, тип+нормализованное значение). Одно и то же значение даёт
 // один и тот же токен во всех документах — можно считать, джойнить и искать по нему, не видя PII.
 type Redactor struct {
@@ -584,7 +917,7 @@ func Restore(text string, vault map[string]string) string {
 
   <div class="viz" id="viz-pii">
     <p class="viz-title">Песочница PII-редакции</p>
-    <p class="viz-sub">Те же регэкспы и контрольные суммы, что в Go-коде. Редактируйте текст, переключайте режим и детекторы, выключите проверку контрольных сумм и посмотрите, что станет с номером заказа. Пунктиром подчёркнуто то, что похоже на формат, но не прошло проверку. Псевдонимы в демо считаются FNV-хэшем с ключом, в Go — HMAC-SHA256.</p>
+    <p class="viz-sub">Те же регэкспы и контрольные суммы, что в <span data-only="go">Go</span><span data-only="java">Java</span>-коде. Редактируйте текст, переключайте режим и детекторы, выключите проверку контрольных сумм и посмотрите, что станет с номером заказа. Пунктиром подчёркнуто то, что похоже на формат, но не прошло проверку. Псевдонимы в демо считаются FNV-хэшем с ключом, в <span data-only="go">Go</span><span data-only="java">Java</span> — HMAC-SHA256.</p>
     <textarea id="pii-in" rows="6" aria-label="Текст диалога">Клиент: Здравствуйте, я Анна Смирнова. Списали дважды по карте 4111 1111 1111 1111, а старая карта 4111 1111 1111 1112 заблокирована.
 Клиент: Почта anna.smirnova@mail.example, телефон +7 (912) 345-67-89, можно и 8 912 345 67 89.
 Бот: Уточните ИНН для чека.
@@ -614,7 +947,8 @@ func Restore(text string, vault map[string]string) string {
     <tr><td><b>lakeFS</b> 1.88</td><td>Сервер над объектным хранилищем: ветки, коммиты, merge без копирования</td><td>Data lake на терабайтах, атомарная публикация снапшота</td><td>Нужен сервер; с 1.87.0 (сентябрь 2026) BUSL-1.1: немодифицированный код бесплатен внутри компании, версия через 4 года становится Apache-2.0</td></tr>
     <tr><td><b>Hugging Face Hub + <code>datasets</code></b></td><td>Git-репозиторий датасета, хранилище Xet; <code>load_dataset(…, revision="&lt;commit&gt;")</code></td><td>Обмен датасетами, обучение</td><td>Внешняя платформа: PII и закрытые корпуса — только после решения безопасности и юриста</td></tr>
   </table>
-  <div class="callout go"><span class="title">Аналогия из Go</span>Версия датасета — это <code>go.sum</code> для данных: хэш фиксирует ровно те байты, на которых посчитана метрика. Манифест «файл → sha256» в git плюс сами файлы в объектном хранилище — минимальный рабочий вариант, и DVC, по сути, автоматизирует именно его.</div>
+  <div class="callout go" data-only="java"><span class="title">Аналогия из Java</span>Версия датасета — это lock-файл для данных, как <code>gradle.lockfile</code> или checksum-проверка зависимостей в Maven: хэш фиксирует ровно те байты, на которых посчитана метрика. Манифест «файл → sha256» в git плюс сами файлы в объектном хранилище — минимальный рабочий вариант, и DVC, по сути, автоматизирует именно его.</div>
+  <div class="callout go" data-only="go"><span class="title">Аналогия из Go</span>Версия датасета — это <code>go.sum</code> для данных: хэш фиксирует ровно те байты, на которых посчитана метрика. Манифест «файл → sha256» в git плюс сами файлы в объектном хранилище — минимальный рабочий вариант, и DVC, по сути, автоматизирует именно его.</div>
   <pre><code class="lang-yaml"># datasets/golden/manifest.yaml — коммитится вместе с кодом evals
 name: docrag-golden
 version: 2026-10-01.3
@@ -828,7 +1162,8 @@ CREATE INDEX feedback_untriaged ON feedback (created_at) WHERE triaged_at IS NUL
     <tr><td><b>Мониторинг и инциденты</b></td><td>72, 73</td><td>Дашборд качества и дрейфа (модуль 9), маховик фидбека, уведомление о серьёзном инциденте не позднее 15 дней</td></tr>
     <tr><td><b>Прозрачность</b></td><td>50</td><td>«Вы общаетесь с ИИ-ассистентом» в UI и в начале звонка; машиночитаемая маркировка контента. Детали — в итоговом Code of Practice по маркировке (июнь 2026) и руководстве Еврокомиссии по ст. 50 (июль 2026)</td></tr>
   </table>
-  <div class="callout go"><span class="title">Аналогия из Go</span>Классификация по AI Act похожа на выбор уровня изоляции транзакций: решение принимается по требованиям до кода, а менять его потом дорого. Если фича потенциально high-risk, закладывайте журнал событий, точки human oversight и версии данных с первого дня. Переделка готовой системы под ст. 12 и 14 — это миграция схемы на живом трафике.</div>
+  <div class="callout go" data-only="java"><span class="title">Аналогия из Java</span>Классификация по AI Act похожа на выбор уровня изоляции транзакций в <code>@Transactional(isolation = …)</code>: решение принимается по требованиям до кода, а менять его потом дорого. Если фича потенциально high-risk, закладывайте журнал событий, точки human oversight и версии данных с первого дня. Переделка готовой системы под ст. 12 и 14 — это миграция схемы на живом трафике.</div>
+  <div class="callout go" data-only="go"><span class="title">Аналогия из Go</span>Классификация по AI Act похожа на выбор уровня изоляции транзакций: решение принимается по требованиям до кода, а менять его потом дорого. Если фича потенциально high-risk, закладывайте журнал событий, точки human oversight и версии данных с первого дня. Переделка готовой системы под ст. 12 и 14 — это миграция схемы на живом трафике.</div>
 
   <h2 id="docs">Документация системы</h2>
   <p>Документация AI-системы отвечает на вопросы аудитора, юриста, дежурного и enterprise-клиента: что система делает и чего не делает, на каких данных и моделях работает, как её проверяли и с каким результатом, кто и как может её остановить. Если ответы собирают по Slack, документации нет.</p>
@@ -884,10 +1219,10 @@ changelog: docs/changelog.md</code></pre>
   <p>Задания продолжают сквозные проекты: A — RAG по документации, B — eval-набор и CI. Вы улучшаете свою систему, а не решаете отдельные задачки.</p>
   <div class="task">
     <h3>Задание 1: ingestion-пайплайн проекта A с PII и дедупликацией</h3>
-    <p>Добавьте в <code>cmd/ingest</code> проекта A парсинг PDF (Python-воркер), структурный чанкинг, PII-редакцию, дедупликацию и метаданные из урока. Корпус: 5–10 PDF, среди них скан, документ с таблицей и две версии одного документа.</p>
+    <p>Добавьте в <code data-only="go">cmd/ingest</code><span data-only="java">ingest-модуль</span> проекта A парсинг PDF (Python-воркер), структурный чанкинг, PII-редакцию, дедупликацию и метаданные из урока. Корпус: 5–10 PDF, среди них скан, документ с таблицей и две версии одного документа.</p>
     <ul>
       <li>Отчёт парсинга на каждый документ; скан без OCR даёт предупреждение, а не молча 0 чанков.</li>
-      <li>Табличный тест: ни одна таблица и ни один код-блок не разрезаны; у каждого чанка есть путь заголовков.</li>
+      <li><span data-only="go">Табличный тест</span><span data-only="java">Параметризованный тест (<code>@ParameterizedTest</code>)</span>: ни одна таблица и ни один код-блок не разрезаны; у каждого чанка есть путь заголовков.</li>
       <li>PII: на 30 синтетических сообщениях полнота редакции структурных PII ≥ 95%, ни одна валидная карта не попала в индекс и логи (проверка запросом к БД); посчитаны ложные срабатывания на номерах заказов.</li>
       <li>Отчёт «точные / почти-дубли»; старая версия документа не находится поиском; чанки разных тенантов не склеиваются.</li>
       <li>ACL: интеграционный тест — пользователь без группы не получает чанк документа ни в <code>/search</code>, ни в цитатах <code>/ask</code>.</li>

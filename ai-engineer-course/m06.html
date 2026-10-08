@@ -30,8 +30,8 @@
   <div class="module-hero">
     <div class="eyebrow">Модуль 6</div>
     <h1>Агенты и MCP</h1>
-    <p class="lead">Агент — это цикл вокруг LLM с инструментами, и почти все проблемы агентов — это проблемы цикла: когда остановиться, сколько он стоит, что попадает в контекст и что ему разрешено делать. Разберём паттерны Anthropic, проектирование инструментов, MCP, напишем агентный цикл и MCP-сервер на Go — и научимся говорить «здесь агент не нужен».</p>
-    <div class="meta-row"><span class="chip">≈ 10–12 часов</span><span class="chip">Go</span><span class="chip">4 визуализации</span><span class="chip">MCP-сервер на Go</span></div>
+    <p class="lead">Агент — это цикл вокруг LLM с инструментами, и почти все проблемы агентов — это проблемы цикла: когда остановиться, сколько он стоит, что попадает в контекст и что ему разрешено делать. Разберём паттерны Anthropic, проектирование инструментов, context engineering для задач на десятки и сотни шагов и MCP, напишем на Go агентный цикл с бюджетом, компакцией, заметками и субагентами и MCP-сервер — и научимся говорить «здесь агент не нужен».</p>
+    <div class="meta-row"><span class="chip">≈ 14 часов</span><span class="chip">Go</span><span class="chip">5 визуализаций</span><span class="chip">MCP-сервер на Go</span><span class="chip">на момент написания: октябрь 2026</span></div>
   </div>
 
   <h2 id="loop">Агентный цикл</h2>
@@ -52,7 +52,7 @@
     <tr><td><code>pause_turn</code></td><td>API (server tools)</td><td>Долгий серверный инструмент прервал ход — отправить ответ обратно как есть, продолжить.</td></tr>
     <tr><td><code>refusal</code></td><td>Модель (safety)</td><td>Не ретраить вслепую; залогировать, показать пользователю.</td></tr>
     <tr><td>max iterations</td><td>Ваш код</td><td>Жёсткий предохранитель от зацикливания. Типично 10–50 для задач, 100+ для coding-агентов.</td></tr>
-    <tr><td>Бюджет токенов / $ / времени</td><td>Ваш код</td><td>Суммировать <code>usage</code> по всем вызовам; прерывать с понятной ошибкой и частичным результатом.</td></tr>
+    <tr><td>Бюджет токенов / $ / времени</td><td>Ваш код</td><td>Суммировать стоимость по <code>usage</code> всех вызовов, включая субагентов; прерывать с понятной ошибкой и частичным результатом (код — <a href="#go-loop">Budgeted</a>).</td></tr>
     <tr><td>Отмена <code>ctx</code></td><td>Пользователь / сервер</td><td>Прокидывать <code>context.Context</code> и в API-вызов, и в каждый инструмент.</td></tr>
   </table>
 
@@ -149,13 +149,13 @@
   <ul>
     <li><b>Возвращайте осмысленное, а не всё.</b> Имена вместо UUID, пагинация, фильтры, обрезка до разумного размера (Claude Code по умолчанию режет вывод инструментов ~25K токенов). Параметр <code>response_format: "concise" | "detailed"</code> — хороший приём.</li>
     <li><b>Ошибки — для модели, не для человека.</b> Не <code>500 Internal Error</code>, а <code>tool_result</code> с <code>is_error: true</code> и текстом: что не так и как исправить. «Колонка <code>created</code> не найдена. Доступные: <code>created_at</code>, <code>updated_at</code>» — модель исправится с первой попытки.</li>
-    <li><b>Идемпотентность.</b> Агент повторяет вызовы: после таймаута, после compaction, по ошибке. Мутирующие инструменты должны принимать ключ идемпотентности или быть естественно идемпотентными (<code>set_status</code>, а не <code>toggle_status</code>). Та же дисциплина, что для ретраев в платёжных API.</li>
+    <li><b>Идемпотентность.</b> Агент повторяет вызовы: после таймаута, после compaction, по ошибке. Мутирующие инструменты должны принимать ключ идемпотентности или быть естественно идемпотентными (<code>set_status</code>, а не <code>toggle_status</code>). Та же дисциплина, что для ретраев в платёжных API; код — в уроке <a href="#go-loop">«Агентный цикл на Go»</a>.</li>
     <li><b>Разделяйте чтение и запись.</b> Read-only инструменты можно выполнять параллельно и без подтверждения; мутирующие — гейтить. Если всё идёт через один <code>bash</code>, харнесс не отличит <code>grep</code> от <code>git push</code>.</li>
   </ul>
   <div class="callout go"><span class="title">Аналогия из Go</span>Описание инструмента — это godoc публичной функции, которую будет вызывать человек без доступа к исходникам и без возможности задать вопрос. Ошибка инструмента — это <code>fmt.Errorf("column %q not found; available: %v", …)</code>, а не <code>errors.New("bad request")</code>.</div>
 
   <h2 id="go-loop">Агентный цикл на Go</h2>
-  <p>Ручной цикл на официальном SDK: лимит итераций, бюджет токенов, конкурентное исполнение параллельных вызовов, подтверждение опасных действий человеком, ошибки инструментов как <code>is_error</code>. В Go SDK есть и бета <code>toolrunner</code>, который крутит цикл за вас (<code>MaxIterations</code>, гейт внутри функции инструмента) — для учебы и полного контроля полезно написать свой. Код собирается с <code>anthropic-sdk-go v1.75.0</code>.</p>
+  <p>Ручной цикл на официальном SDK: лимит итераций, бюджет в долларах, prompt caching, конкурентное исполнение параллельных вызовов, подтверждение опасных действий человеком, ошибки инструментов как <code>is_error</code>, запись траектории для evals и точка подключения компакции (о ней — в уроке <a href="#context">Context engineering</a>). Клиент спрятан за интерфейсом <code>Model</code> из одного метода: ему удовлетворяют <code>&amp;client.Messages</code>, декоратор бюджета и fake в тестах, поэтому весь цикл тестируется без сети. В Go SDK есть и бета <code>toolrunner</code>, который крутит цикл за вас (<code>MaxIterations</code>, гейт внутри функции инструмента), — для учёбы и полного контроля полезно написать свой. Код собирается с <code>anthropic-sdk-go v1.75.0</code>; полная версия с тестами на fake-модели — в <code>examples/m06-agents</code> репозитория курса.</p>
   <pre><code class="lang-go">package agent
 
 import (
@@ -163,12 +163,22 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
 )
+
+// Model — всё, что циклу нужно от клиента. Ему удовлетворяет &amp;client.Messages,
+// декоратор Budgeted и fake в тестах.
+type Model interface {
+	New(ctx context.Context, p anthropic.MessageNewParams, opts ...option.RequestOption) (*anthropic.Message, error)
+}
 
 type Tool struct {
 	Param     anthropic.ToolParam
@@ -176,52 +186,85 @@ type Tool struct {
 	Run       func(ctx context.Context, input json.RawMessage) (string, error)
 }
 
-type Limits struct {
-	MaxIters       int
-	MaxInputTokens int64 // суммарно по всем вызовам — это и есть счёт
-}
-
-var ErrBudget = errors.New("agent: token budget exhausted")
-
 // Confirm спрашивает человека; вызовы сериализуются мьютексом внутри.
 type Confirm func(action string) bool
 
-func Run(ctx context.Context, c anthropic.Client, system, task string,
-	tools map[string]Tool, lim Limits, confirm Confirm) (string, error) {
+type Agent struct {
+	Model    Model           // &amp;client.Messages или Budgeted поверх него
+	ModelID  anthropic.Model // "claude-opus-5"
+	System   string
+	Tools    map[string]Tool
+	MaxIters int
+	Compact  *Compactor // nil — без компакции
+	Confirm  Confirm    // nil — опасные действия запрещены
+}
 
+// Step — запись траектории: по ним считают eval агента (модуль 8).
+type Step struct {
+	Iter      int
+	Tool      string
+	Input     string
+	IsError   bool
+	CtxTokens int64 // размер контекста на вызове модели, который запросил этот шаг
+}
+
+type Result struct {
+	Text          string
+	Iters         int
+	Steps         []Step
+	PeakCtx       int64
+	Compactions   int
+	CompactErrors int
+}
+
+var ErrMaxIters = errors.New("agent: max iterations reached")
+
+func (a *Agent) Run(ctx context.Context, task string) (Result, error) {
 	var defs []anthropic.ToolUnionParam
-	for _, t := range tools {
-		p := t.Param
+	for _, name := range slices.Sorted(maps.Keys(a.Tools)) { // стабильный порядок = стабильный кэшируемый префикс
+		p := a.Tools[name].Param
 		defs = append(defs, anthropic.ToolUnionParam{OfTool: &amp;p})
 	}
 	msgs := []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(task))}
-	var used int64
+	var res Result
+	var ctxTok int64 // размер контекста по usage последнего вызова
 
-	for iter := 0; iter &lt; lim.MaxIters; iter++ {
-		resp, err := c.Messages.New(ctx, anthropic.MessageNewParams{
-			Model: "claude-opus-5", MaxTokens: 16000,
-			System:   []anthropic.TextBlockParam{{Text: system}},
+	for iter := 0; iter &lt; a.MaxIters; iter++ {
+		res.Iters = iter + 1
+		var compacted bool
+		var err error
+		if msgs, compacted, err = a.Compact.Maybe(ctx, msgs, ctxTok); err != nil {
+			res.CompactErrors++ // история не тронута: работаем дальше, попробуем на следующем шаге
+		} else if compacted {
+			res.Compactions++
+		}
+		resp, err := a.Model.New(ctx, anthropic.MessageNewParams{
+			Model: a.ModelID, MaxTokens: 16000,
+			// Breakpoint на system: tools и system остаются в кэше, даже когда компакция перепишет историю.
+			System:   []anthropic.TextBlockParam{{Text: a.System, CacheControl: anthropic.NewCacheControlEphemeralParam()}},
 			Tools:    defs,
 			Messages: msgs,
+			// Автоматический breakpoint на последнем блоке: каждый шаг читает всю прошлую историю по 0,1×.
+			CacheControl: anthropic.NewCacheControlEphemeralParam(),
 		})
 		if err != nil {
-			return "", fmt.Errorf("iter %d: %w", iter, err)
+			return res, fmt.Errorf("iter %d: %w", iter, err) // ErrBudget из Budgeted тоже сюда
 		}
-		used += resp.Usage.InputTokens + resp.Usage.CacheReadInputTokens + resp.Usage.CacheCreationInputTokens
+		u := resp.Usage // с кэшем input_tokens — только хвост после breakpoint, складываем всё
+		ctxTok = u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens + u.OutputTokens
+		res.PeakCtx = max(res.PeakCtx, ctxTok)
 		msgs = append(msgs, resp.ToParam())
 
 		switch resp.StopReason {
 		case anthropic.StopReasonEndTurn:
-			return text(resp), nil
+			res.Text = text(resp)
+			return res, nil
 		case anthropic.StopReasonMaxTokens:
-			return "", errors.New("agent: response truncated (max_tokens)")
+			return res, errors.New("agent: response truncated (max_tokens)")
 		case anthropic.StopReasonToolUse:
 			// продолжаем ниже
 		default:
-			return "", fmt.Errorf("agent: unexpected stop_reason %q", resp.StopReason)
-		}
-		if used &gt; lim.MaxInputTokens {
-			return "", fmt.Errorf("%w after %d iterations (%d tokens)", ErrBudget, iter+1, used)
+			return res, fmt.Errorf("agent: unexpected stop_reason %q", resp.StopReason)
 		}
 
 		var calls []anthropic.ToolUseBlock
@@ -232,40 +275,41 @@ func Run(ctx context.Context, c anthropic.Client, system, task string,
 		}
 		// Параллельные tool_use: исполняем конкурентно, возвращаем ВСЕ результаты одним сообщением.
 		results := make([]anthropic.ContentBlockParamUnion, len(calls))
+		failed := make([]bool, len(calls))
 		var wg sync.WaitGroup
 		for i, call := range calls {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				out, isErr := execTool(ctx, tools, call, confirm)
+			wg.Go(func() {
+				out, isErr := a.execTool(ctx, call)
 				results[i] = anthropic.NewToolResultBlock(call.ID, out, isErr)
-			}()
+				failed[i] = isErr
+			})
 		}
 		wg.Wait()
+		for i, call := range calls {
+			res.Steps = append(res.Steps, Step{Iter: iter, Tool: call.Name, Input: string(call.Input), IsError: failed[i], CtxTokens: ctxTok})
+		}
 		msgs = append(msgs, anthropic.NewUserMessage(results...))
 	}
-	return "", fmt.Errorf("agent: max iterations (%d) reached", lim.MaxIters)
+	return res, fmt.Errorf("%w (%d)", ErrMaxIters, a.MaxIters)
 }
 
-func execTool(ctx context.Context, tools map[string]Tool, call anthropic.ToolUseBlock, confirm Confirm) (string, bool) {
-	t, ok := tools[call.Name]
+func (a *Agent) execTool(ctx context.Context, call anthropic.ToolUseBlock) (string, bool) {
+	t, ok := a.Tools[call.Name]
 	if !ok {
 		return fmt.Sprintf("unknown tool %q", call.Name), true
 	}
-	if t.Dangerous &amp;&amp; !confirm(fmt.Sprintf("%s %s", call.Name, call.Input)) {
+	if t.Dangerous &amp;&amp; (a.Confirm == nil || !a.Confirm(fmt.Sprintf("%s %s", call.Name, call.Input))) {
 		return "The user denied this action. Do not retry it; propose an alternative or finish.", true
 	}
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-	out, err := t.Run(ctx, call.Input)
+	out, err := retry(ctx, 3, func(ctx context.Context) (string, error) {
+		ctx, cancel := context.WithTimeout(ctx, 60*time.Second) // таймаут на попытку, а не на все
+		defer cancel()
+		return t.Run(ctx, call.Input)
+	})
 	if err != nil {
 		return "error: " + err.Error(), true // модель увидит и попробует исправиться
 	}
-	const maxOut = 40_000 // ≈10K токенов; больше — забивает контекст
-	if len(out) &gt; maxOut {
-		out = out[:maxOut] + "\n…[truncated; narrow the query]"
-	}
-	return out, false
+	return truncate(out, 40_000, "\n…[truncated; narrow the query]"), false // ≈10K токенов
 }
 
 func text(m *anthropic.Message) string {
@@ -276,7 +320,25 @@ func text(m *anthropic.Message) string {
 		}
 	}
 	return sb.String()
+}
+
+// truncate режет по границе руны: обрезанный посреди UTF-8 русский текст — мусор в контексте.
+func truncate(s string, n int, tail string) string {
+	if len(s) &lt;= n {
+		return s
+	}
+	for n &gt; 0 &amp;&amp; !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n] + tail
 }</code></pre>
+  <p>Детали, которые легко пропустить на ревью:</p>
+  <ul>
+    <li><b>Порядок инструментов сортируется.</b> Обход map в Go случаен, а tools — начало кэшируемого префикса: другой порядок в новом процессе — промах кэша на system и tools.</li>
+    <li><b>Два breakpoint'а кэша.</b> Top-level <code>cache_control</code> ставит маркер на последний блок, и каждый шаг читает всю прошлую историю по 0,1× цены. Маркер на system держит в кэше system и tools, когда компакция перепишет историю.</li>
+    <li><b>Размер контекста — из <code>usage</code>.</b> С кэшем <code>input_tokens</code> — это только хвост после последнего breakpoint'а, поэтому складываются все три поля и output (он войдёт в следующий запрос). Это число управляет компакцией и пишется в траекторию.</li>
+    <li><b>Таймаут — на попытку, ретраи — внутри <code>execTool</code></b>: модель не тратит ход на временную ошибку сети.</li>
+  </ul>
   <p>Реализация <code>Confirm</code> для CLI — мьютекс вокруг чтения <code>stdin</code>, чтобы параллельные опасные вызовы не спрашивали одновременно:</p>
   <pre><code class="lang-go">func StdinConfirm() Confirm {
 	var mu sync.Mutex
@@ -289,8 +351,569 @@ func text(m *anthropic.Message) string {
 		return strings.TrimSpace(strings.ToLower(line)) == "y"
 	}
 }</code></pre>
-  <div class="callout warn"><span class="title">Что здесь упрощено</span>
-  Нет prompt caching (добавьте <code>cache_control</code> на последний блок последнего сообщения — тогда каждый шаг читает префикс по 0,1× цены), нет compaction при приближении к лимиту контекста, нет трейсинга (модуль 9: span на каждую итерацию и инструмент). Бюджет проверяется после вызова, поэтому может быть превышен на один шаг — для жёсткого лимита считайте токены заранее через <code>count_tokens</code>.</div>
+
+  <h3>Бюджет в долларах</h3>
+  <p>Лимит в токенах неудобен: у вызовов разные модели (субагенты на Haiku, основной агент на Opus), у токенов разная цена (вход, выход, чтение и запись кэша), а бизнес считает деньги. Поэтому бюджет задаётся в долларах и реализован декоратором над <code>Model</code>. Цикл о нём не знает, а вложенные <code>Budgeted</code> дают иерархию «сессия → субагент»: расходы субагента видны и в его лимите, и в лимите родителя.</p>
+  <pre><code class="lang-go">// $ за 1M токенов (вход, выход), на момент написания — сентябрь 2026.
+var prices = map[anthropic.Model][2]float64{
+	"claude-fable-5-1": {10, 50},
+	"claude-opus-5-5":  {4, 20},
+	"claude-opus-5":    {5, 25},
+	"claude-sonnet-5":  {2, 10},
+	"claude-haiku-4-5": {1, 5},
+}
+
+func price(m anthropic.Model) [2]float64 {
+	if p, ok := prices[m]; ok {
+		return p
+	}
+	return prices["claude-fable-5-1"] // неизвестная модель — по самой дорогой, бюджет не должен молча обнуляться
+}
+
+// Cost — стоимость одного вызова по usage: чтение кэша 0,1×, запись 1,25× (TTL 5 минут).
+func Cost(m anthropic.Model, u anthropic.Usage) float64 {
+	p := price(m)
+	in := float64(u.InputTokens) + 0.1*float64(u.CacheReadInputTokens) + 1.25*float64(u.CacheCreationInputTokens)
+	return (in*p[0] + float64(u.OutputTokens)*p[1]) / 1e6
+}
+
+var ErrBudget = errors.New("agent: budget exhausted")
+
+// Budgeted — Model с лимитом в долларах. Это декоратор, как middleware над http.RoundTripper:
+// цикл о нём не знает. Вложенные Budgeted образуют иерархию: субагент тратит свой лимит
+// и одновременно лимит родителя.
+type Budgeted struct {
+	Model
+	MaxUSD float64
+
+	mu    sync.Mutex
+	spent float64
+}
+
+func (b *Budgeted) New(ctx context.Context, p anthropic.MessageNewParams, opts ...option.RequestOption) (*anthropic.Message, error) {
+	if spent := b.Spent(); spent &gt;= b.MaxUSD {
+		return nil, fmt.Errorf("%w: spent $%.4f of $%.2f", ErrBudget, spent, b.MaxUSD)
+	}
+	// Упрощение: стоимость известна только по usage после вызова, поэтому лимит может быть
+	// превышен на один вызов (на N — при N параллельных субагентах). Жёсткий лимит —
+	// оценить вызов заранее через count_tokens и зарезервировать сумму под мьютексом.
+	resp, err := b.Model.New(ctx, p, opts...)
+	if err != nil {
+		return nil, err
+	}
+	b.mu.Lock()
+	b.spent += Cost(p.Model, resp.Usage)
+	b.mu.Unlock()
+	return resp, nil
+}
+
+func (b *Budgeted) Spent() float64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.spent
+}</code></pre>
+  <p>Стоимость считается по <code>usage</code> после вызова, поэтому лимит можно превысить на один вызов. Если нужен жёсткий потолок (бесплатный тариф, лимит клиента), оценивайте вызов до отправки: <code>client.Messages.CountTokens</code> принимает те же model, system, tools и messages и возвращает <code>InputTokens</code>. Входные токены × цена плюс <code>MaxTokens</code> × цена выхода — верхняя граница вызова. Это лишний сетевой запрос на каждом шаге, поэтому обычно хватает учёта по usage и запаса в лимите. Цены в коде — на сентябрь 2026; в проде таблица цен — конфиг, а не константа.</p>
+
+  <h3>Ретраи и идемпотентность инструментов</h3>
+  <p>Инструмент падает по двум причинам. Либо ошиблась модель (нет такой колонки, неверный путь) — тогда повтор бесполезен и нужна ошибка с подсказкой. Либо мир временно недоступен (таймаут, 429, 503) — тогда повтор с backoff дешевле, чем тратить на ошибку ход модели. Различает их автор инструмента: временные ошибки он оборачивает в <code>ErrTransient</code>. Повтор мутирующего действия безопасен только при идемпотентности: таймаут не означает, что действие не выполнилось.</p>
+  <pre><code class="lang-go">// ErrTransient помечает ошибку, которую имеет смысл повторить: таймаут, 429, 503.
+// Оборачивайте в неё только то, что безопасно повторить: чтение или идемпотентную запись.
+var ErrTransient = errors.New("transient")
+
+// retry повторяет f при ErrTransient с экспоненциальной задержкой и джиттером:
+// 100, 200, 400 мс плюс случайная добавка, чтобы ретраи не шли синхронной волной.
+func retry(ctx context.Context, attempts int, f func(context.Context) (string, error)) (string, error) {
+	for i := 0; ; i++ {
+		out, err := f(ctx)
+		if err == nil || !errors.Is(err, ErrTransient) || i == attempts-1 {
+			return out, err
+		}
+		d := time.Duration(100&lt;&lt;i) * time.Millisecond
+		d += rand.N(d)
+		select {
+		case &lt;-ctx.Done():
+			return "", ctx.Err()
+		case &lt;-time.After(d):
+		}
+	}
+}
+
+type idemKeyCtx struct{}
+
+// IdempotencyKey — ключ текущего вызова; инструмент передаёт его во внешний API
+// (заголовок Idempotency-Key), чтобы дедуплицировал и сервер: ретрай после таймаута
+// мог дойти до него дважды.
+func IdempotencyKey(ctx context.Context) string {
+	k, _ := ctx.Value(idemKeyCtx{}).(string)
+	return k
+}
+
+// Idempotent оборачивает мутирующий инструмент: одинаковый вызов (сессия + имя +
+// аргументы) выполняется один раз, повтор получает сохранённый результат. Агент повторяет
+// вызовы после таймаутов, компакции и рестарта — без этого письмо уйдёт дважды.
+func Idempotent(session string, t Tool) Tool {
+	var mu sync.Mutex
+	done := map[string]string{}
+	run := t.Run
+	t.Run = func(ctx context.Context, input json.RawMessage) (string, error) {
+		key, err := idemKey(session, t.Param.Name, input)
+		if err != nil {
+			return "", err
+		}
+		mu.Lock()
+		prev, ok := done[key]
+		mu.Unlock()
+		if ok {
+			return "Already done earlier in this session, not repeated. Result was: " + prev, nil
+		}
+		out, err := run(context.WithValue(ctx, idemKeyCtx{}, key), input)
+		if err == nil { // ошибки не запоминаем: повтор после ошибки должен выполниться
+			mu.Lock()
+			done[key] = out
+			mu.Unlock()
+		}
+		return out, err
+	}
+	// Упрощение: журнал в памяти процесса и без блокировки на время выполнения.
+	// Для рестартов и параллельных одинаковых вызовов — таблица с UNIQUE(key) в БД.
+	return t
+}
+
+// idemKey не зависит от порядка ключей и пробелов: {"b":1,"a":2} и {"a":2, "b":1} — один вызов.
+func idemKey(session, tool string, input json.RawMessage) (string, error) {
+	var v any
+	if err := json.Unmarshal(input, &amp;v); err != nil {
+		return "", fmt.Errorf("invalid input JSON: %w", err)
+	}
+	canon, err := json.Marshal(v) // encoding/json сортирует ключи map
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256([]byte(session + "\x00" + tool + "\x00" + string(canon)))
+	return hex.EncodeToString(sum[:16]), nil
+}</code></pre>
+  <ul>
+    <li><b>Два уровня дедупликации.</b> <code>Idempotent</code> ловит повтор от модели: после компакции агент «забыл», что уже отправил письмо, и вызывает инструмент снова. Ключ во внешнем API (<code>Idempotency-Key</code>, как в платёжных API) ловит повтор от сети: ответ потерялся, и ретрай дошёл до сервера второй раз.</li>
+    <li><b>Ключ — сессия, инструмент и канонические аргументы.</b> Если действие законно повторяется («напомнить ещё раз завтра»), различие должно быть в аргументах (дата, номер попытки), иначе harness схлопнет вызовы.</li>
+    <li><b>Ошибки не запоминаются</b>: повтор после ошибки должен выполниться. Ответ «уже сделано, результат был …» — обычный <code>tool_result</code>, а не ошибка: модель получает факт и идёт дальше.</li>
+    <li><b>Журнал в памяти не переживёт рестарт.</b> Для агентов на много сессий (урок <a href="#long-horizon">«Длинные задачи»</a>) журнал выполненных мутаций — таблица с <code>UNIQUE(key)</code> рядом с progress-файлом.</li>
+  </ul>
+  <div class="callout warn"><span class="title">Что здесь упрощено</span>Нет трейсинга (модуль 9: span на каждую итерацию и инструмент, атрибуты <code>gen_ai.*</code>). Нет стриминга: на ответах в десятки тысяч токенов он нужен, чтобы не упереться в таймауты HTTP. Подтверждение синхронное: в веб-сервисе это асинхронный запрос человеку, состояние цикла сохраняется, и цикл продолжается по ответу. Бюджет может быть превышен на один вызов, а при N параллельных субагентах — на N.</div>
+
+  <h2 id="context">Context engineering</h2>
+  <p>Anthropic определяет <b>context engineering</b> (инженерию контекста) как курирование и поддержание оптимального набора токенов, которые модель видит при вызове («Effective context engineering for AI agents», сентябрь 2025). Prompt engineering (модуль 3) отвечает на вопрос «как написать инструкцию». Context engineering отвечает на другой: что должно лежать в окне на шаге 47 из 120 — system, определения инструментов, история, результаты инструментов, заметки, найденные документы. У агента этот вопрос решается заново на каждом вызове. Cognition называет его фактически главной работой инженера, который строит агентов.</p>
+
+  <h3>Контекст — ограниченный ресурс</h3>
+  <p>Окно в 1M токенов — это предел, а не рабочий объём. Anthropic описывает у модели «бюджет внимания»: каждый новый токен его расходует, поэтому контекст — конечный ресурс с убывающей отдачей. Есть три причины держать рабочий контекст намного меньше окна:</p>
+  <ul>
+    <li><b>Context rot</b> (деградация на длинном контексте). Исследования (Chroma, «Context Rot», 2025; ранее «Lost in the Middle», Liu et al., 2023) показывают: качество падает с ростом длины входа, особенно когда в контексте много похожих на правду, но нерелевантных фрагментов. Спад плавный, без чёткого порога, и зависит от задачи, поэтому порог для своего агента находят evals, а не догадкой. К 40-му шагу контекст агента может на 90% состоять из старых логов, диффов и промежуточных рассуждений.</li>
+    <li><b>Деньги.</b> Каждый шаг отправляет весь контекст, и стоимость растёт квадратично по числу шагов (урок <a href="#loop">«Агентный цикл»</a>). Кэш снижает цену повторного префикса до 0,1×, но рост не убирает.</li>
+    <li><b>Латентность.</b> Prefill длинного входа — заметная часть времени ответа (модуль 1), а на сотне шагов секунды складываются в минуты.</li>
+  </ul>
+  <p>Цель context engineering, по формулировке Anthropic, — найти минимальный набор высокосигнальных токенов, который максимизирует вероятность нужного результата. Как контекст ломается, описал Дрю Брейниг («How Long Contexts Fail», июнь 2025): <b>poisoning</b> — ошибка или галлюцинация попала в контекст и всплывает снова и снова; <b>distraction</b> — длинная история перевешивает то, чему модель обучена; <b>confusion</b> — лишнее (например, ненужные инструменты) тянет к худшему ответу; <b>clash</b> — новые сведения или инструменты противоречат тому, что уже в контексте.</p>
+
+  <h3>Четыре рычага: write, select, compress, isolate</h3>
+  <p>Лэнс Мартин (LangChain, июнь 2025) свёл приёмы к четырём рычагам. Классификация удобна и для дизайна, и для собеседования: любой приём управления контекстом — один из них.</p>
+  <table>
+    <tr><th>Рычаг</th><th>Суть</th><th>Приёмы</th><th>В коде модуля</th><th>Компромисс</th></tr>
+    <tr><td><b>Write</b></td><td>Сохранить вне окна, чтобы пережило компакцию и рестарт</td><td>Scratchpad, <code>NOTES.md</code>, todo-лист, progress-файл, git-коммиты, memory tool (директория <code>/memories</code> между сессиями)</td><td><code>Notes.Tool()</code>, <code>RunSessions</code></td><td>Устаревает и разрастается: нужны лимит, перезапись вместо дописывания и гигиена</td></tr>
+    <tr><td><b>Select</b></td><td>Втянуть в окно только нужное и вовремя</td><td>Just-in-time инструменты (grep, чтение по пути, поиск), RAG по памяти и документации, выбор инструментов под задачу, <code>CLAUDE.md</code>, MCP resources</td><td><code>docs_search</code> проекта C, resource <code>schema://analytics</code></td><td>Промах retrieval: агент не знает, чего не видит. Каждый лишний инструмент — токены и путаница</td></tr>
+    <tr><td><b>Compress</b></td><td>Те же сведения меньшим числом токенов</td><td>Обрезка и пагинация выводов, context editing (очистка старых tool results), компакция-суммаризация</td><td><code>truncate</code> в <code>execTool</code>, <code>Compactor</code></td><td>Теряются детали; переписанная история инвалидирует кэш</td></tr>
+    <tr><td><b>Isolate</b></td><td>Разнести работу по разным окнам</td><td>Субагенты с чистым контекстом, sandbox (код исполняется вне контекста, внутрь — только результат), состояние в коде, а не в сообщениях</td><td><code>Agent.AsTool</code></td><td>Токенов в разы больше; на границе теряется контекст (аргумент Cognition, урок <a href="#multi">«Мультиагентные системы»</a>)</td></tr>
+  </table>
+  <div class="callout tip"><span class="title">Порядок вмешательства</span>Сначала сделайте так, чтобы инструменты возвращали меньше: это бесплатно и работает сразу. Затем — just-in-time загрузка, затем очистка старых tool results (context editing) и только потом суммаризация. Помните о кэше: любое изменение префикса инвалидирует кэш после точки изменения, поэтому чистить лучше редко и пачками, чем понемногу на каждом шаге.</div>
+
+  <h3>Бюджет токенов как часть дизайна</h3>
+  <p>Контекст планируют так же, как память сервиса: у каждого слота есть лимит, у лимита — механизм, который его держит, у механизма — метрика. Пример для coding-агента на Opus 5 с окном 1M и рабочим бюджетом 160K. Числа — отправная точка курса, а не норматив: свои подбирают по evals и трейсам.</p>
+  <table>
+    <tr><th>Слот</th><th class="num">Бюджет</th><th>Что держит лимит</th><th>Режим отказа</th></tr>
+    <tr><td>System prompt</td><td class="num">2–5K</td><td>Ревью промпта как кода (модуль 3); стабилен и лежит в кэше</td><td>Свалка правил на все случаи: модель путается в приоритетах</td></tr>
+    <tr><td>Определения tools</td><td class="num">3–15K</td><td>Allowlist инструментов на задачу; каждый MCP-сервер добавляет свои описания</td><td>50 инструментов из пяти серверов: confusion и лишние вызовы</td></tr>
+    <tr><td>Заметки и progress</td><td class="num">2–8K</td><td>Лимит размера в инструменте, перезапись</td><td>Заметки превращаются в лог и сами становятся шумом</td></tr>
+    <tr><td>Результаты инструментов за ход</td><td class="num">до 10K</td><td>Обрезка, пагинация, <code>response_format</code>, just-in-time</td><td>Один <code>cat</code> большого файла съедает четверть бюджета</td></tr>
+    <tr><td>История</td><td class="num">остаток, до 120K</td><td>Компакция на 60–75% рабочего бюджета, последние N ходов — дословно</td><td>Context rot: решения 10-го шага тонут в логах</td></tr>
+    <tr><td>Резерв на ответ</td><td class="num">16–32K</td><td><code>max_tokens</code> с запасом на thinking</td><td><code>stop_reason: max_tokens</code> посреди <code>tool_use</code></td></tr>
+  </table>
+  <p>Без метрик бюджет остаётся пожеланием. Нужны: размер контекста на каждом вызове (поле <code>CtxTokens</code> в траектории, атрибут span в модуле 9), доля чтения из кэша, доля tool results в контексте, число компакций на задачу и качество на длинных задачах в evals (модуль 8). Алерт ставят на сессии, у которых контекст или стоимость выбиваются из распределения.</p>
+
+  <h3>Just-in-time против предзагрузки</h3>
+  <p><b>Предзагрузка</b> — до первого вызова собрать всё, что может понадобиться (RAG, README целиком, схему БД), и положить в контекст. <b>Just-in-time</b> — агент держит лёгкие ссылки (пути, ID, URL, запросы) и подтягивает содержимое инструментами, когда оно понадобилось. Так работает Claude Code: <code>grep</code> и <code>glob</code> по репозиторию вместо загрузки кода, а имена файлов, структура каталогов и время изменения сами подсказывают, что стоит открыть.</p>
+  <table>
+    <tr><th></th><th>Предзагрузка</th><th>Just-in-time</th></tr>
+    <tr><td>Латентность</td><td>Один вызов, данные уже на месте</td><td>Каждое «дочитать» — ещё ход модели, это секунды</td></tr>
+    <tr><td>Точность</td><td>Шум: в контексте всё, что retrieval счёл похожим</td><td>Агент берёт то, что нужно сейчас, и данные свежие</td></tr>
+    <tr><td>Стоимость</td><td>Большой, но стабильный префикс; с кэшем дёшево</td><td>Меньше токенов на шаг, но больше шагов</td></tr>
+    <tr><td>Режим отказа</td><td>Устаревшая выдача, context rot на объёме</td><td>Агент не знает, что искать; при плохой навигации (имена файлов, структура) блуждает</td></tr>
+  </table>
+  <p>На практике выбирают гибрид, как и рекомендует Anthropic: стабильное и почти всегда нужное (<code>CLAUDE.md</code>, схема, правила) — заранее и в кэшируемом префиксе, объёмное и специфичное для шага — по запросу. Чем менее динамичен домен (юридические документы, финансовые регламенты), тем больше можно загрузить заранее.</p>
+
+  <div class="viz" id="viz-ctx">
+    <p class="viz-title">Состав контекста по шагам длинной задачи</p>
+    <p class="viz-sub">Coding-агент на Opus 5 чинит баг: два шага исследования, правка, тест — и по кругу. Включайте рычаги и смотрите, как меняются размер и состав контекста, накопленная стоимость, доля полезных токенов и момент входа в зону деградации. Модель упрощённая, допущения — под графиком: она показывает механику, а не измеряет конкретного агента.</p>
+    <div class="controls">
+      <label>полезных шагов <input type="range" id="ce-n" min="30" max="200" step="10" value="80"> <output></output></label>
+      <label><input type="checkbox" id="ce-comp"> компакция</label>
+      <label>порог <input type="range" id="ce-th" min="80" max="400" step="10" value="120"> <output></output></label>
+      <label><input type="checkbox" id="ce-notes"> заметки</label>
+      <label><input type="checkbox" id="ce-sub"> субагенты для исследования</label>
+      <label><input type="checkbox" id="ce-jit"> just-in-time вместо дампов</label>
+    </div>
+    <svg id="ce-svg" viewBox="0 0 640 330" role="img" aria-label="Размер и состав контекста по шагам и накопленная стоимость"></svg>
+    <div class="metrics" id="ce-metrics"></div>
+    <div class="readout" id="ce-out"></div>
+  </div>
+
+  <h3>Компакция истории</h3>
+  <p><b>Компакция</b> — замена старой части истории резюме, когда контекст подходит к порогу. Это рычаг compress с потерями, поэтому важны три решения.</p>
+  <ul>
+    <li><b>Когда.</b> По порогу от рабочего бюджета (60–75%), а не от окна: к 95% окна context rot уже наступил. И не на каждом шаге: компакция переписывает историю и сбрасывает её кэш, поэтому лучше редко и крупно (на схеме выше опустите порог до 80K и посмотрите на стоимость). Проверка — перед вызовом модели, по <code>usage</code> прошлого вызова.</li>
+    <li><b>Что сохранить.</b> Исходную задачу — дословно, не пересказом. Решения и их причины, что сделано и проверено, точные пути, ID и числа, встреченные ошибки, открытые вопросы, следующий шаг. Последние N ходов — дословно, чтобы модель продолжила с живого места. Выбросить — сырые выводы, которые можно получить снова. Claude Code, по описанию Anthropic, сохраняет архитектурные решения, нерешённые баги и детали реализации, а после компакции продолжает с резюме и пятью последними открытыми файлами. Промпт суммаризатора настраивают на сложных траекториях: сначала полнота (ничего важного не потерять), потом точность (убрать лишнее).</li>
+    <li><b>Как не сломать историю.</b> Граница резюме проходит перед ответом модели: тогда каждая пара <code>tool_use</code> → <code>tool_result</code> целиком остаётся по одну сторону, а роли чередуются, иначе API ответит 400. Thinking-блоки в сохранённых ходах вырезаются: их подпись привязана к прежнему префиксу, и на моделях с проверкой префикса (по документации на октябрь 2026 — в их числе Fable 5.1 и Opus 5.5) такая история невалидна, а убрать все thinking-блоки допустимо. Кэш: system и tools остаются в кэше благодаря отдельному breakpoint'у, история после компакции один раз записывается заново (1,25×) и дальше снова читается по 0,1×.</li>
+  </ul>
+  <pre><code class="lang-go">// Compactor сжимает историю, когда контекст перерос порог: старые ходы заменяет
+// резюме от дешёвой модели, последние KeepTurns ходов оставляет дословно.
+type Compactor struct {
+	Model     Model           // тот же Budgeted, что у агента: суммаризация тоже стоит денег
+	ModelID   anthropic.Model // "claude-haiku-4-5"
+	Threshold int64           // токенов контекста; 50–70% рабочего бюджета, а не 95% окна
+	KeepTurns int             // ход = ответ модели с tool_use + сообщение с tool_result
+}
+
+const summaryPrompt = `You compact the working history of an AI agent so that it can continue the task.
+Preserve: the task and its acceptance criteria; decisions made and why; what is done and verified;
+exact file paths, IDs, names and numbers; errors met and how they were resolved; open questions;
+the immediate next step. Drop raw tool outputs that can be fetched again. At most 500 words.`
+
+// Maybe вызывается перед каждым вызовом модели. ctxTokens — размер контекста по usage
+// прошлого вызова. Возвращает новую историю и признак того, что компакция была.
+func (c *Compactor) Maybe(ctx context.Context, msgs []anthropic.MessageParam, ctxTokens int64) ([]anthropic.MessageParam, bool, error) {
+	if c == nil || ctxTokens &lt; c.Threshold {
+		return msgs, false, nil
+	}
+	// Хвост должен начинаться с ответа модели: тогда каждая пара tool_use → tool_result
+	// целиком либо в резюме, либо в хвосте, и история чередует user/assistant.
+	cut := min(len(msgs)-1, len(msgs)-2*c.KeepTurns)
+	for cut &gt; 1 &amp;&amp; msgs[cut].Role != anthropic.MessageParamRoleAssistant {
+		cut--
+	}
+	if cut &lt;= 1 {
+		return msgs, false, nil // сжимать нечего: всё — «последние ходы»
+	}
+	resp, err := c.Model.New(ctx, anthropic.MessageNewParams{
+		Model: c.ModelID, MaxTokens: 4000,
+		System:   []anthropic.TextBlockParam{{Text: summaryPrompt}},
+		Messages: []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(render(msgs[:cut])))},
+	})
+	if err != nil {
+		return msgs, false, err
+	}
+	summary := text(resp)
+	if resp.StopReason != anthropic.StopReasonEndTurn || summary == "" {
+		// Обрезанное или пустое резюме хуже никакого: история заменилась бы дырой.
+		return msgs, false, fmt.Errorf("compact: no summary (stop_reason %q)", resp.StopReason)
+	}
+	// Первый блок первого сообщения — исходная задача: её не пересказываем, а держим дословно.
+	head := anthropic.NewUserMessage(msgs[0].Content[0], anthropic.NewTextBlock(
+		"&lt;summary_of_earlier_work&gt;\n"+summary+"\n&lt;/summary_of_earlier_work&gt;\n"+
+			"Earlier turns were compacted. Re-read your notes before acting; "+
+			"re-fetch files you need instead of relying on memory."))
+	out := []anthropic.MessageParam{head}
+	for _, m := range msgs[cut:] {
+		out = append(out, withoutThinking(m))
+	}
+	return out, true, nil
+}
+
+// withoutThinking убирает thinking-блоки из сохранённых ходов: их подпись привязана
+// к прежнему префиксу, а мы его заменили резюме. Убрать все — допустимо, модель лишь
+// теряет те рассуждения; оставить — ошибка на моделях с проверкой префикса.
+func withoutThinking(m anthropic.MessageParam) anthropic.MessageParam {
+	kept := make([]anthropic.ContentBlockParamUnion, 0, len(m.Content))
+	for _, b := range m.Content {
+		if b.OfThinking == nil &amp;&amp; b.OfRedactedThinking == nil {
+			kept = append(kept, b)
+		}
+	}
+	m.Content = kept
+	return m
+}
+
+// render превращает историю в текст для суммаризатора: ему не нужны блоки tool_use
+// и определения инструментов, а длинные выводы заодно обрезаются.
+func render(msgs []anthropic.MessageParam) string {
+	var b strings.Builder
+	for _, m := range msgs {
+		for _, blk := range m.Content {
+			switch {
+			case blk.OfText != nil:
+				fmt.Fprintf(&amp;b, "[%s] %s\n", m.Role, blk.OfText.Text)
+			case blk.OfToolUse != nil:
+				in, _ := json.Marshal(blk.OfToolUse.Input)
+				fmt.Fprintf(&amp;b, "[tool_use %s] %s\n", blk.OfToolUse.Name, in)
+			case blk.OfToolResult != nil:
+				tag := "tool_result"
+				if blk.OfToolResult.IsError.Value {
+					tag = "tool_error"
+				}
+				for _, c := range blk.OfToolResult.Content {
+					if c.OfText != nil {
+						fmt.Fprintf(&amp;b, "[%s] %s\n", tag, truncate(c.OfText.Text, 2000, " …"))
+					}
+				}
+			}
+		}
+	}
+	return b.String()
+}</code></pre>
+  <p>В цикл компактор встраивается одной строкой перед вызовом модели — она уже есть в <code>Run</code> выше: <code>a.Compact.Maybe(ctx, msgs, ctxTok)</code>. Суммаризатор ходит через тот же <code>Budgeted</code>, что и агент: компакция тоже стоит денег. Если резюме не пришло (обрезано, отказ, ошибка сети), история не трогается, ошибка учитывается в <code>CompactErrors</code>, и компакция повторяется на следующем шаге — так же документация Anthropic советует поступать с серверной компакцией. В тесте <code>examples/m06-agents</code> fake-модель проходит 60 документов за 66 шагов. Шесть компакций держат пиковый контекст около 12K токенов при пороге 12K, без компакции пик — около 60K. Заодно fake проверяет, что каждый запрос валиден для API: пары <code>tool_use</code>/<code>tool_result</code> и чередование ролей.</p>
+
+  <h3>Компакция и память на стороне API</h3>
+  <p>У Anthropic есть серверные версии тех же рычагов. Состав и статус — по документации Claude Developer Platform на октябрь 2026:</p>
+  <table>
+    <tr><th>Механизм</th><th>Как включить</th><th>Статус</th><th>Что важно</th></tr>
+    <tr><td><b>Context editing</b>: очистка старых tool results и thinking</td><td>Заголовок <code>context-management-2025-06-27</code>, параметр <code>context_management.edits</code> со стратегиями <code>clear_tool_uses_20250919</code> (по умолчанию срабатывает на 100K входных токенов и оставляет 3 последних вызова) и <code>clear_thinking_20251015</code></td><td>beta</td><td>Без вызова LLM. <code>exclude_tools</code> защищает нужные результаты; с memory tool модель перед очисткой получает предупреждение сохранить важное</td></tr>
+    <tr><td><b>Компакция по порогу</b></td><td>Заголовок <code>compact-2026-01-12</code>, стратегия <code>compact_20260112</code> в <code>context_management.edits</code>; порог по умолчанию 150K, минимум 50K</td><td>beta</td><td>Ответ начинается с блока <code>compaction</code>, его возвращают в следующих запросах. Суммаризация — дополнительный проход модели, её токены — в <code>usage.iterations</code></td></tr>
+    <tr><td><b>Компакция по запросу</b></td><td>Заголовок <code>compact-2026-09-04</code>, параметр <code>compaction: {"type": "summarize"}</code></td><td>beta</td><td>Момент выбирает ваш код. Подписанный блок кладут первым в <code>messages</code> вместо резюмированных сообщений; последние ходы можно сохранить дословно</td></tr>
+    <tr><td><b>Memory tool</b></td><td>Инструмент <code>{"type": "memory_20250818", "name": "memory"}</code></td><td>без beta-заголовка</td><td>Исполняется на вашей стороне: команды <code>view</code>, <code>create</code>, <code>str_replace</code>, <code>insert</code>, <code>delete</code>, <code>rename</code> над своим хранилищем; пути вне <code>/memories</code> обязательно отсекать (path traversal)</td></tr>
+  </table>
+  <p>Свой компактор или серверный? Свой работает с любой моделью и провайдером, его промпт и поведение под вашим контролем и тестами. Серверный — меньше кода, и он корректно обращается с thinking-блоками. Параметры beta-функций меняются: сверяйте их с документацией перед использованием.</p>
+
+  <h3>Заметки и память агента</h3>
+  <p><b>Структурированные заметки</b> (рычаг write) — агент сам ведёт файл с планом, прогрессом и решениями и перечитывает его после компакции. Пример из статьи Anthropic: Claude, играющий в Pokémon, на протяжении тысяч шагов ведёт счёт прогресса («прокачать покемона до 10-го уровня»), карту исследованных мест и заметки о боях, а после сброса контекста продолжает по ним. Заметки живут внутри задачи. <b>Память</b> (memory tool, файлы или БД) — между задачами и сессиями: предпочтения пользователя, уроки прошлых запусков.</p>
+  <pre><code class="lang-go">// Notes — заметки агента в одном файле (NOTES.md, progress): чтение и полная перезапись.
+// Дописывания нет намеренно: с лимитом размера агент вынужден сжимать заметки, а не копить лог.
+type Notes struct {
+	Path     string
+	MaxBytes int
+}
+
+func (n Notes) Tool() Tool {
+	return Tool{
+		Param: anthropic.ToolParam{
+			Name: "notes",
+			Description: anthropic.String("Your persistent notes file; it survives context compaction and restarts. " +
+				"op=read returns the whole file. op=write REPLACES the whole file with content. " +
+				fmt.Sprintf("Limit %d bytes. Keep: goal, plan, done/todo lists, decisions with reasons, open questions. ", n.MaxBytes) +
+				"Do not paste tool outputs: store paths and IDs to re-fetch them. Read notes after a compaction."),
+			InputSchema: anthropic.ToolInputSchemaParam{
+				Properties: map[string]any{
+					"op":      map[string]any{"type": "string", "enum": []string{"read", "write"}},
+					"content": map[string]any{"type": "string", "description": "full new content, required for write"},
+				},
+				Required: []string{"op"},
+			},
+		},
+		Run: n.run,
+	}
+}
+
+func (n Notes) run(_ context.Context, input json.RawMessage) (string, error) {
+	var in struct {
+		Op      string `json:"op"`
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal(input, &amp;in); err != nil {
+		return "", err
+	}
+	switch in.Op {
+	case "read":
+		b, err := os.ReadFile(n.Path)
+		if errors.Is(err, fs.ErrNotExist) {
+			return "(no notes yet)", nil
+		}
+		return string(b), err
+	case "write":
+		if len(in.Content) &gt; n.MaxBytes {
+			return "", fmt.Errorf("notes are %d bytes, limit is %d: condense them — merge done items, "+
+				"drop details you can re-fetch, keep decisions and next steps", len(in.Content), n.MaxBytes)
+		}
+		// Запись через временный файл и rename: обрыв посреди записи не оставит полфайла.
+		tmp := n.Path + ".tmp"
+		if err := os.WriteFile(tmp, []byte(in.Content), 0o644); err != nil {
+			return "", err
+		}
+		if err := os.Rename(tmp, n.Path); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("saved %d/%d bytes", len(in.Content), n.MaxBytes), nil
+	default:
+		return "", fmt.Errorf("unknown op %q: use read or write", in.Op)
+	}
+}</code></pre>
+  <ul>
+    <li><b>Перезапись вместо дописывания.</b> С <code>append</code> заметки превращаются в лог и сами становятся шумом. Перезапись с лимитом заставляет агента сжимать: объединять сделанное и выбрасывать то, что можно восстановить.</li>
+    <li><b>Ссылки вместо содержимого</b>: путь к файлу и ID, а не вывод инструмента.</li>
+    <li><b>Атомарная запись</b> через временный файл и <code>rename</code>: обрыв процесса посреди записи не оставит полфайла, а именно по этому файлу будет восстанавливаться следующая сессия.</li>
+    <li><b>Файл инструкций репозитория</b> (<code>CLAUDE.md</code>/<code>AGENTS.md</code>) — «всегда загруженная» часть контекста coding agent, см. <a href="m04.html#coding-agents">модуль 4</a>. Его пишут люди, он попадает в каждый вызов, поэтому держите его коротким: каждый токен оплачивается на каждом шаге.</li>
+    <li><b>Память между сессиями требует гигиены</b>: устаревание (дата последнего чтения, чистка старого), никаких секретов и PII (модуль 11), защита от path traversal. И помните про poisoning: ошибочный «факт» в памяти будет воспроизводиться во всех будущих сессиях.</li>
+  </ul>
+
+  <h3>Субагенты с изолированным контекстом</h3>
+  <p>Рычаг isolate: тяжёлое чтение (поиск по коду, разбор логов, исследование) уходит в субагента со своим списком сообщений, своими инструментами и своим бюджетом. Субагент может потратить десятки тысяч токенов, а родителю вернуть выжимку на 1–2K (оценка Anthropic). В основном контексте остаётся вывод, а не путь к нему.</p>
+  <pre><code class="lang-go">// AsTool превращает агента в инструмент для родителя. Каждый вызов — свой список сообщений
+// (чистый контекст), свой бюджет поверх бюджета родителя, и наверх уходит только итог,
+// урезанный до maxResult байт: десятки тысяч токенов чтения остаются у субагента.
+func (a Agent) AsTool(name, desc string, maxUSD float64, maxResult int) Tool {
+	return Tool{
+		Param: anthropic.ToolParam{
+			Name:        name,
+			Description: anthropic.String(desc),
+			InputSchema: anthropic.ToolInputSchemaParam{
+				Properties: map[string]any{"task": map[string]any{
+					"type":        "string",
+					"description": "Self-contained task: goal, scope and boundaries, expected output format. The subagent sees nothing else.",
+				}},
+				Required: []string{"task"},
+			},
+		},
+		Run: func(ctx context.Context, input json.RawMessage) (string, error) {
+			var in struct {
+				Task string `json:"task"`
+			}
+			if err := json.Unmarshal(input, &amp;in); err != nil || in.Task == "" {
+				return "", errors.New("pass a non-empty task")
+			}
+			sub := a                                              // копия конфигурации; историю Run создаст с нуля
+			sub.Model = &amp;Budgeted{Model: a.Model, MaxUSD: maxUSD} // лимит на этот вызов, расходы видит и родитель
+			res, err := sub.Run(ctx, in.Task)
+			if err != nil {
+				return "", fmt.Errorf("subagent stopped after %d iterations: %w; narrow the task", res.Iters, err)
+			}
+			return truncate(res.Text, maxResult, "\n…[truncated]"), nil
+		},
+	}
+}</code></pre>
+  <p>Сборка целиком: общий бюджет сессии, дешёвый исследователь только с инструментами чтения, основной агент с заметками и компакцией:</p>
+  <pre><code class="lang-go">client := anthropic.NewClient() // ключ из ANTHROPIC_API_KEY
+root := &amp;agent.Budgeted{Model: &amp;client.Messages, MaxUSD: 5}
+
+researcher := agent.Agent{
+	Model: root, ModelID: "claude-haiku-4-5", MaxIters: 15,
+	System: "Answer the question using the read-only tools. Return facts with file paths, at most 300 words.",
+	Tools:  map[string]agent.Tool{ /* grep, read_file — только чтение */ },
+}
+notes := agent.Notes{Path: "NOTES.md", MaxBytes: 8 &lt;&lt; 10}
+lead := agent.Agent{
+	Model: root, ModelID: "claude-opus-5", MaxIters: 80,
+	System: "You fix bugs in this repository. Keep NOTES.md current: plan, done, decisions, next step.",
+	Tools: map[string]agent.Tool{
+		"notes":    notes.Tool(),
+		"research": researcher.AsTool("research", "Delegate a read-only investigation; returns a short report.", 0.30, 6000),
+	},
+	Compact: &amp;agent.Compactor{Model: root, ModelID: "claude-haiku-4-5", Threshold: 120_000, KeepTurns: 6},
+	Confirm: agent.StdinConfirm(),
+}
+res, err := lead.Run(context.Background(), "Find and fix the deadlock in inventory.Reserve")
+fmt.Printf("%d iters, %d compactions, peak %d tokens, $%.2f: %v\n%s\n",
+	res.Iters, res.Compactions, res.PeakCtx, root.Spent(), err, res.Text)</code></pre>
+  <ul>
+    <li><b>Задание должно быть самодостаточным</b>: субагент не видит истории родителя. В описании параметра — цель, границы и формат ответа. По опыту Anthropic, без подробного задания субагенты дублируют работу и оставляют пробелы (урок <a href="#multi">«Мультиагентные системы»</a>).</li>
+    <li><b>Только чтение.</b> Субагент, который пишет, принимает неявные решения, и они конфликтуют с решениями родителя (аргумент Cognition).</li>
+    <li><b>Два лимита</b>: на стоимость вызова (<code>Budgeted</code> поверх бюджета родителя) и на размер ответа (урезание). Если нужен полный результат, субагент пишет его в файл и возвращает путь.</li>
+  </ul>
+
+  <h2 id="long-horizon">Длинные задачи: 50+ шагов и много сессий</h2>
+  <p>Задача на сотни шагов (миграция сервиса, аудит документации, большое исследование) не помещается ни в одно окно, ни в один запуск процесса: контекст переполнится, сеть оборвётся, бюджет сессии кончится. Компакция продлевает сессию, но Anthropic в статье о harness'е для долгих агентов («Effective harnesses for long-running agents», ноябрь 2025) прямо пишет, что одной компакции недостаточно: резюме не всегда передаёт следующему окну достаточно ясные инструкции. Решение — строить работу как серию коротких сессий со свежим контекстом, где состояние живёт в файлах и git, а не в истории сообщений.</p>
+
+  <h3>Инициализатор и исполнитель</h3>
+  <p>Схема из статьи Anthropic (кейс — агент, который за много сессий собирает веб-приложение):</p>
+  <ul>
+    <li><b>Инициализатор</b> — первая сессия со своим промптом. Он ничего не реализует, а готовит среду: скрипт <code>init.sh</code> (как поднять и проверить проект), progress-файл <code>claude-progress.txt</code>, список фич в JSON (в их кейсе — больше 200 пунктов, все изначально помечены как непройденные) и первый git-коммит.</li>
+    <li><b>Исполнитель</b> — каждая следующая сессия. Она начинает с одного и того же ритуала: <code>pwd</code>, git log и progress-файл, выбор самой приоритетной незакрытой фичи, запуск <code>init.sh</code> и базового end-to-end теста, чтобы поймать то, что сломала прошлая сессия. Дальше — одна фича, проверка «как пользователь» (в их кейсе — браузерной автоматизацией), коммит с понятным сообщением, обновление progress. Код остаётся в состоянии, пригодном для мержа.</li>
+    <li><b>В списке фич меняется только поле <code>passes</code></b>, удалять и править пункты запрещено. JSON выбран потому, что модель реже неуместно меняет или перезаписывает JSON, чем Markdown.</li>
+  </ul>
+  <table>
+    <tr><th>Режим отказа (из статьи Anthropic)</th><th>Чем лечится</th></tr>
+    <tr><td>Агент пытается сделать всё за один заход и упирается в контекст посреди реализации</td><td>Одна фича за раз; список фич задаёт объём</td></tr>
+    <tr><td>Агент объявляет задачу решённой, сделав часть</td><td>Готовность определяет список фич, а не ощущение модели</td></tr>
+    <tr><td>Фичи помечены готовыми без настоящей проверки</td><td>Сквозной тест «как пользователь» перед <code>passes: true</code></td></tr>
+    <tr><td>Сессия оставила баги или незаписанный прогресс</td><td>Git и progress-файл; в начале сессии — базовый тест, в конце — коммит</td></tr>
+    <tr><td>Время уходит на то, чтобы понять, как запустить проект</td><td><code>init.sh</code>, который написал инициализатор</td></tr>
+  </table>
+
+  <h3>Git как память</h3>
+  <p>Git — бесплатная, проверяемая и откатываемая память агента. <code>git log</code> — журнал сделанного с причинами (если коммиты осмысленные), <code>git diff</code> — что изменилось с прошлой сессии, <code>git revert</code> — отмена неудачного шага без попыток «вспомнить», как было, ветка на задачу — изоляция от основной работы. Правило для промпта исполнителя: коммит после каждой проверенной фичи, в сообщении — что и зачем, а не «update». Тогда прогресс восстанавливается из двух источников, которые можно сверить друг с другом.</p>
+  <pre><code># features.json — меняется только passes
+[{"id": "F-017", "desc": "Поиск по документации возвращает цитату с URL", "passes": true},
+ {"id": "F-018", "desc": "Пустой запрос даёт подсказку, а не ошибку 500", "passes": false}]
+
+# Начало каждой сессии (из промпта исполнителя)
+1. pwd; git log --oneline -20; прочитай progress.md и features.json
+2. ./init.sh: подними сервис и прогони smoke-тест; если что-то сломано — чини это первым
+3. возьми одну фичу с passes=false и наивысшим приоритетом
+4. сделай, проверь сквозным тестом, git commit -m "F-018: …", обнови progress.md
+5. если до лимита сессии далеко — следующая фича, иначе аккуратно заверши</code></pre>
+
+  <h3>Восстановление после обрыва и критерии остановки</h3>
+  <p>Если всё состояние лежит в файлах и git, обрыв процесса стоит максимум одной сессии: перезапуск выполняет тот же ритуал и продолжает с того же места. Отсюда harness — цикл сессий, в котором решение «готово» принимает код, а не модель:</p>
+  <pre><code class="lang-go">// Check — состояние длинной задачи по мнению кода, а не модели: прогон тестов, число
+// пунктов с passes=true в features.json, валидность артефактов. progress — отпечаток
+// прогресса (например, «37/52 + хэш HEAD»), по нему видно, что сессия что-то сдвинула.
+type Check func(ctx context.Context) (done bool, progress string, err error)
+
+var ErrStuck = errors.New("agent: no progress in consecutive sessions")
+
+// RunSessions крутит короткие сессии агента со свежим контекстом, пока Check не скажет
+// «готово». Между сессиями состояние живёт только в файлах (progress, notes) и git,
+// поэтому обрыв процесса стоит максимум одной сессии: перезапуск продолжает с того же места.
+// Возвращает число проведённых сессий.
+func RunSessions(ctx context.Context, a *Agent, task string, check Check, maxSessions, patience int) (int, error) {
+	last, idle := "", 0
+	for s := 0; s &lt; maxSessions; s++ {
+		done, progress, err := check(ctx)
+		if err != nil || done {
+			return s, err
+		}
+		if s &gt; 0 &amp;&amp; progress == last {
+			if idle++; idle &gt;= patience {
+				return s, ErrStuck // сессии жгут бюджет, не двигая задачу: зовём человека
+			}
+		} else {
+			idle = 0
+		}
+		last = progress
+		// Лимит итераций — нормальный конец сессии: следующая продолжит по файлам.
+		if _, err := a.Run(ctx, task); err != nil &amp;&amp; !errors.Is(err, ErrMaxIters) {
+			return s + 1, err // ErrBudget, отмена, недоступный API — стоп
+		}
+	}
+	done, _, err := check(ctx)
+	if err == nil &amp;&amp; !done {
+		err = errors.New("agent: session limit reached, task not done")
+	}
+	return maxSessions, err
+}</code></pre>
+  <ul>
+    <li><b>Готово</b> — по проверке кодом: все пункты списка с <code>passes: true</code>, тесты зелёные, артефакты валидны. «Модель сказала, что закончила» — не критерий, это ровно режим отказа «объявить победу».</li>
+    <li><b>Застряли</b> — отпечаток прогресса не меняется <code>patience</code> сессий подряд: сессии жгут бюджет, не двигая задачу. Стоп и эскалация человеку.</li>
+    <li><b>Бюджет</b> — один <code>Budgeted</code> на всю задачу: <code>ErrBudget</code> останавливает не только сессию, но и цикл сессий.</li>
+    <li><b>Лимит сессий</b> — последняя страховка от бесконечного цикла.</li>
+    <li><b>Идемпотентность мутаций обязательна</b>: прерванная сессия могла выполнить действие и не успеть записать это в progress.</li>
+  </ul>
+  <div class="callout go"><span class="title">Аналогия из Go</span>Long-horizon harness — это воркер очереди с доставкой at-least-once. Задачу могут прервать и выполнить повторно, поэтому обработчик идемпотентен; прогресс фиксируется после каждого шага, как offset в Kafka; «готово» определяется по состоянию в хранилище, а не по логу воркера. Сессия агента — один обработанный батч.</div>
+
+  <h2 id="multi">Мультиагентные системы</h2>
+  <p>Схема оркестратор + субагенты: главный агент планирует, порождает субагентов с узкими задачами (каждый — со своим системным промптом, инструментами и <em>чистым контекстом</em>), получает от них сжатые результаты и синтезирует ответ. Это orchestrator-workers, где workers — сами агенты.</p>
+  <h3>Зачем</h3>
+  <ul>
+    <li><b>Изоляция контекста.</b> Субагент может прочитать 200K токенов логов и вернуть 2K выжимки; основной контекст остаётся чистым. Это главный выигрыш, важнее параллелизма.</li>
+    <li><b>Параллелизм</b> на широких задачах (исследование: 5 направлений поиска одновременно).</li>
+    <li><b>Специализация</b>: разные промпты, инструменты, модели (субагенты на Sonnet/Haiku, оркестратор на Opus).</li>
+  </ul>
+  <h3>Цена</h3>
+  <p>Anthropic в разборе своей research-системы («How we built our multi-agent research system», 2025) приводит: агент тратит примерно в 4 раза больше токенов, чем чат, мультиагентная система — примерно в 15 раз. При этом на их внутреннем research-eval мультиагентная конфигурация обошла одиночного агента на десятки процентов, и большая часть разницы в качестве объяснялась просто количеством потраченных токенов. Вывод: мультиагентность — способ потратить больше токенов с пользой на задачах, где ценность это окупает, а не бесплатное улучшение.</p>
+  <h3>Контраргумент: «Don't Build Multi-Agents»</h3>
+  <p>Cognition (Уолден Ян, июнь 2025) спорит с параллельными мультиагентными схемами и формулирует два принципа. Первый: делитесь контекстом, причём полными трейсами агента, а не отдельными сообщениями. Второй: действия несут неявные решения, а конфликтующие решения дают плохой результат. Пример из статьи: задачу «сделай клон Flappy Bird» разбили на две; один субагент нарисовал фон в стиле Super Mario, другой — птицу, не похожую на нужную, и финальному агенту пришлось склеивать несовместимое. Рекомендация по умолчанию — один линейный агент с непрерывным контекстом, а для очень длинных задач — отдельная модель, которая сжимает историю действий в ключевые детали, события и решения (то есть компакция, урок <a href="#context">Context engineering</a>).</p>
+  <p>С опытом Anthropic это расходится меньше, чем кажется. Research-система Anthropic выигрывает на широких задачах чтения, где субагенты не принимают конфликтующих решений, и сама статья Anthropic отмечает, что большинство задач программирования распараллеливаются хуже исследования. Cognition же говорит о задачах записи, где каждое действие — решение. Практическое правило курса: изоляция — для чтения и исследования, запись — в одном потоке.</p>
+  <h3>Координация и режимы отказа</h3>
+  <ul>
+    <li><b>Размытое задание</b> субагенту — дублирование работы или не то направление. Задание = цель, формат выхода, какие инструменты, граница задачи, бюджет.</li>
+    <li><b>Конфликтующие действия</b>: два субагента правят один файл. Правило: параллельные субагенты — только read-only или непересекающиеся области; запись — последовательно или через оркестратора.</li>
+    <li><b>Эскалация усилий</b>: оркестратор порождает 50 субагентов на простой вопрос. В промпт — правила масштабирования (простой факт — 1 агент, сравнение — 2–4), в код — жёсткий лимит.</li>
+    <li><b>Потеря на границе</b>: выжимка выбросила важное. Субагент может писать полный результат в файл/хранилище и возвращать ссылку.</li>
+    <li><b>Отладка</b>: недетерминированные траектории × N. Без трейсинга всего дерева вызовов (модуль 9) разбирать инциденты невозможно.</li>
+  </ul>
+  <div class="callout go"><span class="title">Аналогия из Go</span>Оркестратор с субагентами — <code>errgroup.WithContext</code> + <code>SetLimit(n)</code>: fan-out с ограничением параллелизма, общая отмена и сбор результатов. И так же, как с горутинами, общая изменяемая память между субагентами — источник гонок; общайтесь сообщениями (результатами), а не общим состоянием.</div>
 
   <h2 id="mcp">MCP: Model Context Protocol</h2>
   <p><b>MCP</b> — открытый протокол (Anthropic, ноябрь 2024), стандартизирующий, как LLM-приложения подключают внешние инструменты и данные. Проблема, которую он решает, — M×N интеграций: M приложений (Claude Desktop, Claude Code, IDE, ваш бот) × N систем (GitHub, Postgres, Jira). С MCP каждая система пишет один сервер, каждое приложение — один клиент. Аналогия, которую любят в докладах, — «USB-C для LLM»; точнее для бэкендера — это как LSP для редакторов.</p>
@@ -358,7 +981,7 @@ func text(m *anthropic.Message) string {
   </ul>
 
   <h2 id="mcp-go">Свой MCP-сервер на Go</h2>
-  <p>Официальный SDK: <code>github.com/modelcontextprotocol/go-sdk</code> (пакет <code>mcp</code>). Ниже сервер с одним инструментом — read-only SQL к Postgres. Схема входа выводится из Go-структуры по тегам <code>json</code>/<code>jsonschema</code>. Код ниже собирается с <code>go-sdk v1.8.0</code> (на момент написания, сентябрь 2026; эта версия по умолчанию говорит на протоколе <code>2026-07-28</code> и поддерживает старые версии вплоть до <code>2024-11-05</code>). SDK развивается — при обновлении сверяйте сигнатуры на pkg.go.dev.</p>
+  <p>Официальный SDK: <code>github.com/modelcontextprotocol/go-sdk</code> (пакет <code>mcp</code>). Ниже сервер со всеми тремя серверными примитивами: инструмент read-only SQL к Postgres, resource со схемой БД и prompt недельного отчёта. Схема входа инструмента выводится из Go-структуры по тегам <code>json</code>/<code>jsonschema</code>. Код собирается с <code>go-sdk v1.8.0</code> (на момент написания, октябрь 2026; эта версия по умолчанию говорит на протоколе <code>2026-07-28</code> и поддерживает старые версии вплоть до <code>2024-11-05</code>), полная версия с тестом — в <code>examples/m06-agents/cmd/pg-mcp</code>. SDK развивается — при обновлении сверяйте сигнатуры на pkg.go.dev.</p>
   <pre><code class="lang-go">package main
 
 import (
@@ -368,6 +991,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"regexp"
 	"strings"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -392,19 +1016,61 @@ func main() {
 		log.Fatal(err) // log пишет в stderr — stdout занят протоколом
 	}
 	db.SetMaxOpenConns(4)
+	if err := newServer(db).Run(context.Background(), &amp;mcp.StdioTransport{}); err != nil {
+		log.Fatal(err)
+	}
+}
 
-	srv := mcp.NewServer(&amp;mcp.Implementation{Name: "pg-readonly", Version: "v0.1.0"}, nil)
+func newServer(db *sql.DB) *mcp.Server {
+	srv := mcp.NewServer(&amp;mcp.Implementation{Name: "pg-readonly", Version: "v0.2.0"}, nil)
 	mcp.AddTool(srv, &amp;mcp.Tool{
 		Name: "pg_query",
 		Description: "Run a read-only SQL SELECT against the analytics Postgres database. " +
 			"Use for questions about orders, users and payments. Results are capped at 500 rows " +
 			"and 5s execution; aggregate in SQL instead of fetching raw rows. " +
 			"On errors the message lists what to fix.",
+		Annotations: &amp;mcp.ToolAnnotations{ReadOnlyHint: true},
 	}, queryHandler(db))
-	if err := srv.Run(context.Background(), &amp;mcp.StdioTransport{}); err != nil {
-		log.Fatal(err)
-	}
+
+	// Resource: данные, которые host сам кладёт в контекст (application-controlled).
+	srv.AddResource(&amp;mcp.Resource{
+		URI:         "schema://analytics",
+		Name:        "analytics-schema",
+		MIMEType:    "text/markdown",
+		Description: "Tables, columns and join keys of the analytics database. Attach before writing SQL.",
+	}, func(_ context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+		return &amp;mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{
+			{URI: req.Params.URI, MIMEType: "text/markdown", Text: schemaDoc},
+		}}, nil
+	})
+
+	// Prompt: шаблон, который пользователь выбирает явно (слэш-команда в клиенте).
+	srv.AddPrompt(&amp;mcp.Prompt{
+		Name:        "weekly_report",
+		Description: "Orders and revenue report for one ISO week",
+		Arguments:   []*mcp.PromptArgument{{Name: "week", Description: "ISO week, e.g. 2026-W40", Required: true}},
+	}, func(_ context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+		week := req.Params.Arguments["week"]
+		if !isoWeek.MatchString(week) { // аргумент попадёт в промпт — валидируем как любой ввод
+			return nil, fmt.Errorf("week must look like 2026-W40, got %q", week)
+		}
+		return &amp;mcp.GetPromptResult{
+			Description: "Weekly report for " + week,
+			Messages: []*mcp.PromptMessage{{Role: "user", Content: &amp;mcp.TextContent{Text: "Build a report for ISO week " + week +
+				": orders count, revenue, average order value, and the change against the previous week. " +
+				"Read the schema://analytics resource first, aggregate in SQL with pg_query, show the queries you ran."}}},
+		}, nil
+	})
+	return srv
 }
+
+var isoWeek = regexp.MustCompile(`^\d{4}-W(0[1-9]|[1-4]\d|5[0-3])$`)
+
+const schemaDoc = `# analytics
+- orders(id, user_id → users.id, created_at timestamptz, status: new|paid|refunded, total_cents bigint)
+- users(id, created_at, country char(2)) — без PII: email и имена в другой БД
+- payments(id, order_id → orders.id, paid_at, amount_cents, provider)
+Деньги — в центах; «выручка» = sum(total_cents) по status = 'paid'.`
 
 func queryHandler(db *sql.DB) func(context.Context, *mcp.CallToolRequest, QueryIn) (*mcp.CallToolResult, QueryOut, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in QueryIn) (*mcp.CallToolResult, QueryOut, error) {
@@ -455,6 +1121,7 @@ func queryHandler(db *sql.DB) func(context.Context, *mcp.CallToolRequest, QueryI
 	}
 }</code></pre>
   <p>Что делает SDK: из <code>QueryIn</code>/<code>QueryOut</code> генерирует <code>inputSchema</code>/<code>outputSchema</code>, валидирует аргументы, результат кладёт в <code>structuredContent</code> (и текстовую копию в <code>content</code>), а ошибку обработчика отдаёт как результат с <code>isError: true</code>, а не как JSON-RPC ошибку — так модель её увидит и сможет исправить запрос (так в v1.8.0; если вернуть <code>*jsonrpc.Error</code>, SDK отдаст именно протокольную ошибку).</p>
+  <p><b>Resource</b> <code>schema://analytics</code> — курируемое описание схемы. Host прикрепляет его к контексту сам или по выбору пользователя (рычаг select без лишнего вызова инструмента). Курируемый текст лучше сырого <code>information_schema</code>: в нём единицы измерения, смысл статусов и определение выручки — то, что модель иначе угадывала бы. <b>Prompt</b> <code>weekly_report</code> — шаблон, который пользователь выбирает явно (в Claude Code промпты MCP-серверов доступны как слэш-команды). Аргумент попадает в текст промпта, поэтому валидируется как любой ввод. Аннотация <code>ReadOnlyHint</code> у инструмента — подсказка host'у, а не гарантия: о том, как её использовать, — ниже.</p>
   <div class="callout warn"><span class="title">Read-only — это слои, а не один флаг</span>(1) роль БД только с <code>SELECT</code> и без доступа к таблицам с PII; (2) <code>BEGIN READ ONLY</code>; (3) <code>statement_timeout</code>; (4) лимит строк; (5) запрет <code>;</code>. Обёртка <code>SELECT * FROM (…)</code> не защищает от всего (функции с побочными эффектами, <code>pg_sleep</code>, тяжёлые <code>CROSS JOIN</code>) — поэтому решает пункт 1, а остальные ограничивают ущерб. Для продакшн-данных ещё лучше — реплика.</div>
 
   <h3>Streamable HTTP вместо stdio</h3>
@@ -462,6 +1129,123 @@ func queryHandler(db *sql.DB) func(context.Context, *mcp.CallToolRequest, QueryI
 mux := http.NewServeMux()
 mux.Handle("/mcp", requireBearer(handler)) // ваш middleware: проверка OAuth-токена и audience
 log.Fatal(http.ListenAndServe("127.0.0.1:8080", mux))</code></pre>
+
+  <h3>Тест сервера через in-memory транспорт</h3>
+  <p><code>mcp.NewInMemoryTransports()</code> возвращает пару связанных транспортов. Сервер подключается первым, клиент вторым: handshake <code>initialize</code> клиент делает внутри <code>Connect</code>. Тест проходит весь путь JSON-RPC — <code>tools/list</code>, <code>tools/call</code>, <code>resources/read</code>, <code>prompts/get</code> — без Postgres, stdio и сети, поэтому живёт в обычном <code>go test</code> и CI.</p>
+  <pre><code class="lang-go">// Сервер и клиент в одном процессе через in-memory транспорт: без Postgres и без stdio.
+// db = nil: проверяемые пути не доходят до базы.
+func TestServerInMemory(t *testing.T) {
+	ctx := context.Background()
+	serverT, clientT := mcp.NewInMemoryTransports()
+	ss, err := newServer(nil).Connect(ctx, serverT, nil) // сервер подключается первым
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ss.Close()
+	cs, err := mcp.NewClient(&amp;mcp.Implementation{Name: "test", Version: "v0"}, nil).Connect(ctx, clientT, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+
+	tools, err := cs.ListTools(ctx, nil)
+	if err != nil || len(tools.Tools) != 1 || tools.Tools[0].Name != "pg_query" || !tools.Tools[0].Annotations.ReadOnlyHint {
+		t.Fatalf("tools/list: %v %+v", err, tools)
+	}
+
+	// Ошибка обработчика — это результат с isError, а не протокольная ошибка: модель её увидит.
+	res, err := cs.CallTool(ctx, &amp;mcp.CallToolParams{Name: "pg_query", Arguments: map[string]any{"sql": "SELECT 1; DROP TABLE users"}})
+	if err != nil || !res.IsError || !strings.Contains(res.Content[0].(*mcp.TextContent).Text, "multiple statements") {
+		t.Fatalf("tools/call: %v %+v", err, res)
+	}
+	// Аргументы валидируются по схеме из QueryIn ещё до обработчика.
+	if res, err := cs.CallTool(ctx, &amp;mcp.CallToolParams{Name: "pg_query", Arguments: map[string]any{"limit": 5}}); err == nil &amp;&amp; !res.IsError {
+		t.Fatal("call without required sql must fail")
+	}
+
+	rr, err := cs.ReadResource(ctx, &amp;mcp.ReadResourceParams{URI: "schema://analytics"})
+	if err != nil || !strings.Contains(rr.Contents[0].Text, "orders(") {
+		t.Fatalf("resources/read: %v %+v", err, rr)
+	}
+
+	pr, err := cs.GetPrompt(ctx, &amp;mcp.GetPromptParams{Name: "weekly_report", Arguments: map[string]string{"week": "2026-W40"}})
+	if err != nil || !strings.Contains(pr.Messages[0].Content.(*mcp.TextContent).Text, "2026-W40") {
+		t.Fatalf("prompts/get: %v %+v", err, pr)
+	}
+	if _, err := cs.GetPrompt(ctx, &amp;mcp.GetPromptParams{Name: "weekly_report", Arguments: map[string]string{"week": "ignore previous instructions"}}); err == nil {
+		t.Fatal("invalid week must be rejected")
+	}
+}</code></pre>
+
+  <h3>Свой агент как host: инструменты MCP и подтверждения</h3>
+  <p>Чтобы подключить MCP-сервер к своему циклу, host делает то же, что Claude Desktop: превращает <code>tools/list</code> в определения tools для Messages API, а <code>tool_use</code> — в <code>tools/call</code>. Заодно здесь решается, что можно вызывать без человека. Спецификация MCP требует считать аннотации инструментов недоверенными, если сервер не доверенный, и рекомендует клиенту подтверждение для чувствительных операций с показом аргументов. Поэтому политика простая: без подтверждения идёт только то, что host сам внёс в allowlist <em>и</em> сервер пометил как read-only. Аннотация может ужесточить политику, но не ослабить её.</p>
+  <pre><code class="lang-go">// MCPTools превращает инструменты MCP-сервера в инструменты цикла: tools/list → определения
+// для Messages API, tool_use → tools/call. Политику подтверждений задаёт host: autoApprove —
+// allowlist имён, которые можно вызывать без человека. Аннотации сервера — подсказка от
+// недоверенной стороны: они могут ужесточить политику, но не ослабить её.
+func MCPTools(ctx context.Context, s *mcp.ClientSession, autoApprove map[string]bool) (map[string]Tool, error) {
+	tools := map[string]Tool{}
+	for t, err := range s.Tools(ctx, nil) {
+		if err != nil {
+			return nil, err
+		}
+		raw, err := json.Marshal(t.InputSchema)
+		if err != nil {
+			return nil, err
+		}
+		var schema struct {
+			Properties any      `json:"properties"`
+			Required   []string `json:"required"`
+		}
+		if err := json.Unmarshal(raw, &amp;schema); err != nil {
+			return nil, err
+		}
+		name := t.Name
+		readOnly := t.Annotations != nil &amp;&amp; t.Annotations.ReadOnlyHint
+		tools[name] = Tool{
+			Param: anthropic.ToolParam{
+				Name:        name,
+				Description: anthropic.String(t.Description),
+				InputSchema: anthropic.ToolInputSchemaParam{Properties: schema.Properties, Required: schema.Required},
+			},
+			Dangerous: !autoApprove[name] || !readOnly,
+			Run: func(ctx context.Context, input json.RawMessage) (string, error) {
+				res, err := s.CallTool(ctx, &amp;mcp.CallToolParams{Name: name, Arguments: input})
+				if err != nil {
+					return "", err // протокольная ошибка или обрыв соединения
+				}
+				var b strings.Builder
+				for _, c := range res.Content {
+					if tc, ok := c.(*mcp.TextContent); ok {
+						b.WriteString(tc.Text)
+					}
+				}
+				if res.IsError {
+					return "", errors.New(b.String()) // ошибка инструмента: модель увидит текст и исправится
+				}
+				return b.String(), nil
+			},
+		}
+	}
+	return tools, nil
+}</code></pre>
+  <p>Подключение: host запускает сервер дочерним процессом и отдаёт его инструменты циклу, а подтверждения идут через уже знакомый <code>Confirm</code> с точными аргументами вызова:</p>
+  <pre><code class="lang-go">ctx := context.Background()
+client := mcp.NewClient(&amp;mcp.Implementation{Name: "my-agent", Version: "v0.1.0"}, nil)
+session, err := client.Connect(ctx, &amp;mcp.CommandTransport{Command: exec.Command("pg-mcp")}, nil)
+if err != nil {
+	log.Fatal(err)
+}
+defer session.Close()
+tools, err := agent.MCPTools(ctx, session, map[string]bool{"pg_query": true})
+if err != nil {
+	log.Fatal(err)
+}
+llm := anthropic.NewClient()
+a := agent.Agent{Model: &amp;llm.Messages, ModelID: "claude-opus-5", MaxIters: 20, Tools: tools, Confirm: agent.StdinConfirm()}
+res, err := a.Run(ctx, "How many orders were paid last week?")
+fmt.Println(res.Text, err)</code></pre>
+  <p>Для защиты от rug pull (урок <a href="#mcp-security">«Безопасность MCP»</a>) сюда же добавляют пин описаний: хэш имени, описания и схемы каждого инструмента сохраняется при первом одобрении, и при расхождении инструмент не подключается без повторного согласия.</p>
 
   <h3>Подключение к Claude Desktop и Claude Code</h3>
   <p>Claude Desktop: файл <code>claude_desktop_config.json</code> (macOS: <code>~/Library/Application Support/Claude/</code>), путь к бинарнику — абсолютный, после правки — перезапуск приложения:</p>
@@ -481,48 +1265,12 @@ claude mcp add --transport http docs https://mcp.example.com/mcp   # удалё�
 claude mcp list                                                    # проверить статус</code></pre>
   <p>Для отладки — MCP Inspector (<code>npx @modelcontextprotocol/inspector</code>): UI, который делает <code>initialize</code>, показывает список инструментов и позволяет вызвать их руками.</p>
 
-  <h2 id="context">Контекст и память</h2>
-  <h3>Context rot</h3>
-  <p>1M токенов контекста — не значит, что модель одинаково хорошо использует все 1M. Исследования (Chroma, «Context Rot», 2025; ранее «Lost in the Middle», Liu et al., 2023) показывают: качество падает с ростом длины входа, особенно когда в контексте много похожих на правду, но нерелевантных фрагментов. Для агента это критично: к 40-му шагу контекст на 90% состоит из старых логов, диффов и промежуточных рассуждений. Anthropic формулирует цель <b>context engineering</b> так: найти минимальный набор высокосигнальных токенов, максимизирующий вероятность нужного результата.</p>
-  <h3>Инструменты управления контекстом</h3>
-  <table>
-    <tr><th>Техника</th><th>Что делает</th><th>Компромисс</th></tr>
-    <tr><td><b>Обрезка результатов</b></td><td>Инструменты возвращают сжатое, с пагинацией</td><td>Дёшево; модель может не узнать о важном в хвосте</td></tr>
-    <tr><td><b>Context editing</b></td><td>Автоматически вычищает старые <code>tool_result</code> и thinking-блоки по порогу (фича API Anthropic)</td><td>Без LLM-вызова; ломает кэш префикса в точке очистки</td></tr>
-    <tr><td><b>Compaction / суммаризация</b></td><td>При приближении к лимиту история сжимается в резюме (на стороне сервера или вашим вызовом)</td><td>Теряются детали; важно, что включить в резюме: решения, открытые вопросы, пути к файлам</td></tr>
-    <tr><td><b>Scratchpad / заметки</b></td><td>Агент пишет план и прогресс в файл (<code>NOTES.md</code>, todo-лист) и перечитывает</td><td>Переживает compaction; нужен инструмент записи</td></tr>
-    <tr><td><b>Файловая память</b></td><td>Memory tool: директория <code>/memories</code>, которую агент читает/пишет между сессиями</td><td>Прозрачна, редактируема человеком; растёт и устаревает — нужна гигиена</td></tr>
-    <tr><td><b>Векторная память</b></td><td>Эпизоды/факты в векторной БД, retrieval по запросу (как RAG из модуля 5)</td><td>Масштабируется; промахи retrieval, «ложные воспоминания», сложно удалять</td></tr>
-    <tr><td><b>Субагенты</b></td><td>Грязная работа в отдельном контексте, в основной возвращается выжимка</td><td>×N токенов; потеря деталей на границе</td></tr>
-  </table>
-  <div class="callout tip"><span class="title">Практика</span>Порядок вмешательства: сначала сделайте инструменты возвращать меньше (бесплатно и сразу), затем just-in-time загрузку (агент хранит пути и ID, а не содержимое, и дочитывает по надобности — как Claude Code с <code>grep</code>/<code>glob</code> вместо загрузки всего репозитория), затем context editing, и только потом суммаризацию. Помните о кэше: любое изменение префикса инвалидирует кэш после точки изменения, поэтому чистить лучше редко и пачками, чем по чуть-чуть на каждом шаге.</div>
-
-  <h2 id="multi">Мультиагентные системы</h2>
-  <p>Схема оркестратор + субагенты: главный агент планирует, порождает субагентов с узкими задачами (каждый — со своим системным промптом, инструментами и <em>чистым контекстом</em>), получает от них сжатые результаты и синтезирует ответ. Это orchestrator-workers, где workers — сами агенты.</p>
-  <h3>Зачем</h3>
-  <ul>
-    <li><b>Изоляция контекста.</b> Субагент может прочитать 200K токенов логов и вернуть 2K выжимки; основной контекст остаётся чистым. Это главный выигрыш, важнее параллелизма.</li>
-    <li><b>Параллелизм</b> на широких задачах (исследование: 5 направлений поиска одновременно).</li>
-    <li><b>Специализация</b>: разные промпты, инструменты, модели (субагенты на Sonnet/Haiku, оркестратор на Opus).</li>
-  </ul>
-  <h3>Цена</h3>
-  <p>Anthropic в разборе своей research-системы («How we built our multi-agent research system», 2025) приводит: агент тратит примерно в 4 раза больше токенов, чем чат, мультиагентная система — примерно в 15 раз. При этом на их внутреннем research-eval мультиагентная конфигурация обошла одиночного агента на десятки процентов, и большая часть разницы в качестве объяснялась просто количеством потраченных токенов. Вывод: мультиагентность — способ потратить больше токенов с пользой на задачах, где ценность это окупает, а не бесплатное улучшение.</p>
-  <h3>Координация и режимы отказа</h3>
-  <ul>
-    <li><b>Размытое задание</b> субагенту — дублирование работы или не то направление. Задание = цель, формат выхода, какие инструменты, граница задачи, бюджет.</li>
-    <li><b>Конфликтующие действия</b>: два субагента правят один файл. Правило: параллельные субагенты — только read-only или непересекающиеся области; запись — последовательно или через оркестратора.</li>
-    <li><b>Эскалация усилий</b>: оркестратор порождает 50 субагентов на простой вопрос. В промпт — правила масштабирования (простой факт — 1 агент, сравнение — 2–4), в код — жёсткий лимит.</li>
-    <li><b>Потеря на границе</b>: выжимка выбросила важное. Субагент может писать полный результат в файл/хранилище и возвращать ссылку.</li>
-    <li><b>Отладка</b>: недетерминированные траектории × N. Без трейсинга всего дерева вызовов (модуль 9) разбирать инциденты невозможно.</li>
-  </ul>
-  <div class="callout go"><span class="title">Аналогия из Go</span>Оркестратор с субагентами — <code>errgroup.WithContext</code> + <code>SetLimit(n)</code>: fan-out с ограничением параллелизма, общая отмена и сбор результатов. И так же, как с горутинами, общая изменяемая память между субагентами — источник гонок; общайтесь сообщениями (результатами), а не общим состоянием.</div>
-
   <h2 id="hitl">Human-in-the-loop и sandbox</h2>
   <h3>Уровни автономии</h3>
   <table>
     <tr><th>Уровень</th><th>Что агент делает сам</th><th>Пример</th></tr>
     <tr><td>0. Советчик</td><td>Ничего; предлагает действия, человек выполняет</td><td>Чат-помощник SRE</td></tr>
-    <tr><td>1. Подтверждение каждого действия</td><td>Читает сам, каждое изменение — по кнопке</td><td>Режим по умолчанию в Claude Code</td></tr>
+    <tr><td>1. Подтверждение каждого действия</td><td>Читает сам, каждое изменение — по кнопке</td><td>Режим default (Manual) в Claude Code</td></tr>
     <tr><td>2. Allowlist</td><td>Безопасные/обратимые действия сам, опасные — с подтверждением</td><td><code>go test</code> — сам, <code>git push</code> — спросить</td></tr>
     <tr><td>3. Автономно в sandbox</td><td>Всё внутри изолированной среды, результат — артефакт на ревью (PR)</td><td>Фоновый coding-агент</td></tr>
     <tr><td>4. Полная автономия</td><td>Действует во внешнем мире без человека</td><td>Редко оправдано; только обратимые действия + мониторинг</td></tr>
@@ -558,6 +1306,20 @@ claude mcp list                                                    # прове�
     <p><b>Готово, когда:</b> есть таблица сравнения с цифрами и обоснованный выбор, который вы можете защитить за 3 минуты.</p>
     <label class="check"><input type="checkbox" data-save="m06-t3"> Сделал</label>
   </div>
+  <div class="task">
+    <h3>Задание 4: агент для длинной задачи в проекте C</h3>
+    <p>В <a href="projects.html#proj-mcp">проекте C</a> соберите агента, который проходит всю вашу документацию (50+ страниц, то есть 50+ шагов) и составляет черновик golden-набора для проекта B: на каждую страницу 1–2 вопроса с ответом и дословной цитатой из чанка. Инструменты — ваши <code>search_docs</code> и <code>get_chunk</code> через MCP (мост <code>MCPTools</code>), запись — только идемпотентным инструментом <code>append_case</code>, заметки — <code>Notes</code>, компакция — <code>Compactor</code>, перезапуск — <code>RunSessions</code>. Прогоните три конфигурации на одном наборе страниц: без компакции, с компакцией, с компакцией и заметками.</p>
+    <p>Оцените траектории методом из <a href="m08.html#trajectories">модуля 8</a>: по 10 прогонов каждой конфигурации на разных подмножествах страниц. Результат проверяется кодом: <code>chunk_id</code> существует, цитата — подстрока текста чанка, дублей по странице нет.</p>
+    <ul>
+      <li><b>Success rate</b> конфигурации «компакция + заметки» — не ниже 80%; успех прогона — покрыто ≥ 95% страниц и ≥ 95% записей прошли проверку цитаты.</li>
+      <li><b>Обязательные инструменты</b>: <code>get_chunk</code> по странице перед каждым <code>append_case</code> для неё; запись заметок не реже раза в 15 шагов. <b>Запрещённые</b>: любые мутации, кроме <code>append_case</code>, — 0 вызовов.</li>
+      <li><b>Шаги</b>: не больше 1,5 × число страниц; повторная обработка уже сделанной страницы — не больше 2% шагов.</li>
+      <li><b>Стоимость и контекст</b>: $ на прогон не выше порога, зафиксированного до эксперимента; пиковый контекст — не выше порога компакции плюс один ход.</li>
+      <li>Таблица трёх конфигураций: success rate, шаги, повторы, пик контекста, компакции, $ на прогон — и вывод, что дали заметки поверх компакции.</li>
+      <li>Процесс, убитый посреди прогона (<code>kill</code>) и перезапущенный через <code>RunSessions</code>, не создаёт дублей в наборе.</li>
+    </ul>
+    <label class="check"><input type="checkbox" data-save="m06-t4"> Сделал, есть таблица трёх конфигураций</label>
+  </div>
 
   <h2 id="selfcheck">Самопроверка</h2>
   <details class="q"><summary>Чем workflow отличается от агента в терминологии Anthropic?</summary><div class="a"><p>В workflow путь выполнения задан кодом, LLM — исполнитель шагов. В агенте LLM сама решает, какие инструменты вызывать и когда закончить. Workflow предсказуем, тестируем и дешевле; агент гибче на открытых задачах, но дороже и накапливает ошибки.</p></div></details>
@@ -569,6 +1331,9 @@ claude mcp list                                                    # прове�
   <details class="q"><summary>Что такое tool poisoning и rug pull?</summary><div class="a"><p>Tool poisoning — вредоносные инструкции в описании инструмента, которые видит модель, но не пользователь. Rug pull — сервер меняет описание после одобрения. Защита: доверенные и запиненные серверы, показ и фиксация описаний (hash), alert на изменения, минимальный набор инструментов, sandbox.</p></div></details>
   <details class="q"><summary>Чем context editing отличается от compaction?</summary><div class="a"><p>Context editing механически удаляет старые tool results/thinking по порогу — без вызова LLM, без пересказа. Compaction суммаризирует историю в резюме — сохраняет смысл, но теряет детали и стоит вызова. Для межсессионной памяти нужен третий механизм — memory (файлы/БД).</p></div></details>
   <details class="q"><summary>Какой инструмент идемпотентен: toggle_feature_flag или set_feature_flag(value)?</summary><div class="a"><p><code>set_feature_flag(value)</code>: повторный вызов даёт тот же результат. Агент повторяет вызовы после таймаутов и compaction, поэтому toggle — источник трудноуловимых багов.</p></div></details>
+  <details class="q"><summary>Назовите четыре рычага context engineering и приведите пример каждого.</summary><div class="a"><p>Write — сохранить вне окна: <code>NOTES.md</code>, progress-файл, git, memory tool. Select — втянуть нужное вовремя: just-in-time инструменты (grep, чтение по пути), RAG, выбор инструментов под задачу. Compress — меньше токенов на те же сведения: обрезка выводов, context editing, компакция. Isolate — разнести по окнам: субагенты, sandbox, состояние в коде.</p></div></details>
+  <details class="q"><summary>Где компактор должен резать историю и что делать с thinking-блоками сохранённых ходов?</summary><div class="a"><p>Перед ответом модели: тогда пары <code>tool_use</code> → <code>tool_result</code> не разрываются и роли чередуются. Задача остаётся дословно в первом сообщении, следом идёт резюме, затем последние N ходов. Thinking-блоки сохранённых ходов вырезаются: их подпись привязана к прежнему префиксу, а убрать их все допустимо. Кэш истории после компакции записывается заново один раз, поэтому компакция редкая и крупная.</p></div></details>
+  <details class="q"><summary>Почему для задачи на 300 шагов одной компакции мало и что делают вместо неё?</summary><div class="a"><p>Резюме теряет детали и инструкции, а процесс может оборваться. Работу строят как серию сессий со свежим контекстом: состояние — в progress-файле, списке фич (JSON, меняется только <code>passes</code>) и git; первая сессия-инициализатор готовит среду, исполнители берут по одной фиче. «Готово» проверяет код, отсутствие прогресса несколько сессий подряд — стоп, мутации идемпотентны.</p></div></details>
 
   <h2 id="interview">Вопросы с собеседований</h2>
   <details class="q interview"><summary>Спроектируйте агента, который разбирает инциденты по алертам. С чего начнёте?</summary><div class="a"><p>С вопроса, нужен ли агент: 70% алертов — известные типы, которые решаются routing + runbook-workflow (классификация алерта → фиксированный набор запросов к логам/метрикам → суммаризация). Агента оставляю для «неизвестных» алертов. Инструменты — read-only (логи, трейсы, метрики, git log, деплои), с неймспейсами и обрезкой вывода; никаких мутирующих действий на первом этапе — агент предлагает, человек делает (уровень автономии 0–1). Лимиты: 20 итераций, бюджет $ на инцидент, таймаут 5 минут. Prompt caching на system+tools. Трейсинг каждого шага. Evals: набор из 50–100 прошлых инцидентов с известной причиной, метрика — нашёл ли корневую причину (LLM-judge, откалиброванный на разметке дежурных) + стоимость и число шагов. Выход в прод — shadow mode: агент работает параллельно с дежурным, сравниваем.</p></div></details>
@@ -579,6 +1344,10 @@ claude mcp list                                                    # прове�
   <details class="q interview"><summary>Как вы проектируете инструменты для агента? Приведите примеры плохих и хороших.</summary><div class="a"><p>Плохо: 1:1 обёртка над REST (<code>get_user</code>, <code>get_orders</code>, <code>get_order_items</code>) — много вызовов, много токенов; ответ — сырой JSON с UUID и 50 полями; ошибка «400 Bad Request»; <code>toggle_*</code>. Хорошо: инструменты под задачи пользователя (<code>customer_get_context(customer_id)</code> возвращает сводку профиля и последних заказов); неймспейсы; описания с «когда использовать/не использовать» и лимитами; enum и <code>strict: true</code>; ответы с человекочитаемыми идентификаторами, пагинацией и <code>response_format</code>; ошибки с подсказкой исправления; идемпотентность мутирующих; разделение read/write для параллелизма и гейтинга. И главное — мерить: eval-набор задач, смотреть транскрипты, где модель путается в инструментах, и итерировать описания как код.</p></div></details>
   <details class="q interview"><summary>Агент работает 2 часа над задачей. Как вы управляете контекстом?</summary><div class="a"><p>Слоями. Инструменты возвращают сжатое и позволяют дочитывать (just-in-time вместо загрузки всего). Prompt caching на стабильном префиксе. Context editing вычищает старые tool results. Агент ведёт scratchpad (план, прогресс, решения, открытые вопросы) в файле — это переживает compaction. При приближении к порогу (скажем, 60–70% окна, а не 95%, из-за context rot) — compaction с явной инструкцией, что сохранить. Тяжёлые исследовательские подзадачи — в субагентов с чистым контекстом. Для межсессионного продолжения — memory-директория. И метрики: размер контекста по шагам, доля кэша, качество на длинных задачах в evals.</p></div></details>
   <details class="q interview"><summary>Как бы вы сделали sandbox для coding-агента в SaaS?</summary><div class="a"><p>Каждая задача — эфемерная microVM (Firecracker) или контейнер под gVisor, не просто Docker с root. Лимиты CPU/RAM/PID/диска, таймауты на команду и задачу. Сеть — deny by default, egress через прокси с allowlist (реестры пакетов, git-хостинг), логирование. Секреты не попадают внутрь: git-токен добавляет прокси, токены короткоживущие и со scope на один репозиторий. Результат — ветка/PR, мерж — человеком. Файловая система: только клон репозитория, read-only базовый образ. Аудит всех команд. Для мультитенантности — жёсткая изоляция между клиентами на уровне VM, никаких общих кэшей с записью.</p></div></details>
+  <details class="q interview"><summary>Агент стабильно решает короткие задачи, но на задачах длиннее 60 шагов качество падает. Как будете разбираться?</summary><div class="a"><p>Сначала измерю, а не буду гадать. В eval-наборе разобью задачи по длине траектории и посмотрю success rate по корзинам; в трейсах — размер контекста на каждом шаге, долю tool results, число компакций, повторы одних и тех же вызовов. Типичные причины: context rot (к 60-му шагу 200K, из них 80% — старые выводы), poisoning (ранняя неверная гипотеза повторяется в рассуждениях), компакция, которая теряет решения (агент переделывает сделанное — видно по повторам), confusion от лишних инструментов. Лечение по порядку цены: инструменты возвращают меньше и дочитывают just-in-time; очистка старых tool results; компакция на 60–70% рабочего бюджета с промптом, проверенным на сложных траекториях; файл заметок с лимитом, который агент перечитывает после компакции; субагенты для тяжёлого чтения; для 100+ шагов — серия сессий с progress-файлом. Каждое изменение проверяю тем же разбиением по длине, плюс стоимость и число шагов.</p><p><b>На что смотрит интервьюер:</b> начинаете ли с измерения (качество по длине, контекст по шагам), знаете ли рычаги write/select/compress/isolate и порядок их применения, помните ли про кэш и стоимость компакции, есть ли план проверки исправления, а не «увеличим окно».</p></div></details>
+  <details class="q interview"><summary>Спроектируйте harness для агента, который несколько часов переводит сервис со старого API на новый.</summary><div class="a"><p>Работа идёт серией сессий, а не одним контекстом. Первая сессия — инициализатор: находит все точки вызова старого API и пишет <code>migration.json</code> (по пункту на точку, поле <code>passes</code>), <code>init.sh</code> со сборкой и тестами, ветку и первый коммит. Каждая следующая сессия читает git log и progress, запускает <code>init.sh</code>, берёт один пункт, переводит, прогоняет тесты, коммитит и отмечает <code>passes</code>. Внутри сессии — компакция и заметки, тяжёлый поиск по коду — read-only субагентом. Harness решает «готово» сам: все пункты <code>passes</code>, тесты зелёные, grep не находит старый клиент. Отпечаток прогресса не меняется две сессии — стоп и эскалация. Общий бюджет в $ на задачу, лимит сессий. Исполнение в sandbox без доступа к проду, результат — PR на ревью человеку. Метрики: пункты в час, $ на пункт, доля откатов. Обрыв процесса стоит одной сессии.</p><p><b>На что смотрит интервьюер:</b> состояние вне контекста (файлы и git), разделение «инициализатор + исполнитель», критерий готовности в коде, а не в словах модели, детектор застревания, бюджет и sandbox, восстановление после обрыва без дублей.</p></div></details>
+  <details class="q interview"><summary>Как гарантировать, что агент не отправит клиенту одно письмо дважды?</summary><div class="a"><p>Повторы будут — вопрос, где их гасить. Источников три: ретрай после таймаута (письмо ушло, ответ потерялся), повтор от модели (после компакции она не помнит, что уже отправила) и перезапуск сессии. Поэтому дедупликация на двух уровнях. В harness — ключ из сессии, инструмента и канонических аргументов: повторный вызов получает сохранённый результат «уже отправлено», журнал — в БД с <code>UNIQUE(key)</code>, чтобы пережить рестарт. Во внешнем API — тот же ключ в <code>Idempotency-Key</code> или outbox-таблица с уникальным ключом, которую разбирает отдельный отправщик. Ретраи — только для временных ошибок и только для идемпотентных инструментов. Плюс подтверждение человеком для писем внешним адресатам и запись «отправлено X» в заметки, чтобы модель не пыталась снова. Промпт «не отправляй дважды» — не гарантия.</p><p><b>На что смотрит интервьюер:</b> понимание семантики at-least-once, два уровня дедупликации (harness и внешний API), различие временных и постоянных ошибок, устойчивость к рестарту, отсутствие надежды на промпт.</p></div></details>
+  <details class="q interview"><summary>Как вы планируете и контролируете бюджет агента — в токенах и в деньгах?</summary><div class="a"><p>Контекст планирую по слотам: system, tools, заметки, результаты инструментов за ход, история, резерв на ответ. У каждого слота — лимит и механизм: allowlist инструментов, лимит размера заметок, обрезка выводов, компакция на 60–75% рабочего бюджета, который намного меньше окна. Деньги — отдельно: бюджет в $ на задачу декоратором над клиентом модели, вложенный бюджет на каждого субагента, суммаризация через тот же бюджет. Учёт — по <code>usage</code> с разными ценами входа, выхода, чтения и записи кэша; для жёсткого потолка — оценка до вызова через <code>count_tokens</code>. Наблюдаемость: контекст и $ на каждом шаге в трейсе, доля чтения из кэша, распределение стоимости задач и алерт на хвост. Цель для бизнеса — стоимость решённой задачи, а не токена.</p><p><b>На что смотрит интервьюер:</b> мыслите ли слотами, а не «окно большое», различаете ли рабочий бюджет и окно, считаете ли кэш правильно, учитываете ли субагентов и суммаризацию, переводите ли всё в стоимость решённой задачи.</p></div></details>
 
   <h2 id="links">Источники</h2>
   <ul>
@@ -595,6 +1364,12 @@ claude mcp list                                                    # прове�
     <li><a href="https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/" target="_blank" rel="noopener">Simon Willison — The lethal trifecta</a></li>
     <li><a href="https://arxiv.org/abs/2210.03629" target="_blank" rel="noopener">Yao et al. — ReAct: Synergizing Reasoning and Acting in Language Models</a></li>
     <li><a href="https://research.trychroma.com/context-rot" target="_blank" rel="noopener">Chroma — Context Rot</a>; <a href="https://arxiv.org/abs/2307.03172" target="_blank" rel="noopener">Liu et al. — Lost in the Middle</a></li>
+    <li><a href="https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents" target="_blank" rel="noopener">Anthropic — Effective harnesses for long-running agents</a> (нояб. 2025) — инициализатор и исполнитель, progress-файл, список фич в JSON, git</li>
+    <li><a href="https://rlancemartin.github.io/2025/06/23/context_engineering/" target="_blank" rel="noopener">Lance Martin — Context Engineering for Agents</a> (июнь 2025) и <a href="https://www.langchain.com/blog/context-engineering-for-agents" target="_blank" rel="noopener">LangChain — Context Engineering</a> — рычаги write / select / compress / isolate</li>
+    <li><a href="https://cognition.com/blog/dont-build-multi-agents" target="_blank" rel="noopener">Cognition — Don't Build Multi-Agents</a> (Walden Yan, июнь 2025)</li>
+    <li><a href="https://www.dbreunig.com/2025/06/22/how-contexts-fail-and-how-to-fix-them.html" target="_blank" rel="noopener">Drew Breunig — How Long Contexts Fail</a> — poisoning, distraction, confusion, clash</li>
+    <li><a href="https://platform.claude.com/docs/en/build-with-claude/context-editing" target="_blank" rel="noopener">Claude Docs — Context editing</a>, <a href="https://platform.claude.com/docs/en/build-with-claude/compaction" target="_blank" rel="noopener">Compaction</a>, <a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool" target="_blank" rel="noopener">Memory tool</a> — параметры и статус beta</li>
+    <li><a href="https://modelcontextprotocol.io/specification/2025-06-18/server/tools" target="_blank" rel="noopener">MCP Specification — Tools</a> — аннотации как недоверенные данные, рекомендации по подтверждению</li>
   </ul>
 </main>
 <script src="assets/course.js"></script>
@@ -962,6 +1737,141 @@ claude mcp list                                                    # прове�
   };
   tr.onchange = draw;
   draw();
+})();
+
+// ---------- 5. Состав контекста по шагам длинной задачи ----------
+(function () {
+  const S = (tag, a, p) => { if (tag === 'text' && a.fill) a.style = 'fill:' + a.fill; return Course.svg(tag, a, p); };
+  const svg = document.getElementById('ce-svg');
+  const metrics = document.getElementById('ce-metrics');
+  const out = document.getElementById('ce-out');
+  const nIn = document.getElementById('ce-n'), thIn = document.getElementById('ce-th');
+  const box = { comp: 'ce-comp', notes: 'ce-notes', sub: 'ce-sub', jit: 'ce-jit' };
+  for (const k in box) box[k] = document.getElementById(box[k]);
+  // Допущения модели, K токенов и $ за 1M (сентябрь 2026): Opus 5 — основной агент, Haiku 4.5 — резюме и субагенты.
+  const BASE = 9.5, OUT = 0.6, KEEP = 6, SUMT = 2.5, NOTE = 1.5, W = 8, ROT = 150, WIN = 1000;
+  const PIN = 5, POUT = 25, HIN = 1, HOUT = 5;
+  const rnd = k => { const x = Math.sin(k * 12.9898 + 78.233) * 43758.5453; return x - Math.floor(x); };
+  const sum = a => a.reduce((s, x) => s + x, 0);
+
+  function simulate(o) {
+    const turns = [], steps = [];
+    const cost = { main: 0, sub: 0, sum: 0 };
+    let summary = 0, prevSent = 0, cacheOk = false, pending = 0, notesNext = false;
+    let done = 0, rework = 0, comps = 0, rotAt = null, overflowAt = null;
+    for (let i = 0; done < o.N && i < o.N * 3; i++) {
+      let ctx = BASE + summary + sum(turns.map(t => t.t)), compacted = false;
+      if (o.comp && ctx >= o.th && turns.length > KEEP) {
+        cost.sum += (ctx * HIN + SUMT * HOUT) / 1000;
+        const dropped = sum(turns.splice(0, turns.length - KEEP).map(t => t.t));
+        summary = SUMT; comps++; compacted = true; cacheOk = false;
+        if (o.notes) notesNext = true; else pending += Math.min(3, Math.ceil(dropped / 30));
+        ctx = BASE + summary + sum(turns.map(t => t.t));
+      }
+      if (ctx > WIN) { overflowAt = i + 1; break; }
+      if (rotAt === null && ctx > ROT) rotAt = i + 1;
+      const read = cacheOk ? prevSent : BASE; // system и tools в кэше всегда, история — пока её не переписали
+      cost.main += (read * 0.1 + (ctx - read) * 1.25) * PIN / 1000 + OUT * POUT / 1000;
+      prevSent = ctx; cacheOk = true;
+      const isRework = pending > 0;
+      const kind = isRework ? 'rework' : ['research', 'research', 'edit', 'test'][done % 4];
+      const v = 0.6 + 0.8 * rnd(i + 1);
+      let res = kind === 'edit' ? 0.8 : kind === 'test' ? 2.5 * v : (o.jit ? 1.8 : 9) * v;
+      let rel = kind === 'edit' ? 1 : kind === 'test' ? 0.5 : o.jit ? 0.7 : 0.15; // доля сигнала в выводе
+      if (o.sub && (kind === 'research' || kind === 'rework')) { cost.sub += o.jit ? 0.05 : 0.09; res = 1.2; rel = 0.9; }
+      let useful = OUT + rel * res;
+      if (notesNext) { res += NOTE; useful += NOTE; notesNext = false; }
+      if (o.notes && done % 10 === 9) { res += 0.3; useful += 0.3; }
+      const fresh = sum(turns.slice(-W).map(t => t.t));
+      steps.push({ mem: summary, fresh, stale: sum(turns.map(t => t.t)) - fresh, ctx, kind, compacted,
+        useful: BASE + summary + sum(turns.slice(-W).map(t => t.u)), cost: cost.main + cost.sub + cost.sum });
+      turns.push({ t: OUT + res, u: useful });
+      if (isRework) { pending--; rework++; } else done++;
+    }
+    const share = steps.map(s => s.useful / s.ctx);
+    return { steps, done, rework, comps, rotAt, overflowAt, cost, loop: done < o.N && !overflowAt,
+      peak: Math.max(...steps.map(s => s.ctx)), share: sum(share) / share.length };
+  }
+
+  const fK = v => v >= 1000 ? (v / 1000).toFixed(2) + 'M' : v ? Math.round(v) + 'K' : '0';
+  function draw() {
+    const o = { N: +nIn.value, th: +thIn.value, comp: box.comp.checked, notes: box.notes.checked, sub: box.sub.checked, jit: box.jit.checked };
+    const r = simulate(o), st = r.steps, n = st.length;
+    svg.innerHTML = '';
+    const X0 = 46, X1 = 630, Y0 = 208, H = 182, CY0 = 300, CH = 54;
+    const ymax = [200, 300, 400, 600, 800, 1000, 1200].find(v => v >= Math.max(r.peak, o.comp ? o.th : 0, 160) * 1.05) || 1200;
+    const y = v => Y0 - v / ymax * H, bw = (X1 - X0) / Math.max(n, 1);
+    for (let k = 0; k <= 4; k++) {
+      const v = ymax * k / 4;
+      S('line', { x1: X0, y1: y(v), x2: X1, y2: y(v), stroke: 'var(--border)', 'stroke-dasharray': k ? '2 4' : 'none' }, svg);
+      S('text', { x: X0 - 6, y: y(v) + 4, 'font-size': 10, 'text-anchor': 'end', fill: 'var(--muted)' }, svg).textContent = fK(v);
+    }
+    const LAYERS = [['fixed', '--muted', 'system + tools'], ['mem', '--teal', 'резюме и заметки'], ['fresh', '--accent', '8 последних ходов'], ['stale', '--warn', 'старая история']];
+    st.forEach((s, i) => {
+      let acc = 0;
+      for (const [k, col] of LAYERS) {
+        const v = k === 'fixed' ? BASE : s[k];
+        if (v <= 0) continue;
+        S('rect', { x: X0 + i * bw, y: y(acc + v), width: Math.max(bw - 0.4, 0.6), height: v / ymax * H, fill: `var(${col})`, opacity: k === 'stale' ? 0.55 : 0.85 }, svg);
+        acc += v;
+      }
+      if (s.compacted) S('rect', { x: X0 + i * bw, y: Y0 + 2, width: Math.max(bw, 1.5), height: 5, fill: 'var(--teal)' }, svg);
+      if (s.kind === 'rework') S('rect', { x: X0 + i * bw, y: Y0 + 8, width: Math.max(bw, 1.5), height: 4, fill: 'var(--bad)' }, svg);
+    });
+    const hline = (v, col, label, dash) => {
+      if (v > ymax) return;
+      S('line', { x1: X0, y1: y(v), x2: X1, y2: y(v), stroke: `var(${col})`, 'stroke-width': 1.4, 'stroke-dasharray': dash }, svg);
+      S('text', { x: X1 - 4, y: y(v) - 4, 'font-size': 10.5, 'text-anchor': 'end', fill: `var(${col})` }, svg).textContent = label;
+    };
+    hline(ROT, '--warn', 'зона деградации (допущение схемы)', '6 4');
+    if (o.comp) hline(o.th, '--teal', 'порог компакции', '3 3');
+    hline(WIN, '--bad', 'окно 1M', 'none');
+    if (r.rotAt) {
+      const x = X0 + (r.rotAt - 1) * bw;
+      S('line', { x1: x, y1: Y0, x2: x, y2: Y0 - H, stroke: 'var(--warn)', 'stroke-width': 1.2 }, svg);
+      S('text', { x: x + 4, y: Y0 - H + 10, 'font-size': 10.5, fill: 'var(--warn)' }, svg).textContent = 'шаг ' + r.rotAt;
+    }
+    LAYERS.forEach(([, col, l], i) => {
+      S('rect', { x: X0 + i * 128, y: 4, width: 10, height: 10, rx: 2, fill: `var(${col})` }, svg);
+      S('text', { x: X0 + i * 128 + 14, y: 13, 'font-size': 10.5, fill: 'var(--muted)' }, svg).textContent = l;
+    });
+    // накопленная стоимость
+    const cmax = Math.max(st.length ? st[n - 1].cost : 0, 0.01);
+    S('line', { x1: X0, y1: CY0, x2: X1, y2: CY0, stroke: 'var(--border)' }, svg);
+    S('text', { x: X0 - 6, y: CY0 - CH + 8, 'font-size': 10, 'text-anchor': 'end', fill: 'var(--muted)' }, svg).textContent = '$' + cmax.toFixed(cmax < 10 ? 1 : 0);
+    S('text', { x: X0 + 4, y: CY0 - CH + 8, 'font-size': 10.5, fill: 'var(--muted)' }, svg).textContent = 'накопленная стоимость';
+    const pts = st.map((s, i) => `${(X0 + (i + 1) * bw).toFixed(1)},${(CY0 - s.cost / cmax * CH).toFixed(1)}`);
+    if (pts.length) S('polyline', { points: `${X0},${CY0} ` + pts.join(' '), fill: 'none', stroke: 'var(--accent)', 'stroke-width': 2 }, svg);
+    for (const t of [0, 0.25, 0.5, 0.75, 1]) {
+      const i = Math.round(t * n);
+      S('text', { x: X0 + i * bw, y: CY0 + 14, 'font-size': 10, 'text-anchor': 'middle', fill: 'var(--muted)' }, svg).textContent = i;
+    }
+    S('text', { x: X1, y: CY0 + 26, 'font-size': 10, 'text-anchor': 'end', fill: 'var(--muted)' }, svg).textContent = 'вызов модели →  · бирюзовые метки — компакции, красные — переделки';
+    const total = r.cost.main + r.cost.sub + r.cost.sum;
+    metrics.innerHTML = [
+      ['шагов', `${n}` + (r.rework ? ` (${r.rework} переделок)` : '')],
+      ['пик контекста', fK(r.peak)],
+      ['полезных токенов', Math.round(r.share * 100) + '%'],
+      ['зона деградации', r.rotAt ? 'с шага ' + r.rotAt : 'не достигнута'],
+      ['компакций', r.comps],
+      ['стоимость', '$' + total.toFixed(2)],
+    ].map(([k, v]) => `<div>${k}<b>${v}</b></div>`).join('');
+    const parts = `основной агент $${r.cost.main.toFixed(2)}` + (r.cost.sub ? `, субагенты $${r.cost.sub.toFixed(2)}` : '') + (r.cost.sum ? `, резюме $${r.cost.sum.toFixed(2)}` : '');
+    let verdict;
+    if (r.overflowAt) verdict = `Контекст переполнил окно 1M на шаге ${r.overflowAt}: задача не завершена, деньги потрачены.`;
+    else if (r.loop) verdict = `Агент ходит по кругу: компакции без заметок теряют факты быстрее, чем он их добывает, — за ${n} вызовов сделано ${r.done} из ${o.N} шагов.`;
+    else if (r.rework > o.N * 0.1) verdict = `Готово, но ${r.rework} шагов — переделки: компакция без заметок теряет, что уже проверено. Включите заметки.`;
+    else if (r.rotAt) verdict = `Готово, но с шага ${r.rotAt} агент работает в зоне деградации: решения начала задачи тонут в старых выводах.`;
+    else verdict = `Готово: контекст не вышел из рабочего бюджета.`;
+    out.textContent = `${verdict}\nСтоимость: ${parts}. Полезные токены — system, резюме, заметки и релевантная доля 8 последних ходов.\n\n` +
+      `Допущения: system + tools 9,5K; ход модели 0,6K; исследование возвращает ~9K (дамп файлов) или ~1,8K (just-in-time), правка — 0,8K, тест — ~2,5K. ` +
+      `Компакция оставляет 6 последних ходов и резюме 2,5K от Haiku 4.5; без заметок она теряет факты, и агент переделывает 1–3 шага. ` +
+      `Субагент на Haiku возвращает 1,2K вместо сырого вывода. Prompt caching включён: чтение 0,1×, запись 1,25×. ` +
+      `Граница деградации 150K условна: в реальности спад плавный и зависит от задачи.`;
+  }
+  for (const k in box) box[k].onchange = draw;
+  Course.bindRange(nIn, v => v, draw);
+  Course.bindRange(thIn, v => v + 'K', draw);
 })();
 </script>
 </body>

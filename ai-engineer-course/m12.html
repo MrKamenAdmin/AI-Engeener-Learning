@@ -153,11 +153,11 @@ prompt caching системного промпта (1.5K из 5K, чтение 0
       <label><span>Доля хитов кэша ответов <output id="o-hit"></output></span><input type="range" id="c-hit" min="0" max="80" step="1" value="0"></label>
       <div class="lbl"><span>Модель
         <select id="c-model" style="width:auto">
-          <option value="10,50">Fable 5.1 · $10/$50</option>
-          <option value="4,20">Opus 5.5 · $4/$20</option>
-          <option value="5,25">Opus 5 · $5/$25</option>
-          <option value="2,10" selected>Sonnet 5 · $2/$10</option>
-          <option value="1,5">Haiku 4.5 · $1/$5</option>
+          <option value="10,50,0.025">Fable 5.1 · $10/$50</option>
+          <option value="4,20,0.05">Opus 5.5 · $4/$20</option>
+          <option value="5,25,0.1">Opus 5 · $5/$25</option>
+          <option value="2,10,0.1" selected>Sonnet 5 · $2/$10</option>
+          <option value="1,5,0.1">Haiku 4.5 · $1/$5</option>
         </select></span>
         <span><label style="flex-direction:row;gap:6px"><input type="checkbox" id="c-batch"> Batch API (−50%, асинхронно)</label></span>
       </div>
@@ -177,7 +177,7 @@ prompt caching системного промпта (1.5K из 5K, чтение 0
     <div class="tab-panel" data-tab="Go"><pre><code class="lang-go">// Оценка стоимости и лимитов: тот же расчёт, что в калькуляторе.
 package estimate
 
-type Price struct{ In, Out float64 } // $ за 1M токенов
+type Price struct{ In, Out, CacheRead float64 } // $ за 1M токенов; CacheRead — множитель чтения кэша: 0.1 (Opus 5.5 — 0.05, Fable 5.1 — 0.025)
 
 type Load struct {
 	RPSAvg, PeakFactor   float64
@@ -198,7 +198,7 @@ type Result struct {
 func Estimate(l Load, p Price) Result {
 	cached := l.InTokens * l.CachedShare
 	uncached := l.InTokens - cached
-	perCall := (uncached*p.In + cached*p.In*0.1 + l.OutTokens*p.Out) / 1e6
+	perCall := (uncached*p.In + cached*p.In*p.CacheRead + l.OutTokens*p.Out) / 1e6
 	perReq := perCall * l.CallsPerReq
 	if l.Batch {
 		perReq *= 0.5
@@ -216,16 +216,16 @@ func Estimate(l Load, p Price) Result {
     <div class="tab-panel" data-tab="Python"><pre><code class="lang-python"># То же в ноутбуке: удобно гонять сценарии «а если» в pandas.
 import pandas as pd
 
-PRICES = {  # $ за 1M токенов, на момент написания (сентябрь 2026)
-    "claude-fable-5-1": (10, 50), "claude-opus-5-5": (4, 20),
-    "claude-opus-5": (5, 25), "claude-sonnet-5": (2, 10), "claude-haiku-4-5": (1, 5),
+PRICES = {  # $ за 1M токенов вход/выход и множитель чтения кэша (октябрь 2026)
+    "claude-fable-5-1": (10, 50, 0.025), "claude-opus-5-5": (4, 20, 0.05),
+    "claude-opus-5": (5, 25, 0.1), "claude-sonnet-5": (2, 10, 0.1), "claude-haiku-4-5": (1, 5, 0.1),
 }
 SEC_PER_MONTH = 2.6e6
 
 def estimate(rps, tin, tout, model, cached_share=0.0, calls=1, hit=0.0, batch=False):
-    p_in, p_out = PRICES[model]
+    p_in, p_out, cache_read = PRICES[model]
     cached = tin * cached_share
-    per_call = ((tin - cached) * p_in + cached * p_in * 0.1 + tout * p_out) / 1e6
+    per_call = ((tin - cached) * p_in + cached * p_in * cache_read + tout * p_out) / 1e6
     per_req = per_call * calls * (0.5 if batch else 1)
     return {"model": model, "per_req": per_req,
             "per_month": rps * SEC_PER_MONTH * (1 - hit) * per_req}
@@ -733,7 +733,7 @@ func (d *Deps) WithBudget(ctx context.Context, team *Team, worstUSD float64,
   <table>
     <tr><th>Решение</th><th>Выбор</th><th>Альтернативы</th></tr>
     <tr><td>Формат API</td><td>Проксирование нативных API провайдеров + OpenAI-совместимый эндпоинт для простых случаев</td><td>Только собственный унифицированный API теряет специфичные фичи (prompt caching, thinking, citations). Только нативные — нет переносимости. Обычно делают оба.</td></tr>
-    <tr><td>Build vs buy</td><td>Свой тонкий прокси на Go, если нужны свои политики и комплаенс</td><td>Готовые решения (LiteLLM, Portkey, Kong AI Gateway, облачные шлюзы) закрывают 80% за дни. Для интервью: назвать их и объяснить, что именно заставило бы писать своё.</td></tr>
+    <tr><td>Build vs buy</td><td>Свой тонкий прокси на Go, если нужны свои политики и комплаенс</td><td>Готовые решения (LiteLLM, Portkey, Kong AI Gateway, облачные шлюзы) закрывают 80% за дни. Для интервью: назвать их и объяснить, что именно заставило бы писать своё (ландшафт и риски вендоров на октябрь 2026 — <a href="m09.html#gateway">модуль 9</a>).</td></tr>
     <tr><td>Кэш</td><td>Точный кэш по хэшу (модель + параметры + сообщения), opt-in; семантический только для разрешённых маршрутов</td><td>Семантический кэш по умолчанию опасен: «похожие» вопросы с разными ответами, утечка между пользователями. Prompt caching провайдера работает всегда и не требует решений от шлюза, если шлюз не ломает префикс.</td></tr>
     <tr><td>Fallback</td><td>Цепочка по политике маршрута: та же модель в другом регионе → эквивалентная модель → деградация</td><td>Автоматический fallback на модель другого семейства меняет поведение: промпты могут не переноситься. Нужен eval на каждую пару.</td></tr>
     <tr><td>Учёт токенов</td><td>Из <code>usage</code> ответа (в стриме — из <code>message_delta</code>), резерв по max_tokens</td><td>Свой токенизатор — неточен для чужих моделей; только постфактум — команда может перерасходовать бюджет в пике.</td></tr>
@@ -978,7 +978,7 @@ func Execute(ctx context.Context, core Core, c Client, l Limits, p Proposal, con
   </div>
   <div class="task">
     <h3>Задание 2: новый кейс по скелету</h3>
-    <p>Разберите письменно на 2–3 страницы кейс, которого нет в модуле: «ассистент для код-ревью в GitLab», «генерация описаний товаров для маркетплейса на 5M SKU» или «голосовой ассистент записи к врачу». Обязательно: таблица требований, расчёт стоимости с формулой, схема, 3 альтернативы с компромиссами, план evals, 5 режимов отказов.</p>
+    <p>Разберите письменно на 2–3 страницы кейс, которого нет в модуле: «ассистент для код-ревью в GitLab», «генерация описаний товаров для маркетплейса на 5M SKU» или «голосовой ассистент записи к врачу» (архитектура голоса и бюджет латентности — <a href="m16.html#voice-arch">модуль 16</a>). Обязательно: таблица требований, расчёт стоимости с формулой, схема, 3 альтернативы с компромиссами, план evals, 5 режимов отказов.</p>
     <label class="check"><input type="checkbox" data-save="m12-t2"> Документ написан и перечитан через день</label>
   </div>
   <div class="task">
@@ -1141,12 +1141,12 @@ func Execute(ctx context.Context, core Core, c Client, l Limits, p Proposal, con
   const fmt$ = v => v >= 1e6 ? "$" + (v / 1e6).toFixed(2) + "M" : v >= 1e3 ? "$" + (v / 1e3).toFixed(1) + "K" : v >= 1 ? "$" + v.toFixed(0) : "$" + v.toFixed(v >= 0.01 ? 3 : 5);
   const fmtB = b => b >= 1e12 ? (b / 1e12).toFixed(2) + " ТБ" : b >= 1e9 ? (b / 1e9).toFixed(1) + " ГБ" : (b / 1e6).toFixed(0) + " МБ";
   const PRESETS = {
-    "Поддержка": { rps: 0.8, peak: 10, in: 5000, pref: 30, out: 300, calls: 1, hit: 0, model: "2,10", batch: false, vec: 40e6, dim: 2, dtype: "1" },
-    "Поиск": { rps: 30, peak: 7, in: 200, pref: 0, out: 20, calls: 1, hit: 20, model: "1,5", batch: false, vec: 80e6, dim: 2, dtype: "1" },
-    "Text-to-SQL": { rps: 0.12, peak: 5, in: 12000, pref: 50, out: 500, calls: 4, hit: 0, model: "2,10", batch: false, vec: 1e5, dim: 2, dtype: "4" },
-    "Суммаризация": { rps: 1.15, peak: 3, in: 3500, pref: 15, out: 400, calls: 1, hit: 0, model: "1,5", batch: true, vec: 1e3, dim: 2, dtype: "4" },
-    "LLM-gateway": { rps: 58, peak: 5, in: 4000, pref: 30, out: 400, calls: 1, hit: 10, model: "2,10", batch: false, vec: 1e6, dim: 2, dtype: "4" },
-    "Банк-агент": { rps: 2.8, peak: 5, in: 7000, pref: 55, out: 250, calls: 1, hit: 0, model: "2,10", batch: false, vec: 2e4, dim: 2, dtype: "4" },
+    "Поддержка": { rps: 0.8, peak: 10, in: 5000, pref: 30, out: 300, calls: 1, hit: 0, model: "2,10,0.1", batch: false, vec: 40e6, dim: 2, dtype: "1" },
+    "Поиск": { rps: 30, peak: 7, in: 200, pref: 0, out: 20, calls: 1, hit: 20, model: "1,5,0.1", batch: false, vec: 80e6, dim: 2, dtype: "1" },
+    "Text-to-SQL": { rps: 0.12, peak: 5, in: 12000, pref: 50, out: 500, calls: 4, hit: 0, model: "2,10,0.1", batch: false, vec: 1e5, dim: 2, dtype: "4" },
+    "Суммаризация": { rps: 1.15, peak: 3, in: 3500, pref: 15, out: 400, calls: 1, hit: 0, model: "1,5,0.1", batch: true, vec: 1e3, dim: 2, dtype: "4" },
+    "LLM-gateway": { rps: 58, peak: 5, in: 4000, pref: 30, out: 400, calls: 1, hit: 10, model: "2,10,0.1", batch: false, vec: 1e6, dim: 2, dtype: "4" },
+    "Банк-агент": { rps: 2.8, peak: 5, in: 7000, pref: 55, out: 250, calls: 1, hit: 0, model: "2,10,0.1", batch: false, vec: 2e4, dim: 2, dtype: "4" },
   };
   const ids = ["rps", "peak", "in", "pref", "out", "calls", "hit", "tps", "vec", "dim"];
   const fmts = {
@@ -1172,10 +1172,10 @@ func Execute(ctx context.Context, core Core, c Client, l Limits, p Proposal, con
     const v = k => +$("c-" + k).value;
     const rps = 10 ** v("rps"), peak = v("peak"), tin = v("in"), pref = v("pref") / 100, tout = v("out");
     const calls = v("calls"), hit = v("hit") / 100, tps = v("tps");
-    const [pin, pout] = $("c-model").value.split(",").map(Number);
+    const [pin, pout, cr] = $("c-model").value.split(",").map(Number);
     const batch = $("c-batch").checked;
     const cached = tin * pref, unc = tin - cached;
-    const perCall = (unc * pin + cached * pin * 0.1 + tout * pout) / 1e6;
+    const perCall = (unc * pin + cached * pin * cr + tout * pout) / 1e6;
     const noCache = (tin * pin + tout * pout) / 1e6;
     const perReq = perCall * calls * (batch ? 0.5 : 1);
     const reqMonth = rps * 2.6e6;
@@ -1200,15 +1200,15 @@ func Execute(ctx context.Context, core Core, c Client, l Limits, p Proposal, con
     ];
     $("calc-out").innerHTML = cards.map(c => `<div class="card"><div class="k">${c[0]}</div><div class="v">${c[1]}</div><div class="s">${c[2]}</div></div>`).join("");
     const saveCache = reqMonth * calls * cached * pin * 0.9 / 1e6 * (1 - hit) * (batch ? 0.5 : 1);
-    const outShare = (tout * pout) / (unc * pin + cached * pin * 0.1 + tout * pout);
+    const outShare = (tout * pout) / (unc * pin + cached * pin * cr + tout * pout);
     const tips = [];
     if (outShare > 0.5) tips.push("Больше половины стоимости — выход: сокращайте ответы, structured output, max_tokens.");
     else tips.push(`Вход даёт ${(100 - outShare * 100).toFixed(0)}% стоимости: prompt caching и сокращение контекста — главные рычаги.`);
-    if (pref > 0) tips.push(`Prompt caching экономит ≈ ${fmt$(saveCache)}/мес (чтение кэша 0.1× цены входа; запись 1.25× не учтена).`);
+    if (pref > 0) tips.push(`Prompt caching экономит ≈ ${fmt$(saveCache)}/мес (чтение кэша ${cr}× цены входа; запись 1.25× не учтена).`);
     if (!batch && lat > 0 && tout > 0 && hit < 0.05) tips.push("Если результат не нужен интерактивно — Batch API даст −50%.");
     if (calls > 3) tips.push("Много вызовов на запрос: вход каждого шага включает историю — проверьте рост контекста и лимит шагов.");
     if (idx > 64e9 * 0.7) tips.push("Индекс не влезает в одну машину 64 ГБ: квантизация, уменьшение размерности или шардирование.");
-    $("calc-readout").textContent = "Формула: req/мес × (1 − hit) × calls × (in_unc×P_in + in_cached×P_in×0.1 + out×P_out)/1e6" + (batch ? " × 0.5" : "") + "\n• " + tips.join("\n• ");
+    $("calc-readout").textContent = "Формула: req/мес × (1 − hit) × calls × (in_unc×P_in + in_cached×P_in×" + cr + " + out×P_out)/1e6" + (batch ? " × 0.5" : "") + "\n• " + tips.join("\n• ");
   }
   pre.firstChild.click();
 })();

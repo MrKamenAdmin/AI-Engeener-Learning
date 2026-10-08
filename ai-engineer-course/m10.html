@@ -50,7 +50,7 @@
     <li><b>Continuous batching</b> (iteration-level scheduling, впервые в системе Orca). Статический батч ждёт, пока закончится самая длинная последовательность. В continuous batching на каждом шаге декодирования завершённые запросы уходят, а новые встают на их место. GPU загружен постоянно, и короткие запросы не ждут длинные.</li>
     <li><b>Почему батч почти бесплатен.</b> На шаге decode веса читаются из памяти один раз на весь батч. Пока батч маленький, время шага определяется чтением весов, и 32 запроса идут почти так же быстро, как один: throughput растёт линейно, TPOT почти не меняется. С ростом батча растёт чтение KV-cache и объём вычислений, и шаг начинает замедляться. Где этот перелом для вашей модели и GPU, покажет схема ниже.</li>
     <li><b>PagedAttention.</b> KV-cache хранится не одним непрерывным куском на максимальную длину последовательности, а блоками по 16 токенов, как страницы виртуальной памяти в ОС. Блоки выделяются по мере роста последовательности, почти без фрагментации, и могут разделяться между запросами с общим префиксом (copy-on-write). В ту же память GPU помещается в разы больше одновременных последовательностей, и, по данным статьи, пропускная способность выросла в 2–4 раза относительно предыдущих систем.</li>
-    <li><b>Preemption.</b> Если KV-cache кончился посреди генерации, vLLM вытесняет часть запросов и позже пересчитывает их заново (режим <code>RECOMPUTE</code> по умолчанию). Пользователь видит это как скачок ITL. Ненулевой счётчик <code>vllm:num_preemptions</code> в <code>/metrics</code> — повод снизить <code>--max-num-seqs</code> или добавить памяти.</li>
+    <li><b>Preemption.</b> Если KV-cache кончился посреди генерации, vLLM вытесняет часть запросов и позже пересчитывает их заново (режим <code>RECOMPUTE</code> по умолчанию). Пользователь видит это как скачок ITL. Растущий счётчик <code>vllm:num_preemptions_total</code> в <code>/metrics</code> — повод снизить <code>--max-num-seqs</code> или добавить памяти.</li>
   </ul>
 
   <h3>Конкурентность из бюджета KV-cache</h3>
@@ -91,7 +91,7 @@
     <div class="controls">
       <label>модель <select id="sv-model" class="inline"><option value="q4">Qwen3-4B</option><option value="q8" selected>Qwen3-8B</option><option value="q32">Qwen3-32B</option><option value="l70">Llama 3.3 70B</option></select></label>
       <label>веса <select id="sv-wq" class="inline"><option value="bf16">BF16</option><option value="fp8">FP8</option><option value="int4">INT4 (AWQ/GPTQ)</option></select></label>
-      <label>GPU <select id="sv-gpu" class="inline"><option value="l4">L4 24 ГБ</option><option value="a100">A100 80 ГБ</option><option value="h100" selected>H100 80 ГБ</option><option value="h200">H200 141 ГБ</option></select></label>
+      <label>GPU <select id="sv-gpu" class="inline"><option value="l4">L4 24 ГБ</option><option value="a100">A100 SXM 80 ГБ</option><option value="h100" selected>H100 SXM 80 ГБ</option><option value="h200">H200 SXM 141 ГБ</option></select></label>
       <label>GPU в tensor parallel <input type="range" id="sv-tp" min="0" max="3" step="1" value="0"> <output></output></label>
       <label><input type="checkbox" id="sv-kv8"> KV-cache в FP8</label>
       <label>промпт, токенов <input type="range" id="sv-in" min="7" max="17" step="0.5" value="11"> <output></output></label>
@@ -146,7 +146,7 @@
     <tr><td><b>SGLang</b></td><td>То же; силён в структурированной генерации, агентных сценариях и RL-rollout'ах</td><td>RadixAttention (дерево префиксов), быстрый constrained decoding, разнесение prefill и decode по разным GPU для больших MoE-моделей. Версия 0.5.x</td></tr>
     <tr><td><b>TGI</b> (Hugging Face)</td><td>Исторически — сервер Hugging Face Inference Endpoints</td><td>Переведён в режим поддержки (maintenance mode), репозиторий в архиве. Сам Hugging Face рекомендует vLLM и SGLang. Для новых проектов не выбирать</td></tr>
     <tr><td><b>llama.cpp</b> (<code>llama-server</code>)</td><td>CPU, Apple Silicon, потребительские GPU, edge</td><td>GGUF, частичная выгрузка слоёв на GPU, OpenAI-совместимый сервер</td></tr>
-    <tr><td><b>Ollama</b></td><td>Локальная разработка, ноутбук</td><td>Поверх llama.cpp, одна команда, OpenAI-совместимый API на <code>:11434/v1</code>. По умолчанию контекст 4096 токенов и один запрос на модель за раз. Для высоконагруженного прода не предназначен</td></tr>
+    <tr><td><b>Ollama</b></td><td>Локальная разработка, ноутбук</td><td>На базе ggml и llama.cpp, одна команда, OpenAI-совместимый API на <code>:11434/v1</code>. Контекст по умолчанию зависит от видеопамяти (4K при меньше 24 ГБ, 32K при 24–48 ГБ, 256K от 48 ГБ), один запрос на модель за раз. Для высоконагруженного прода не предназначен</td></tr>
   </table>
   <p>Почему эти движки быстрые, разобрано в разделе <a href="#serving">«Как устроен serving»</a>. Память под веса — параметры × байты: 8B в BF16 занимает 16 ГБ, 70B в BF16 — 140 ГБ (минимум 2×H100 80 ГБ, на практике 4 ради KV-cache), 70B в FP8 — около 70 ГБ. Конкурентность считается по KV-бюджету, формула выше.</p>
 
@@ -234,7 +234,7 @@ vllm bench serve --model Qwen/Qwen3-8B \
   <h3>Ollama для локальной разработки</h3>
   <p>Ollama даёт тот же OpenAI-совместимый API на ноутбуке без GPU-сервера. Поэтому клиентский код, Go-шлюз из следующего раздела и eval-прогон можно отладить локально, а потом переключить <code>base_url</code> на vLLM.</p>
   <pre><code class="lang-bash">ollama pull qwen3:8b                       # ≈ 5 ГБ, 4-битная GGUF-квантизация
-OLLAMA_CONTEXT_LENGTH=16384 ollama serve   # по умолчанию контекст 4096: длинный RAG-промпт не поместится
+OLLAMA_CONTEXT_LENGTH=16384 ollama serve   # по умолчанию 4K при VRAM &lt; 24 ГБ: длинный RAG-промпт обрежется
 curl -s http://localhost:11434/v1/chat/completions \
   -d '{"model": "qwen3:8b", "messages": [{"role": "user", "content": "Привет"}], "stream": true}'</code></pre>
   <ul>
@@ -248,7 +248,7 @@ curl -s http://localhost:11434/v1/chat/completions \
   </div>
 
   <h2 id="gateway">Go-шлюз перед vLLM</h2>
-  <p>Клиентам не стоит ходить в vLLM напрямую. Флаг <code>--api-key</code> защищает только пути <code>/v1</code>, <code>/v2</code> и <code>/inference</code>, остальные эндпоинты открыты, и документация vLLM сама советует ставить перед сервером reverse proxy. Общий LLM-шлюз с роутингом между провайдерами разобран в <a href="m09.html#gateway">модуле 9</a>; здесь — его часть, специфичная для своего сервера. Кроме авторизации, шлюз берёт на себя то, чего vLLM не делает:</p>
+  <p>Клиентам не стоит ходить в vLLM напрямую. Флаг <code>--api-key</code> защищает только пути с префиксами <code>/v1</code>, <code>/v2</code>, <code>/inference</code> и <code>/cohere</code>, остальные эндпоинты открыты, и документация vLLM сама советует ставить перед сервером reverse proxy. Общий LLM-шлюз с роутингом между провайдерами разобран в <a href="m09.html#gateway">модуле 9</a>; здесь — его часть, специфичная для своего сервера. Кроме авторизации, шлюз берёт на себя то, чего vLLM не делает:</p>
   <ul>
     <li><b>Публичные имена моделей.</b> Клиент просит <code>clf</code>, шлюз отправляет в vLLM имя LoRA-адаптера <code>ticket-clf</code> или базовой модели. Клиент не знает о внутренней раскладке, а откат адаптера — правка одной строки конфига.</li>
     <li><b>Лимит конкурентности под <code>--max-num-seqs</code>.</b> vLLM при перегрузке по умолчанию не отказывает, а держит лишние запросы в очереди ожидания (метрика <code>vllm:num_requests_waiting</code>), и TTFT растёт без предела. Шлюз держит очередь сам: запрос ждёт свободный слот ограниченное время, потом получает 429 с <code>Retry-After</code>, и клиент или балансировщик уходит на другую реплику или на API-провайдера (fallback из модуля 9).</li>
@@ -676,7 +676,7 @@ func TestNoFirstByteRetries(t *testing.T) {
     <tr><td><b>Mistral</b>: Small 3.x, Large 3, 7B, Mixtral</td><td>Apache 2.0</td><td>Как выше. Но часть моделей прошлых лет (Mistral Large 2, Codestral 22B) вышла под Mistral Research License и Non-Production License: коммерческое использование только по отдельному договору</td></tr>
     <tr><td><b>Gemma 4</b></td><td>Apache 2.0</td><td>Как выше</td></tr>
     <tr><td><b>Gemma 3 и раньше</b></td><td>Gemma Terms of Use</td><td>Prohibited Use Policy, которую при распространении нужно включить в договор с вашими пользователями. Модели, обученные на синтетике от Gemma (дистилляция), считаются производными. Google оставляет за собой право ограничить использование при нарушении</td></tr>
-    <tr><td><b>Llama 3.x, Llama 4</b></td><td>Llama Community License</td><td>При 700 млн MAU и больше на дату релиза модели нужна отдельная лицензия от Meta. При распространении модели или продукта с ней — копия лицензии и надпись «Built with Llama» на видном месте. Модель, созданная или улучшенная с помощью Llama или её выходов, которую вы распространяете или делаете доступной другим, должна называться «Llama…». Обязательна Acceptable Use Policy. Для мультимодальных моделей (Llama 3.2 Vision, Llama 4) права не предоставляются компаниям с основным местом деятельности в ЕС и жителям ЕС; на конечных пользователей продукта это не распространяется</td></tr>
+    <tr><td><b>Llama 3.x, Llama 4</b></td><td>Llama Community License</td><td>Если на дату релиза версии у ваших продуктов было больше 700 млн MAU (за предыдущий месяц), нужна отдельная лицензия от Meta. При распространении модели или предоставлении доступа к ней или к продукту и сервису с ней — копия лицензии и надпись «Built with Llama» на видном месте. Модель, созданная или улучшенная с помощью Llama или её выходов, которую вы распространяете или делаете доступной другим, должна называться «Llama…». Обязательна Acceptable Use Policy. Для мультимодальных моделей (Llama 3.2 Vision, Llama 4) права не предоставляются компаниям с основным местом деятельности в ЕС и жителям ЕС; на конечных пользователей продукта это не распространяется</td></tr>
     <tr><td><b>DeepSeek-R1, V3-0324 и новее</b></td><td>MIT</td><td>Почти ничего: сохранить уведомление</td></tr>
     <tr><td><b>gpt-oss</b> (OpenAI)</td><td>Apache 2.0 и usage policy</td><td>Как Apache, плюс короткая политика использования в репозитории модели</td></tr>
   </table>
@@ -1015,7 +1015,7 @@ GPU с bf16 (Colab L4/A100, RTX 30xx+, H100), данные из скрипта �
       --with datasets==5.1.0 --with accelerate==1.15.0 --with torch \
       python lora_sft.py --train train.jsonl --val val.jsonl --test test.jsonl --model Qwen/Qwen3-4B
 CPU dry-run (проверка, что пайплайн собирается; метрики на демо-данных ничего не значат):
-  ... python lora_sft.py --demo --model Qwen/Qwen3-0.6B --cpu --max-steps 4
+  ... python lora_sft.py --demo --model trl-internal-testing/tiny-Qwen3ForCausalLM --cpu --max-steps 2
 """
 import argparse
 import random
@@ -1305,7 +1305,7 @@ func main() {
   </div>
   <div class="callout tip"><span class="title">Что упрощено</span>
     <p>Валидатор ищет только точные дубликаты после нормализации. Почти-дубликаты требуют MinHash или embeddings, добавляйте их, когда в данных есть шаблонные тексты. Длина считается в символах. Если лимит жёсткий (<code>max_length</code> в тренере), считайте токенизатором целевой модели в Python-части пайплайна.</p>
-    <p>LoRA- и DPO-скрипты сверены с TRL 1.14, PEFT 0.21 и Transformers 5.19 (октябрь 2026) и прогнаны на CPU в режиме <code>--demo</code> на Qwen3-0.6B (4 шага, около минуты): это проверка, что пайплайн собирается, а не обучение. Полноценный запуск — на GPU. Две ловушки версий. <code>assistant_only_loss</code> требует chat template с разметкой <code>{% generation %}</code>: для Qwen, Llama 3 и Gemma 3 TRL подставит обучающий шаблон сам, для остальных (например, SmolLM2) упадёт с ошибкой, и тогда нужен свой шаблон (<code>chat_template_path</code>) или <code>assistant_only_loss=False</code>. И в <code>SFTConfig</code> по умолчанию <code>bf16=True</code>, поэтому на T4 и CPU его надо выключать явно, как в скрипте.</p>
+    <p>LoRA- и DPO-скрипты сверены с TRL 1.14, PEFT 0.21 и Transformers 5.19 (октябрь 2026) и прогнаны на CPU в режиме <code>--demo</code> на крошечной тестовой модели <code>trl-internal-testing/tiny-Qwen3ForCausalLM</code> (2 шага, секунды): это проверка, что API и пайплайн собираются, а не обучение; метрики на ней ничего не значат. Полноценный запуск — на GPU. Две ловушки версий. <code>assistant_only_loss</code> требует chat template с разметкой <code>{% generation %}</code>: для Qwen, Llama 3 и Gemma 3 TRL подставит обучающий шаблон сам, для остальных (например, SmolLM2) упадёт с ошибкой, и тогда нужен свой шаблон (<code>chat_template_path</code>) или <code>assistant_only_loss=False</code>. И в <code>SFTConfig</code> по умолчанию <code>bf16=True</code>, поэтому на T4 и CPU его надо выключать явно, как в скрипте.</p>
   </div>
 
   <h2 id="dpo">DPO на практике</h2>
@@ -1555,11 +1555,14 @@ curl -s localhost:8000/v1/models | jq '.data[] | {id, parent}'</code></pre>
     q32: { name: 'Qwen3-32B', P: 32.8e9, L: 64, kv: 8, hd: 128 },
     l70: { name: 'Llama 3.3 70B', P: 70.6e9, L: 80, kv: 8, hd: 128 },
   };
-  const GPUS = { // паспорт: память ГБ, полоса ТБ/с, BF16 dense TFLOPS, есть ли FP8
+  // Паспорт NVIDIA (nvidia.com/data-center, октябрь 2026): память ГБ, полоса ТБ/с, BF16 Tensor TFLOPS без sparsity
+  // (для L4, H100, H200 сайт даёт цифры со sparsity — вдвое больше), есть ли FP8 (FP8 dense = 2 × BF16). Форм-фактор SXM: у A100 PCIe полоса
+  // 1.94 ТБ/с; H100 NVL — 94 ГБ, 3.9 ТБ/с, 835 TFLOPS; H200 NVL — 141 ГБ, 4.8 ТБ/с, 835 TFLOPS.
+  const GPUS = {
     l4: { name: 'L4 24 ГБ', mem: 24, bw: 0.3, tf: 121, fp8: true },
-    a100: { name: 'A100 80 ГБ', mem: 80, bw: 2.0, tf: 312, fp8: false },
-    h100: { name: 'H100 80 ГБ', mem: 80, bw: 3.35, tf: 989, fp8: true },
-    h200: { name: 'H200 141 ГБ', mem: 141, bw: 4.8, tf: 989, fp8: true },
+    a100: { name: 'A100 SXM 80 ГБ', mem: 80, bw: 2.04, tf: 312, fp8: false },
+    h100: { name: 'H100 SXM 80 ГБ', mem: 80, bw: 3.35, tf: 989, fp8: true },
+    h200: { name: 'H200 SXM 141 ГБ', mem: 141, bw: 4.8, tf: 989, fp8: true },
   };
   const WQ = { bf16: { b: 2, name: 'BF16' }, fp8: { b: 1, name: 'FP8' }, int4: { b: 0.56, name: 'INT4' } }; // INT4 с масштабами ≈ 0.56 байта
   const TP = [1, 2, 4, 8];

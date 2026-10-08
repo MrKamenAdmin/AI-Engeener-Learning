@@ -8,7 +8,7 @@ GPU (bf16):
   uv run --python 3.12 --with trl==1.14.2 --with peft==0.21.2 --with transformers==5.19.0 \
       --with datasets==5.1.0 --with accelerate==1.15.0 --with torch \
       python dpo.py --train pairs_train.jsonl --val pairs_val.jsonl --model out/ticket-sft/merged
-CPU dry-run: ... python dpo.py --demo --model Qwen/Qwen3-0.6B --cpu --max-steps 4
+CPU dry-run: ... python dpo.py --demo --model trl-internal-testing/tiny-Qwen3ForCausalLM --cpu --max-steps 2
 """
 import argparse
 

@@ -5,7 +5,7 @@ GPU с bf16 (Colab L4/A100, RTX 30xx+, H100), данные из скрипта �
       --with datasets==5.1.0 --with accelerate==1.15.0 --with torch \
       python lora_sft.py --train train.jsonl --val val.jsonl --test test.jsonl --model Qwen/Qwen3-4B
 CPU dry-run (проверка, что пайплайн собирается; метрики на демо-данных ничего не значат):
-  ... python lora_sft.py --demo --model Qwen/Qwen3-0.6B --cpu --max-steps 4
+  ... python lora_sft.py --demo --model trl-internal-testing/tiny-Qwen3ForCausalLM --cpu --max-steps 2
 """
 import argparse
 import random

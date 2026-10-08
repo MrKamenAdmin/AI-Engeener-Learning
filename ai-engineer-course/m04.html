@@ -501,7 +501,7 @@ print(chat.choices[0].message.content, chat.choices[0].finish_reason,
   <h3>Классы инструментов</h3>
   <table>
     <tr><th>Класс</th><th>Примеры (по состоянию на октябрь 2026)</th><th>Когда брать</th></tr>
-    <tr><td><b>CLI</b></td><td>Claude Code, OpenAI Codex CLI (open source), Gemini CLI (для бесплатных аккаунтов Google заменён на Antigravity CLI)</td><td>Основной инструмент бэкендера: тот же shell и <code>make</code>, есть неинтерактивный режим для CI (<code>claude -p</code>, <code>codex exec</code>)</td></tr>
+    <tr><td><b>CLI</b></td><td>Claude Code, OpenAI Codex CLI (open source), Gemini CLI (с 18 июня 2026 для личных аккаунтов Google, бесплатных и с подпиской AI Pro/Ultra, заменён на Antigravity CLI; с корпоративной лицензией Code Assist и по платному API-ключу работает)</td><td>Основной инструмент бэкендера: тот же shell и <code>make</code>, есть неинтерактивный режим для CI (<code>claude -p</code>, <code>codex exec</code>)</td></tr>
     <tr><td><b>IDE</b></td><td>Cursor, GitHub Copilot agent mode, JetBrains AI Assistant (Junie и подключаемые агенты по протоколу ACP)</td><td>Точечные правки под постоянным контролем, ревью диффа в редакторе</td></tr>
     <tr><td><b>Облачные</b></td><td>Claude Code on the web, Codex Cloud, Copilot cloud agent, Cursor Cloud Agents, Jules, Devin</td><td>Чётко поставленные задачи, которые можно запускать параллельно; результат — PR на ревью</td></tr>
   </table>
@@ -582,7 +582,7 @@ func Plan(cs []Change) (checks [][]string, violations []string) {
 	return checks, violations
 }
 </code></pre>
-  <p>Полная версия (запуск git и проверок, коды выхода 0/1/2, табличные тесты на fake-раннере) — в <code>examples/m04-tools</code> репозитория курса. Нарушения и упавшие проверки хук пишет в stderr с хвостом лога, и агент продолжает работу. От зацикливания Claude Code защищён сам: подряд идущие продолжения от Stop-хуков ограничены. <code>make eval-smoke</code> ходит в API модели с ключом, поэтому его запускает хук (хуки работают вне sandbox), а не агент из своего shell.</p>
+  <p>Полная версия (запуск git и проверок, коды выхода 0/1/2, табличные тесты на fake-раннере) — в <code>examples/m04-tools</code> репозитория курса. Нарушения и упавшие проверки хук пишет в stderr с хвостом лога, и агент продолжает работу. От зацикливания Claude Code защищён сам: после 8 продолжений от Stop-хуков подряд он завершает ход (счётчик сбрасывается при каждом вызове инструмента; порог меняет <code>CLAUDE_CODE_STOP_HOOK_BLOCK_CAP</code>, по состоянию на октябрь 2026). <code>make eval-smoke</code> ходит в API модели с ключом, поэтому его запускает хук (хуки работают вне sandbox), а не агент из своего shell.</p>
 
   <h3>Безопасность</h3>
   <ul>

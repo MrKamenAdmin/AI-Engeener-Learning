@@ -9,7 +9,7 @@
     { id: "m04", title: "Инструменты", desc: "Python для Go-разработчика, FastAPI, pandas, SDK, LangChain/LlamaIndex/LangGraph, Jupyter, coding agents." },
     { id: "m05", title: "RAG", desc: "Чанкинг, эмбеддинги, векторные БД, HNSW, гибридный поиск, reranking, метрики, agentic RAG, GraphRAG, отладка." },
     { id: "m06", title: "Агенты и MCP", desc: "Агентный цикл, паттерны Anthropic, context engineering, long-horizon задачи, MCP-сервер на Go, мультиагентность." },
-    { id: "m07", title: "Безопасность и guardrails", desc: "Модель угроз, OWASP Top 10 for LLM 2025, непрямые инъекции, excessive agency, guardrails на Go, red-teaming." },
+    { id: "m07", title: "Безопасность и guardrails", desc: "Модель угроз, OWASP Top 10 for LLM 2026, непрямые инъекции, excessive agency, guardrails на Go, red-teaming." },
     { id: "m08", title: "Evals", desc: "Error analysis, golden dataset, LLM-as-a-judge и κ, bootstrap, A/B, траектории агентов, quality gate в CI." },
     { id: "m09", title: "Продакшн", desc: "LLM-шлюз, ретраи, fallback, бюджеты, кэши, OpenTelemetry GenAI, SLO, дрейф, фича-флаги." },
     { id: "m10", title: "Свои модели: инференс и адаптация", desc: "vLLM и serving, батчинг, квантизация, VRAM, экономика self-host; LoRA, DPO, дистилляция, метрики ML." },

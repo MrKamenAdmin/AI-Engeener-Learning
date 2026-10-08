@@ -1,0 +1,8 @@
+{
+  "runs": 240,
+  "steps": 1712,
+  "steps_with_span": 1712,
+  "limits": {"steps": 25, "tokens": 200000, "usd": 0.5},
+  "max_observed": {"steps": 19, "tokens": 142000, "usd": 0.31},
+  "limit_hits": 3
+}

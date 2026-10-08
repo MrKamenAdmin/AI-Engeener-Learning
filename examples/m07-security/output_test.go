@@ -23,6 +23,10 @@ func TestStripLinks(t *testing.T) {
 		{"[x](https://docs.example.com@evil.example/)", "x"},
 		{"[x](https://docs.example.com.evil.example/)", "x"},
 		{"Лого ![l][r]\n[r]: https://evil.example/l.png?q=1", "Лого ![l][r]\n"},
+		{"![l][r]\n> [r]:\n> //evil.example/l.png", "![l][r]\n"}, // в цитате и с адресом на следующей строке
+		{"![a [b] c](//evil.example/x.png)", "![a [b] c]"},       // вложенные скобки в тексте
+		{`![x\]y](//evil.example/p.png)`, `![x\]y]`},             // экранированная скобка
+		{"[![a](//evil.example/x.png)](//evil.example/y.png)", "![a]"},
 		{"зайдите на https://evil.example/c?d=1 срочно", "зайдите на [ссылка удалена] срочно"},
 		{`<img src="https://evil.example/p.png">`, `<img src="[ссылка удалена]">`},
 	}

@@ -42,13 +42,16 @@ func (p URLPolicy) Allowed(raw string) bool {
 }
 
 var (
-	mdInline = regexp.MustCompile(`(!?)\[([^\]]*)\]\(\s*(<[^>]*>|[^)\s]*)[^)]*\)`)    // [t](url "title"), ![a](url)
-	mdRefDef = regexp.MustCompile(`(?m)^[ \t]{0,3}\[[^\]]+\]:[ \t]*(<[^>]*>|\S+).*$`) // [id]: url
-	bareURL  = regexp.MustCompile(`(?i)\bhttps?://[^\s<>"'()\[\]]+`)                  // автоссылки и <img src=…>
+	mdInline = regexp.MustCompile(`(!?)\[([^\]]*)\]\(\s*(<[^>]*>|[^)\s]*)[^)]*\)`) // [t](url "title"), ![a](url)
+	mdDest   = regexp.MustCompile(`\]\(\s*(<[^>]*>|[^)\s]*)[^)]*\)`)               // любой ](url): вложенные [], \], [![a](x)](y)
+	// [id]: url — и в цитате или списке (> [id]: …), и с адресом на следующей строке.
+	mdRefDef = regexp.MustCompile(`(?m)^(?:[ \t]*(?:>|[*+-]|\d{1,9}[.)]))*[ \t]*\[(?:\\.|[^\]\\])+\]:[ \t]*(?:\n[ \t>]*)?(<[^>]*>|\S+).*$`)
+	bareURL  = regexp.MustCompile(`(?i)\bhttps?://[^\s<>"'()\[\]]+`) // автоссылки и <img src=…>
 )
 
 // StripLinks удаляет ссылки и картинки на домены вне allowlist; текст ссылки остаётся.
-// Возвращает новый текст и число удалённых адресов.
+// Возвращает новый текст и число удалённых адресов. Регэкспы по markdown — эвристика:
+// надёжнее проверять узлы ast.Link и ast.Image после разбора goldmark, а CSP держит пропущенное.
 func StripLinks(md string, p URLPolicy) (string, int) {
 	n := 0
 	md = mdInline.ReplaceAllStringFunc(md, func(m string) string {
@@ -61,6 +64,14 @@ func StripLinks(md string, p URLPolicy) (string, int) {
 			return "[изображение удалено]"
 		}
 		return s[2]
+	})
+	// Второй проход: то, что первый не разобрал или сам собрал из [![a](x)](y), — без адреса.
+	md = mdDest.ReplaceAllStringFunc(md, func(m string) string {
+		if p.Allowed(mdDest.FindStringSubmatch(m)[1]) {
+			return m
+		}
+		n++
+		return "]"
 	})
 	md = mdRefDef.ReplaceAllStringFunc(md, func(m string) string {
 		if p.Allowed(mdRefDef.FindStringSubmatch(m)[1]) {
@@ -150,9 +161,9 @@ func RenderAnswer(w io.Writer, text string, sources []Source) error {
 
 // Command — разрешённая команда: фиксированный бинарь и флаги, аргументы модели — только позиционные.
 type Command struct {
-	Path    string   // абсолютный путь: не ищем в $PATH, который мог подменить кто-то ещё
-	Fixed   []string // флаги задаём мы
-	Arg     *regexp.Regexp
+	Path    string         // абсолютный путь: не ищем в $PATH, который мог подменить кто-то ещё
+	Fixed   []string       // флаги задаём мы
+	Arg     *regexp.Regexp // с якорями ^…$: MatchString ищет подстроку
 	MaxArgs int
 }
 

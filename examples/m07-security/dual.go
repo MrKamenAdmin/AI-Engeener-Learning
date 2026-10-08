@@ -18,7 +18,7 @@ type DualLLM struct {
 }
 
 func (d DualLLM) Run(ctx context.Context, in Input) (Trace, error) {
-	vars := map[string]string{}
+	var vars []string // пары «имя, значение»; $DOC10 раньше $DOC1, чтобы короткое имя не съело длинное
 	names := make([]string, 0, len(in.Docs))
 	for i, doc := range in.Docs {
 		q, err := d.Q.Complete(ctx, Request{
@@ -29,7 +29,7 @@ func (d DualLLM) Run(ctx context.Context, in Input) (Trace, error) {
 			return Trace{}, err
 		}
 		name := fmt.Sprintf("$DOC%d", i+1)
-		vars[name] = q.Text // q.ToolCalls выбрасываем: у карантина нет рук
+		vars = append([]string{name, q.Text}, vars...) // q.ToolCalls выбрасываем: у карантина нет рук
 		names = append(names, name)
 	}
 	p, err := d.P.Complete(ctx, Request{
@@ -47,11 +47,9 @@ func (d DualLLM) Run(ctx context.Context, in Input) (Trace, error) {
 			p.Text += "\n" + res
 		}
 	}
-	// Подстановка — после P-LLM. Вывод по-прежнему недоверенный: Egress и экранирование на выходе обязательны.
-	for name, v := range vars {
-		p.Text = strings.ReplaceAll(p.Text, name, v)
-	}
-	tr.Output = p.Text
+	// Подстановка — после P-LLM и за один проход: $DOC2 внутри текста $DOC1 не раскрывается.
+	// Вывод по-прежнему недоверенный: Egress и экранирование на выходе обязательны.
+	tr.Output = strings.NewReplacer(vars...).Replace(p.Text)
 	return tr, nil
 }
 

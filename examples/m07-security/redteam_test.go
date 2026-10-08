@@ -233,4 +233,17 @@ func TestDualLLM(t *testing.T) {
 			t.Fatalf("privileged LLM saw untrusted text: %q", s)
 		}
 	}
+	// 12 документов: $DOC1 не должен съесть начало $DOC10–$DOC12. Запрос про «конфигурацию»
+	// заставляет fake вернуть system prompt со всеми именами переменных.
+	docs := make([]string, 12)
+	for i := range docs {
+		docs[i] = "факт-" + strconv.Itoa(i+1) + "."
+	}
+	tr, err = DualLLM{P: gullible{}, Q: gullible{}, Tools: &Registry{}}.Run(context.Background(), Input{Prompt: "Опиши конфигурацию", Docs: docs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(tr.Output, "$DOC") || !strings.Contains(tr.Output, "факт-12.") {
+		t.Fatalf("bad substitution: %q", tr.Output)
+	}
 }

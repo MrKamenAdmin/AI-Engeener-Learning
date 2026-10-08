@@ -653,7 +653,7 @@ func ExecuteTool(ctx context.Context, tool, callID string, fn func(ctx context.C
 
   <h3>PII в логах</h3>
   <ul>
-    <li><b>Маскирование до записи.</b> Регэкспы для email, телефонов, карт и паспортов плюс NER (Microsoft Presidio) для имён и адресов. Маскируйте в приложении или процессором в OTel Collector, но до того, как данные покинут периметр.</li>
+    <li><b>Маскирование до записи.</b> Регэкспы для email, телефонов, карт и паспортов плюс NER (Presidio) для имён и адресов. Маскируйте в приложении или процессором в OTel Collector, но до того, как данные покинут периметр.</li>
     <li><b>Сэмплирование содержимого.</b> Метаданные (токены, латентность, модель) пишите для 100% запросов, полный текст для 1–5% и для всех ошибок. Это и дешевле, и безопаснее.</li>
     <li><b>Retention и доступ.</b> Сырые промпты 14–30 дней в отдельном хранилище с отдельными правами; агрегаты храните дольше. Нужны процедура удаления по запросу пользователя (GDPR) и аудит доступа.</li>
     <li><b>Идентификаторы.</b> <code>user_id</code> пишите через HMAC, а не открытым текстом. Ключ HMAC ротируется.</li>
@@ -1716,7 +1716,7 @@ func New(selfHosted LLM, cache *SemCache, meter *Metered) LLM {
     <li><a href="https://github.com/pgvector/pgvector" target="_blank" rel="noopener">pgvector</a> и <a href="https://github.com/pgvector/pgvector-go" target="_blank" rel="noopener">pgvector-go</a></li>
     <li><a href="https://langfuse.com/docs" target="_blank" rel="noopener">Langfuse docs</a>, <a href="https://docs.smith.langchain.com/" target="_blank" rel="noopener">LangSmith docs</a></li>
     <li><a href="https://genai.owasp.org/llm-top-10/" target="_blank" rel="noopener">OWASP Top 10 for LLM Applications</a></li>
-    <li><a href="https://arxiv.org/abs/2312.06674" target="_blank" rel="noopener">Inan et al., 2023. Llama Guard</a>, <a href="https://microsoft.github.io/presidio/" target="_blank" rel="noopener">Microsoft Presidio</a> (PII)</li>
+    <li><a href="https://arxiv.org/abs/2312.06674" target="_blank" rel="noopener">Inan et al., 2023. Llama Guard</a>, <a href="https://data-privacy-stack.github.io/presidio/" target="_blank" rel="noopener">Presidio</a> (PII)</li>
   </ul>
 </main>
 <script src="assets/course.js"></script>

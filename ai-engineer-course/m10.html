@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>10 · Fine-tuning и основы ML</title>
+<title>10 · Свои модели: инференс и адаптация</title>
 <link rel="stylesheet" href="assets/style.css">
 <style>
   /* мобильные: длинный inline-код переносится, табы кода — в несколько строк */
@@ -17,6 +17,7 @@
   .rec h4 { margin: 0 0 4px; }
   .rec p { margin: 4px 0; font-size: 14.5px; }
   .dt-node { cursor: pointer; }
+  .viz select.inline { width: auto; font-size: 13px; padding: 3px 6px; }
   .formula { font: 15px var(--mono); background: var(--bg-soft); border-radius: 8px; padding: 10px 14px; margin: 1em 0; overflow-x: auto; }
 </style>
 </head>
@@ -24,12 +25,671 @@
 <main class="content">
   <div class="module-hero">
     <div class="eyebrow">Модуль 10</div>
-    <h1>Fine-tuning и основы ML</h1>
-    <p class="lead">Прикладному AI-инженеру не нужно обучать модели с нуля, но нужно уверенно отвечать на вопрос «а может, дообучим?»: когда fine-tuning оправдан, чем LoRA отличается от полного дообучения, как собрать датасет, который не обманет вас метриками, и как читать precision, recall и кривые обучения. Без этого нельзя спорить с ML-командой и защищать решения на system design.</p>
-    <div class="meta-row"><span class="chip">≈ 8 часов</span><span class="chip">Python + Go</span><span class="chip">4 визуализации</span><span class="chip">актуально на сентябрь 2026</span></div>
+    <h1>Свои модели: инференс и адаптация</h1>
+    <p class="lead">Два повода уйти с чужого API на свою модель — собственный инференс и адаптация под задачу. В первой половине модуля разбираем, как устроен serving: prefill и decode, continuous batching, PagedAttention, KV-cache как бюджет конкурентности, speculative decoding. Дальше квантизация и её цена в качестве, экономика self-host против API, Go-шлюз перед vLLM и лицензии open-weight моделей. Во второй половине — когда fine-tuning оправдан, LoRA и QLoRA, датасет и синтетика, DPO, дистилляция, честная оценка «до и после» и multi-LoRA serving.</p>
+    <div class="meta-row"><span class="chip">≈ 15 часов</span><span class="chip">Go + Python</span><span class="chip">6 визуализаций</span><span class="chip">на момент написания: октябрь 2026</span></div>
   </div>
 
+  <h2 id="serving">Как устроен serving</h2>
+  <p>В модуле 1 (<a href="m01.html#inference">«Инференс: KV-cache и квантизация»</a>) генерация разложена на две фазы. <b>Prefill</b> прогоняет весь промпт одним параллельным проходом и упирается в вычисления (compute-bound). <b>Decode</b> выдаёт по одному токену за шаг и упирается в пропускную способность памяти (memory-bound): на каждом шаге читаются все веса и весь KV-cache. Serving-движок (vLLM, SGLang) — это планировщик поверх этих двух фаз. Он решает, какие запросы считать на текущем шаге, где хранить их KV-cache и кого вытеснить, когда память кончилась. От этих решений зависят и латентность каждого пользователя, и цена токена.</p>
+
+  <h3>Метрики: что вы обещаете в SLO</h3>
+  <table>
+    <tr><th>Метрика</th><th>Определение</th><th>От чего зависит</th></tr>
+    <tr><td><b>TTFT</b> (time to first token)</td><td>От прихода запроса до первого токена ответа</td><td>Очередь плюс prefill. Растёт с длиной промпта и с загрузкой: новый запрос ждёт места в батче</td></tr>
+    <tr><td><b>TPOT</b> (time per output token)</td><td>Среднее время на токен после первого: (E2E − TTFT) / (N − 1) для каждого запроса</td><td>Время шага decode: размер батча, длина контекстов в батче, квантизация</td></tr>
+    <tr><td><b>ITL</b> (inter-token latency)</td><td>Каждый промежуток между соседними токенами. Смотрят распределение и p99</td><td>Выбросы: чужой длинный prefill в том же шаге, вытеснение запроса (preemption)</td></tr>
+    <tr><td><b>E2E latency</b></td><td>TTFT + TPOT × (N − 1) для ответа из N токенов</td><td>У коротких ответов доминирует TTFT, у длинных — TPOT</td></tr>
+    <tr><td><b>Throughput</b></td><td>Выходных токенов (или запросов) в секунду по всем запросам</td><td>Размер батча: растёт, пока хватает KV-cache и вычислений</td></tr>
+    <tr><td><b>Goodput</b></td><td>Запросов в секунду, уложившихся в SLO по TTFT <i>и</i> TPOT одновременно</td><td>Это и есть полезная ёмкость. Throughput можно поднять огромным батчем, нарушив SLO для всех</td></tr>
+  </table>
+  <p>Типичный SLO для чата: p95 TTFT меньше секунды и p95 TPOT меньше 50 мс (20 токенов в секунду, быстрее, чем человек читает). Для фоновой суммаризации TTFT почти не важен, а важны throughput и цена, поэтому та же реплика держит заметно больше фоновой нагрузки, чем интерактивной. Ёмкость реплики без указания SLO — бессмысленное число. Термин goodput в этом смысле ввели авторы DistServe.</p>
+
+  <h3>Continuous batching и PagedAttention</h3>
+  <ul>
+    <li><b>Continuous batching</b> (iteration-level scheduling, впервые в системе Orca). Статический батч ждёт, пока закончится самая длинная последовательность. В continuous batching на каждом шаге декодирования завершённые запросы уходят, а новые встают на их место. GPU загружен постоянно, и короткие запросы не ждут длинные.</li>
+    <li><b>Почему батч почти бесплатен.</b> На шаге decode веса читаются из памяти один раз на весь батч. Пока батч маленький, время шага определяется чтением весов, и 32 запроса идут почти так же быстро, как один: throughput растёт линейно, TPOT почти не меняется. С ростом батча растёт чтение KV-cache и объём вычислений, и шаг начинает замедляться. Где этот перелом для вашей модели и GPU, покажет схема ниже.</li>
+    <li><b>PagedAttention.</b> KV-cache хранится не одним непрерывным куском на максимальную длину последовательности, а блоками по 16 токенов, как страницы виртуальной памяти в ОС. Блоки выделяются по мере роста последовательности, почти без фрагментации, и могут разделяться между запросами с общим префиксом (copy-on-write). В ту же память GPU помещается в разы больше одновременных последовательностей, и, по данным статьи, пропускная способность выросла в 2–4 раза относительно предыдущих систем.</li>
+    <li><b>Preemption.</b> Если KV-cache кончился посреди генерации, vLLM вытесняет часть запросов и позже пересчитывает их заново (режим <code>RECOMPUTE</code> по умолчанию). Пользователь видит это как скачок ITL. Ненулевой счётчик <code>vllm:num_preemptions</code> в <code>/metrics</code> — повод снизить <code>--max-num-seqs</code> или добавить памяти.</li>
+  </ul>
+
+  <h3>Конкурентность из бюджета KV-cache</h3>
+  <div class="formula">KV-бюджет = VRAM × gpu_memory_utilization − веса − служебная память (активации, CUDA graphs)<br>KV на токен = 2 × layers × kv_heads × head_dim × байт<br>одновременных запросов ≈ KV-бюджет / (KV на токен × (вход + выход))</div>
+  <p>Пример: Qwen3-8B (36 слоёв, 8 KV-голов, head_dim 128) на одном H100 80 ГБ. Веса в BF16 занимают 16.4 ГБ, KV на токен — 2 × 36 × 8 × 128 × 2 байта = 144 КБ. При <code>--gpu-memory-utilization 0.9</code> и паре гигабайт служебной памяти на KV-cache остаётся около 53 ГБ, то есть примерно 360 тысяч токенов. Запросов по 4K токенов (промпт плюс ответ) поместится около 90, по 32K — всего 11. FP8 для KV-cache (<code>--kv-cache-dtype fp8</code>) удваивает эти числа. При старте vLLM пишет в лог размер KV-cache в токенах и максимальную конкурентность для <code>--max-model-len</code>: сверяйте свою оценку с ним.</p>
+  <p>Отсюда смысл двух флагов. <code>--max-model-len</code> ограничивает длину одного запроса, <code>--max-num-seqs</code> — число последовательностей в батче. Ставить <code>--max-model-len</code> с запасом до 128K «на всякий случай» вредно: один длинный запрос занимает место десятков коротких. Если длинные запросы редки, выделите под них отдельную реплику или пул.</p>
+
+  <div class="callout go"><span class="title">Аналогия из Go</span>
+    <p>KV-бюджет работает как <code>semaphore.Weighted</code> из <code>golang.org/x/sync</code> с весом в байтах: запрос «стоит» столько, сколько токенов у него в контексте, а не одну единицу. Поэтому <code>--max-num-seqs</code> — только верхняя граница, а реальную конкурентность определяет длина запросов. Шлюз ниже держит обычный семафор по числу запросов: этого хватает, когда длины предсказуемы.</p>
+  </div>
+
+  <h3>Chunked prefill</h3>
+  <p>Prefill промпта на 30K токенов занимает от сотен миллисекунд до секунд. Если считать его одним куском, остальные запросы в батче на это время перестают получать токены, и у них скачет ITL. Chunked prefill режет prefill на части, которые укладываются в бюджет токенов на шаг (<code>--max-num-batched-tokens</code>), и смешивает их с decode-шагами других запросов (идея Sarathi-Serve). В vLLM V1 он включён по умолчанию. Компромисс настраивается одним числом: по документации vLLM меньший бюджет (порядка 2048) даёт более ровный ITL, а больший (от 8192) — лучше TTFT и throughput.</p>
+
+  <h3>Prefix caching</h3>
+  <p>KV-блоки хэшируются по содержимому префикса, и запрос с тем же началом (system prompt, few-shot, история чата, тот же документ в RAG) переиспользует уже посчитанный KV-cache: prefill сокращается до «хвоста». Это аналог prompt caching у провайдера (модуль 2), только бесплатный. В свежих версиях vLLM он включён по умолчанию. Для архитектуры из этого следуют три вещи:</p>
+  <ul>
+    <li>Порядок частей промпта важен так же, как для кэша провайдера: стабильное — в начало, изменчивое — в конец.</li>
+    <li>При нескольких репликах нужен роутинг с учётом префикса (prefix-aware routing). Иначе ходы одного диалога попадают на разные реплики, и кэш не работает.</li>
+    <li>По времени ответа можно понять, был ли префикс в кэше, а значит, видел ли его кто-то ещё. Для мультитенантного сервиса в vLLM есть параметр запроса <code>cache_salt</code>, который разделяет кэш между тенантами.</li>
+  </ul>
+
+  <h3>Speculative decoding</h3>
+  <p>При малом батче decode простаивает: GPU читает 16 ГБ весов ради одного токена. Speculative decoding использует эту простаивающую мощность. Дешёвый черновик (маленькая модель, дополнительные головы или n-gram-поиск по промпту) предлагает k токенов, большая модель проверяет их все за один проход, как при prefill, и принимает самый длинный подходящий префикс плюс один свой токен. Правило принятия (rejection sampling) подобрано так, что распределение ответа совпадает с распределением большой модели. Это ускорение без потери качества, а не аппроксимация.</p>
+  <div class="formula">ожидаемо токенов за проход большой модели = (1 − α<sup>k+1</sup>) / (1 − α),   α — доля принятых токенов черновика</div>
+  <p>При α = 0.7 и k = 4 выходит ≈ 2.8 токена за проход вместо одного, но каждый проход теперь дороже: работает черновик и проверяются k позиций. При большом батче GPU и так загружен вычислениями, и выигрыш тает. Это видно по цифрам EAGLE-3: до 6.5× ускорения на одиночных запросах и 1.38× по throughput при батче 64 (в SGLang). Документация vLLM называет целевой сценарий прямо: низкая и средняя нагрузка, memory-bound. Варианты в vLLM задаются через <code>--speculative-config</code>:</p>
+  <ul>
+    <li><code>draft_model</code> — маленькая модель того же семейства и с тем же токенизатором;</li>
+    <li><code>eagle3</code> — лёгкие головы, обученные на скрытых состояниях целевой модели (их нужно найти или обучить под вашу модель);</li>
+    <li><code>mtp</code> — если модель обучена с multi-token prediction;</li>
+    <li><code>ngram</code> и <code>suffix</code> — без модели. Хорошо работают, когда ответ копирует куски промпта: RAG с цитатами, правка кода.</li>
+  </ul>
+  <p>Acceptance rate зависит от домена и температуры: черновик, обученный на английском чате, плохо угадывает русские юридические тексты. Включайте speculative decoding только после замера TPOT и goodput на своём трафике.</p>
+
+  <div class="viz" id="viz-serve">
+    <p class="viz-title">Serving-калькулятор: VRAM, конкурентность, TTFT и TPOT</p>
+    <p class="viz-sub">Выберите модель, квантизацию весов и GPU, задайте длину запросов и число одновременных пользователей. Сверху — раскладка видеопамяти. Снизу — как throughput и TPOT меняются с ростом конкурентности (ось логарифмическая; вертикальный пунктир — момент, когда кончается KV-cache, горизонтальный — SLO 50 мс на токен). Это расчёт «на салфетке», чтобы понять, что во что упирается, а не замена нагрузочному тесту.</p>
+    <div class="controls">
+      <label>модель <select id="sv-model" class="inline"><option value="q4">Qwen3-4B</option><option value="q8" selected>Qwen3-8B</option><option value="q32">Qwen3-32B</option><option value="l70">Llama 3.3 70B</option></select></label>
+      <label>веса <select id="sv-wq" class="inline"><option value="bf16">BF16</option><option value="fp8">FP8</option><option value="int4">INT4 (AWQ/GPTQ)</option></select></label>
+      <label>GPU <select id="sv-gpu" class="inline"><option value="l4">L4 24 ГБ</option><option value="a100">A100 80 ГБ</option><option value="h100" selected>H100 80 ГБ</option><option value="h200">H200 141 ГБ</option></select></label>
+      <label>GPU в tensor parallel <input type="range" id="sv-tp" min="0" max="3" step="1" value="0"> <output></output></label>
+      <label><input type="checkbox" id="sv-kv8"> KV-cache в FP8</label>
+      <label>промпт, токенов <input type="range" id="sv-in" min="7" max="17" step="0.5" value="11"> <output></output></label>
+      <label>ответ, токенов <input type="range" id="sv-out" min="4" max="12" step="0.5" value="9"> <output></output></label>
+      <label>одновременных запросов <input type="range" id="sv-c" min="0" max="9" step="0.25" value="6"> <output></output></label>
+    </div>
+    <svg id="sv-svg" viewBox="0 0 640 300" role="img" aria-label="Раскладка VRAM и графики throughput и TPOT в зависимости от числа одновременных запросов"></svg>
+    <div class="legend"><span><i style="background:var(--violet)"></i>веса</span><span><i style="background:var(--accent)"></i>KV-cache текущих запросов</span><span><i style="background:var(--accent-soft)"></i>свободный KV-бюджет</span><span><i style="background:var(--border)"></i>служебная память и запас</span></div>
+    <div class="readout" id="sv-read"></div>
+  </div>
+
+  <div class="callout tip"><span class="title">Что упрощено в схеме</span>
+    <p>Достижимая полоса памяти принята за 70% паспортной, вычисления — за 50% пика BF16 (для FP8 вдвое больше). Tensor parallel масштабируется идеально, без затрат на связь между GPU. Prefill считается как 2 × параметры × токены, без квадратичной части attention и без очереди. Все запросы одной длины, chunked prefill, prefix caching и speculative decoding не учтены, служебная память — 2 ГБ на GPU. Реальные числа дают лог vLLM при старте и <code>vllm bench serve</code>. Схема нужна, чтобы увидеть форму зависимостей: throughput растёт с батчем почти линейно, TPOT сначала почти стоит на месте, а потолок задаёт KV-cache.</p>
+  </div>
+
+  <h2 id="quant">Квантизация для инференса</h2>
+  <p>Форматы и байты на параметр разобраны в модуле 1. Здесь речь о методах, которые встречаются при self-hosting: что они ускоряют и как проверить, что качество не уехало.</p>
+  <table>
+    <tr><th>Метод</th><th>Что сжато</th><th>Как работает</th><th>Где и зачем</th></tr>
+    <tr><td><b>FP8</b> (W8A8)</td><td>Веса и активации, 8-битное число с плавающей точкой (E4M3)</td><td>Масштаб на тензор или канал. Квантуется на лету при загрузке (<code>--quantization fp8</code>) или берётся готовый FP8-чекпойнт</td><td>GPU с аппаратным FP8: Ada (L4, L40S), Hopper (H100, H200), Blackwell. Памяти вдвое меньше, быстрее и prefill, и decode. Качество обычно близко к BF16, поэтому на H100 это разумный дефолт</td></tr>
+    <tr><td><b>AWQ</b> (W4A16)</td><td>Только веса, 4 бита; вычисления в 16 битах</td><td>Около 1% «важных» каналов весов (тех, на которые приходятся большие активации на калибровочных данных) масштабируются так, чтобы ошибка квантизации на них была меньше</td><td>Нужно уместить модель в меньшую или более дешёвую GPU. Ускоряет memory-bound decode при малом батче</td></tr>
+    <tr><td><b>GPTQ</b> (W4A16, W8A16)</td><td>Только веса</td><td>Квантует веса слой за слоем и компенсирует ошибку остальными весами слоя с помощью приближённой информации второго порядка (гессиана) по калибровочному набору</td><td>Та же ниша, что у AWQ, много готовых чекпойнтов. Чувствителен к выбору калибровочных данных</td></tr>
+    <tr><td><b>GGUF</b> (Q4_K_M, Q5_K_M, Q8_0…)</td><td>Формат файла llama.cpp и набор схем квантизации с разными битами для разных тензоров</td><td>Блочная квантизация с масштабом на блок; K-quants смешивают точность по слоям</td><td>Ollama и llama.cpp: ноутбук, Apple Silicon, CPU, edge. Для GPU-сервера с высокой конкурентностью не основной путь</td></tr>
+    <tr><td><b>KV-cache FP8</b></td><td>Только KV-cache</td><td><code>--kv-cache-dtype fp8</code></td><td>Вдвое больше одновременных запросов или длиннее контекст. Проверяйте качество на длинных контекстах</td></tr>
+  </table>
+  <ul>
+    <li><b>Weight-only (W4A16) ускоряет не всегда.</b> Такая квантизация уменьшает число байт, читаемых на шаге decode, поэтому выигрывает при малом батче. При большом батче шаг упирается в вычисления, а веса ещё нужно деквантизовать, и преимущество тает. FP8 (W8A8) сокращает и память, и вычисления, поэтому лучше держит нагрузку. Решение принимайте по замеру на своём профиле нагрузки, а не по таблице.</li>
+    <li><b>Калибровка.</b> AWQ и GPTQ подбирают масштабы на калибровочном наборе, обычно это английский веб-текст. Если ваш трафик на русском, в коде или в строгом JSON, квантуйте на своих данных (<a href="https://github.com/vllm-project/llm-compressor" target="_blank" rel="noopener">llm-compressor</a> от проекта vLLM принимает свой датасет) или особенно тщательно проверяйте готовый чекпойнт.</li>
+    <li><b>Готовые чекпойнты.</b> У крупных семейств есть официальные квантованные версии, например <code>Qwen/Qwen3-8B-FP8</code> и <code>Qwen/Qwen3-8B-AWQ</code> на Hugging Face. Это быстрее своей квантизации, но проверка качества всё равно на вас.</li>
+    <li><b>4 бита с плавающей точкой.</b> На Blackwell появились форматы NVFP4 и MXFP4. Например, gpt-oss выпущена с MoE-весами в MXFP4, поэтому 120B-версия помещается в одну GPU на 80 ГБ.</li>
+  </ul>
+
+  <h3>Как измерить цену квантизации в качестве</h3>
+  <ol>
+    <li><b>Тот же eval-набор и те же промпты</b> (модуль 8), greedy-декодирование или фиксированный seed. BF16 и квантованная версия отвечают на одни и те же примеры.</li>
+    <li><b>Парное сравнение.</b> Смотрите не только на «92.1% против 91.4%», а на пары: сколько примеров сломалось и сколько починилось. Считайте разницу с доверительным интервалом (парный bootstrap или McNemar, модуль 8). Вопрос ставится как non-inferiority: «нижняя граница ДИ разницы выше −1 п.п.», а допуск задаёт продукт.</li>
+    <li><b>Срезы.</b> Средняя метрика прячет провалы. Смотрите отдельно длинный контекст, редкий язык, строгий JSON (долю валидного), арифметику и код: квантизация бьёт по хвостам раньше, чем по среднему.</li>
+    <li><b>Поведение:</b> доля отказов, распределение длины ответа, зацикливания. Квантованная модель иногда становится многословнее или чаще повторяется.</li>
+    <li><b>Окупаемость.</b> Тем же нагрузочным тестом измерьте TTFT и TPOT p95 и goodput на одном и том же железе. Квантизация, которая на вашем профиле не дала выигрыша в деньгах или латентности, — чистый риск.</li>
+  </ol>
+  <div class="callout warn"><span class="title">Не путайте «модель хуже» и «шаблон другой»</span>
+    <p>Частая причина «деградации» после смены чекпойнта — другой chat template, другой <code>generation_config.json</code> (vLLM по умолчанию берёт из него параметры сэмплинга, отключается флагом <code>--generation-config vllm</code>) или обрезанный <code>--max-model-len</code>. Сравнивайте при одинаковых параметрах запроса и проверьте, что промпт после применения шаблона совпадает байт в байт.</p>
+  </div>
+
+  <h2 id="selfhosted">Self-hosted: движки, экономика, запуск</h2>
+  <p>Свой инференс поднимают по четырём причинам: <b>приватность</b> (данные не должны покидать периметр), <b>стоимость</b> на большом стабильном объёме, <b>контроль</b> (своя fine-tuned модель, фиксированная версия, предсказуемая латентность) и <b>офлайн или edge</b>. Платите вы за это GPU, людьми и дежурствами.</p>
+
+  <h3>Движки</h3>
+  <table>
+    <tr><th>Движок</th><th>Для чего</th><th>Ключевое (по состоянию на октябрь 2026)</th></tr>
+    <tr><td><b>vLLM</b></td><td>Продакшн-сервинг, высокая конкурентность</td><td>PagedAttention, continuous batching, prefix caching, chunked prefill, speculative decoding, tensor parallelism, LoRA-адаптеры. OpenAI-совместимый API и Anthropic-совместимый <code>/v1/messages</code>. Версия 0.31, движок V1</td></tr>
+    <tr><td><b>SGLang</b></td><td>То же; силён в структурированной генерации, агентных сценариях и RL-rollout'ах</td><td>RadixAttention (дерево префиксов), быстрый constrained decoding, разнесение prefill и decode по разным GPU для больших MoE-моделей. Версия 0.5.x</td></tr>
+    <tr><td><b>TGI</b> (Hugging Face)</td><td>Исторически — сервер Hugging Face Inference Endpoints</td><td>Переведён в режим поддержки (maintenance mode), репозиторий в архиве. Сам Hugging Face рекомендует vLLM и SGLang. Для новых проектов не выбирать</td></tr>
+    <tr><td><b>llama.cpp</b> (<code>llama-server</code>)</td><td>CPU, Apple Silicon, потребительские GPU, edge</td><td>GGUF, частичная выгрузка слоёв на GPU, OpenAI-совместимый сервер</td></tr>
+    <tr><td><b>Ollama</b></td><td>Локальная разработка, ноутбук</td><td>Поверх llama.cpp, одна команда, OpenAI-совместимый API на <code>:11434/v1</code>. По умолчанию контекст 4096 токенов и один запрос на модель за раз. Для высоконагруженного прода не предназначен</td></tr>
+  </table>
+  <p>Почему эти движки быстрые, разобрано в разделе <a href="#serving">«Как устроен serving»</a>. Память под веса — параметры × байты: 8B в BF16 занимает 16 ГБ, 70B в BF16 — 140 ГБ (минимум 2×H100 80 ГБ, на практике 4 ради KV-cache), 70B в FP8 — около 70 ГБ. Конкурентность считается по KV-бюджету, формула выше.</p>
+
+  <h3>GPU-экономика</h3>
+  <p>Сравнивать надо не «цену GPU-часа», а <b>стоимость миллиона токенов при вашей реальной утилизации</b>: <code>$/1M = GPU $/ч ÷ (tok/s × утилизация × 3600) × 10⁶</code>. GPU, который ночью простаивает, стоит столько же, сколько днём, а API ночью не стоит ничего. Отсюда правило: self-hosted выгоден при <b>большом и ровном</b> объёме, когда модели поменьше хватает по качеству.</p>
+  <div class="formula">C_api  = T_in × p_in + T_out × p_out          (T — млн токенов в месяц, p — $ за 1M)<br>N_gpu  = max(N_min, ⌈ пиковый поток, ток/с ÷ goodput одной GPU при SLO ⌉)<br>C_self = N_gpu × h × 730 + C_ops                  (h — $ за GPU-час, 730 часов в месяце, C_ops — люди и инфраструктура)<br>безубыточность при N_gpu = N_min:   T* = (N_min × h × 730 + C_ops) ÷ p_смеш</div>
+  <p>Здесь <b>p_смеш</b> — смешанная цена API для вашего соотношения входа и выхода, <b>goodput</b> — пропускная способность одной GPU при вашем SLO по TTFT и TPOT (из нагрузочного теста ниже, а не из маркетинговой таблицы), <b>N_min</b> = 2 ради отказоустойчивости. Пример: смешанная цена Haiku 4.5 при соотношении вход:выход 3:1 составляет (3 × 1 + 1 × 5) / 4 = $2 за 1M. Две GPU по h долларов в час без учёта людей окупаются при T* = 2 × h × 730 / 2 = 730·h млн токенов в месяц. При h = 3 (подставьте свою цену) это ≈ 2.2 млрд токенов в месяц, или ≈ 73 млн в день, причём равномерно распределённых по суткам. Каждые $1000 в месяц на людей и инфраструктуру сдвигают точку ещё на 500 млн токенов в месяц. И сравнение честно, только если open-weight модель не хуже Haiku на вашем eval-наборе.</p>
+
+  <div class="viz" id="viz-gpu">
+    <p class="viz-title">Калькулятор: self-hosted против API</p>
+    <p class="viz-sub">Оси логарифмические. Линия API растёт линейно с объёмом. Self-hosted — ступеньки: GPU покупается целиком, плюс фиксированные расходы на людей. Пропускная способность — goodput на одну GPU (с батчингом, при вашем SLO); её надо измерять нагрузочным тестом, дефолты даны для порядка величин. Цены по умолчанию условные: подставьте свой прайс.</p>
+    <div class="controls">
+      <label>токенов в день <input type="range" id="g-vol" min="6" max="10" step="0.05" value="8.3"> <output></output></label>
+      <label>цена API, $/1M (смешанная) <input type="range" id="g-api" min="0.1" max="20" step="0.1" value="2"> <output></output></label>
+      <label>GPU, $/час <input type="range" id="g-gpu" min="0.5" max="10" step="0.1" value="3"> <output></output></label>
+      <label>goodput, tok/s на GPU <input type="range" id="g-tps" min="200" max="10000" step="100" value="2500"> <output></output></label>
+      <label>утилизация <input type="range" id="g-util" min="0.1" max="0.9" step="0.05" value="0.4"> <output></output></label>
+      <label>люди и ops, $/мес <input type="range" id="g-ops" min="0" max="30000" step="1000" value="8000"> <output></output></label>
+      <label><input type="checkbox" id="g-ha" checked> минимум 2 реплики (HA)</label>
+    </div>
+    <svg id="gpu-svg" viewBox="0 0 640 300" role="img" aria-label="График стоимости в месяц от объёма токенов для API и self-hosted"></svg>
+    <div class="legend"><span><i style="background:var(--accent)"></i>API</span><span><i style="background:var(--violet)"></i>self-hosted</span><span><i style="background:var(--ok)"></i>точка безубыточности</span></div>
+    <div class="readout" id="gpu-read"></div>
+  </div>
+
+  <div class="callout warn"><span class="title">Что забывают в расчёте</span>
+    <ul>
+      <li>Пиковая нагрузка вдвое-втрое выше средней, а GPU закладываются под пик (или autoscaling, но GPU поднимаются минутами, и их может не оказаться в регионе).</li>
+      <li>Сравнение нечестное, если self-hosted модель слабее: вы экономите на токенах и теряете в качестве. Прогоните evals.</li>
+      <li>Инженерное время: обновление моделей и драйверов, дежурства, нагрузочное тестирование. Один инженер на полставки легко стоит больше $8000 в месяц.</li>
+      <li>API дешевеет каждые полгода, а купленный или зарезервированный на год GPU — нет.</li>
+    </ul>
+  </div>
+
+  <div class="tabs">
+    <div class="tab-panel" data-tab="vLLM (bash + Python)"><pre><code class="lang-python"># 1) Запуск OpenAI-совместимого сервера (GPU с 24+ ГБ для 8B в bf16):
+#    pip install vllm
+#    vllm serve Qwen/Qwen3-8B \
+#      --max-model-len 32768 \          # верхняя граница контекста: определяет бюджет KV-cache
+#      --gpu-memory-utilization 0.90 \  # доля VRAM под веса + KV-cache
+#      --max-num-seqs 128 \             # максимум одновременных последовательностей в батче
+#      --enable-prefix-caching \        # в свежих версиях включено по умолчанию
+#      --api-key "$VLLM_API_KEY"
+#
+# 2) Клиент — обычный OpenAI SDK. В vLLM temperature/top_p работают (в отличие от новых Claude).
+import asyncio, os, time
+from openai import AsyncOpenAI
+
+client = AsyncOpenAI(base_url="http://localhost:8000/v1", api_key=os.environ["VLLM_API_KEY"])
+
+async def one(i: int) -&gt; tuple[float, float, int]:
+    t0 = time.perf_counter(); ttft = None; n = 0
+    stream = await client.chat.completions.create(
+        model="Qwen/Qwen3-8B",
+        messages=[{"role": "user", "content": f"Кратко: что такое continuous batching? #{i}"}],
+        max_tokens=300, temperature=0.2, stream=True,
+    )
+    async for chunk in stream:
+        if chunk.choices and chunk.choices[0].delta.content:
+            ttft = ttft or time.perf_counter() - t0
+            n += 1  # чанк ≈ токен; для точности берите usage
+    return ttft or 0.0, time.perf_counter() - t0, n
+
+async def main(concurrency: int = 64) -&gt; None:
+    t0 = time.perf_counter()
+    res = await asyncio.gather(*(one(i) for i in range(concurrency)))
+    wall = time.perf_counter() - t0
+    ttfts = sorted(r[0] for r in res)
+    print(f"p50 TTFT {ttfts[len(ttfts)//2]:.2f}s  p99 {ttfts[int(len(ttfts)*.99)]:.2f}s")
+    print(f"суммарно {sum(r[2] for r in res)/wall:.0f} tok/s при {concurrency} параллельных")
+
+asyncio.run(main())
+# Локально без GPU: `ollama pull qwen3:8b` и base_url="http://localhost:11434/v1" — тот же код.</code></pre></div>
+    <div class="tab-panel" data-tab="vllm bench serve"><pre><code class="lang-bash"># Встроенный бенчмарк: случайные промпты 2048 → 512 токенов, 64 запроса одновременно.
+vllm bench serve --model Qwen/Qwen3-8B \
+  --dataset-name random --random-input-len 2048 --random-output-len 512 \
+  --num-prompts 640 --max-concurrency 64 \
+  --percentile-metrics ttft,tpot,itl --metric-percentiles 50,95,99 \
+  --goodput ttft:1000 tpot:50
+# Повторите для --max-concurrency 8, 16, 32, 64, 128. Ёмкость реплики — максимум,
+# при котором p95 TTFT и TPOT ещё в SLO. Это и есть goodput для калькулятора выше.</code></pre></div>
+  </div>
+  <p>Нагрузочный тест нужен, чтобы получить реальный goodput для калькулятора. Поднимайте конкурентность, пока суммарная пропускная способность растёт, а p95 TTFT и TPOT укладываются в SLO: эта точка и есть ёмкость одной реплики. Длины промптов и ответов берите из логов своего продукта, а не случайные: от них зависит всё.</p>
+
+  <h3>Ollama для локальной разработки</h3>
+  <p>Ollama даёт тот же OpenAI-совместимый API на ноутбуке без GPU-сервера. Поэтому клиентский код, Go-шлюз из следующего раздела и eval-прогон можно отладить локально, а потом переключить <code>base_url</code> на vLLM.</p>
+  <pre><code class="lang-bash">ollama pull qwen3:8b                       # ≈ 5 ГБ, 4-битная GGUF-квантизация
+OLLAMA_CONTEXT_LENGTH=16384 ollama serve   # по умолчанию контекст 4096: длинный RAG-промпт не поместится
+curl -s http://localhost:11434/v1/chat/completions \
+  -d '{"model": "qwen3:8b", "messages": [{"role": "user", "content": "Привет"}], "stream": true}'</code></pre>
+  <ul>
+    <li><b>Параллелизм.</b> По умолчанию модель обрабатывает один запрос за раз (<code>OLLAMA_NUM_PARALLEL=1</code>), остальные ждут в очереди, а при её переполнении сервер отвечает 503. Каждый параллельный слот увеличивает выделенный контекст.</li>
+    <li><b>Цифры не переносятся.</b> GGUF Q4 на ноутбуке и FP8 или BF16 в vLLM — разные модели по качеству и совсем разные по латентности. Evals и нагрузочный тест проводите на целевом стеке.</li>
+    <li><b>Модель выгружается</b> из памяти через 5 минут простоя (<code>OLLAMA_KEEP_ALIVE</code>), и первый запрос после паузы получает TTFT с загрузкой весов.</li>
+  </ul>
+
+  <div class="callout tip"><span class="title">Как это звучит на собесе</span>
+    <p>«Мы посчитали по формуле с goodput из нагрузочного теста: при нашем пике, который втрое выше среднего, две реплики окупались бы только при объёме в несколько раз больше текущего. Поэтому основной чат остался на API. Self-hosted подняли для классификатора с LoRA: там ровный поток, данные не должны уходить наружу, а 4B-модель с адаптером догнала Sonnet на нашем eval-наборе».</p>
+  </div>
+
+  <h2 id="gateway">Go-шлюз перед vLLM</h2>
+  <p>Клиентам не стоит ходить в vLLM напрямую. Флаг <code>--api-key</code> защищает только пути <code>/v1</code>, <code>/v2</code> и <code>/inference</code>, остальные эндпоинты открыты, и документация vLLM сама советует ставить перед сервером reverse proxy. Общий LLM-шлюз с роутингом между провайдерами разобран в <a href="m09.html#gateway">модуле 9</a>; здесь — его часть, специфичная для своего сервера. Кроме авторизации, шлюз берёт на себя то, чего vLLM не делает:</p>
+  <ul>
+    <li><b>Публичные имена моделей.</b> Клиент просит <code>clf</code>, шлюз отправляет в vLLM имя LoRA-адаптера <code>ticket-clf</code> или базовой модели. Клиент не знает о внутренней раскладке, а откат адаптера — правка одной строки конфига.</li>
+    <li><b>Лимит конкурентности под <code>--max-num-seqs</code>.</b> vLLM при перегрузке по умолчанию не отказывает, а держит лишние запросы в очереди ожидания (метрика <code>vllm:num_requests_waiting</code>), и TTFT растёт без предела. Шлюз держит очередь сам: запрос ждёт свободный слот ограниченное время, потом получает 429 с <code>Retry-After</code>, и клиент или балансировщик уходит на другую реплику или на API-провайдера (fallback из модуля 9).</li>
+    <li><b>Ретраи на 429 и 5xx</b>, но только пока клиенту не отправлено ни байта. Ollama при переполнении очереди отвечает 503, балансировщики перед репликами vLLM — 502, 503 и 504.</li>
+    <li><b>Таймаут на первый байт стрима.</b> Зависшая реплика видна по тому, что заголовки пришли, а токенов нет. Такую попытку можно отменить и повторить, пока клиент ничего не получил.</li>
+    <li><b>TTFT и TPOT глазами клиента.</b> Серверные гистограммы vLLM (<code>vllm:time_to_first_token_seconds</code>, <code>vllm:inter_token_latency_seconds</code>) не видят очередь шлюза и сеть. Шлюз меряет то, что видит пользователь, и отдаёт в ваш стек метрик (модуль 9).</li>
+  </ul>
+  <p>Формат запроса и стрима — Chat Completions от OpenAI: <code>POST /v1/chat/completions</code>, при <code>"stream": true</code> ответ идёт как SSE, строки <code>data: {chat.completion.chunk}</code> и в конце <code>data: [DONE]</code>. С <code>"stream_options": {"include_usage": true}</code> последний чанк несёт <code>usage</code> с точным числом токенов. Шлюз добавляет этот параметр сам: считать токены по чанкам ненадёжно, потому что vLLM может класть несколько токенов в один чанк (параметр <code>stream_interval</code>).</p>
+  <div class="tabs">
+    <div class="tab-panel" data-tab="Go: шлюз"><pre><code class="lang-go">// Шлюз перед OpenAI-совместимым сервером vLLM (подойдёт и Ollama на :11434).
+// Делает пять вещей: публичное имя модели → база или LoRA-адаптер в vLLM, лимит
+// одновременных запросов под --max-num-seqs, ретраи на 429/5xx, пока клиенту
+// ещё ничего не отправлено, таймаут на первый байт стрима и метрики TTFT/TPOT.
+package main
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"math/rand/v2"
+	"net/http"
+	"strconv"
+	"time"
+)
+
+type Config struct {
+	Upstream    string            // http://vllm:8000
+	APIKey      string            // --api-key vLLM; пусто — без авторизации
+	Models      map[string]string // публичное имя → имя в vLLM: база или адаптер из --lora-modules
+	MaxInFlight int               // ≈ max-num-seqs × число реплик
+	QueueWait   time.Duration     // сколько запрос ждёт свободный слот, потом 429
+	FirstByte   time.Duration     // стрим: нет первого байта за это время — отменяем попытку и повторяем
+	Timeout     time.Duration     // общий потолок на запрос
+	MaxRetries  int
+	Backoff     time.Duration // база экспоненциального backoff с full jitter
+	Observe     func(Stats)   // куда отдать метрики: лог, Prometheus, OTel (модуль 9)
+}
+
+type Stats struct {
+	Model     string
+	Status    int
+	Attempts  int
+	TTFT      time.Duration // от прихода запроса до первого непустого токена
+	TPOT      time.Duration // (последний токен − первый) / (токенов − 1)
+	OutTokens int
+}
+
+type Gateway struct {
+	cfg    Config
+	client *http.Client
+	slots  chan struct{}
+}
+
+func New(cfg Config) *Gateway {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.MaxIdleConnsPerHost = cfg.MaxInFlight // по умолчанию 2: при 128 параллельных стримах соединения пересоздавались бы
+	return &amp;Gateway{cfg: cfg, client: &amp;http.Client{Transport: t}, slots: make(chan struct{}, cfg.MaxInFlight)}
+}
+
+func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	if r.Method != http.MethodPost || r.URL.Path != "/v1/chat/completions" {
+		apiError(w, http.StatusNotFound, "only POST /v1/chat/completions")
+		return
+	}
+	var req map[string]json.RawMessage // остальные поля запроса пробрасываем как есть
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4&lt;&lt;20)).Decode(&amp;req); err != nil {
+		apiError(w, http.StatusBadRequest, "bad JSON: "+err.Error())
+		return
+	}
+	var public string
+	var stream bool
+	_ = json.Unmarshal(req["model"], &amp;public)
+	_ = json.Unmarshal(req["stream"], &amp;stream)
+	target, ok := g.cfg.Models[public]
+	if !ok {
+		apiError(w, http.StatusNotFound, fmt.Sprintf("model %q not found", public))
+		return
+	}
+	req["model"], _ = json.Marshal(target)
+	if _, set := req["stream_options"]; stream &amp;&amp; !set {
+		req["stream_options"] = json.RawMessage(`{"include_usage":true}`) // точное число токенов в последнем чанке
+	}
+	body, _ := json.Marshal(req)
+
+	st := Stats{Model: public}
+	defer func() {
+		if g.cfg.Observe != nil {
+			g.cfg.Observe(st)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(r.Context(), g.cfg.Timeout)
+	defer cancel()
+	wait := time.NewTimer(g.cfg.QueueWait)
+	defer wait.Stop()
+	select { // слот: в vLLM не больше MaxInFlight запросов, остальные ждут здесь, а не в его очереди
+	case g.slots &lt;- struct{}{}:
+		defer func() { &lt;-g.slots }()
+	case &lt;-wait.C:
+		st.Status = http.StatusTooManyRequests
+		w.Header().Set("Retry-After", "1")
+		apiError(w, st.Status, "all slots busy")
+		return
+	case &lt;-ctx.Done():
+		return
+	}
+
+	up, attempts, err := g.send(ctx, body, stream)
+	st.Attempts = attempts
+	if err != nil {
+		st.Status = http.StatusBadGateway
+		if ctx.Err() == context.DeadlineExceeded {
+			st.Status = http.StatusGatewayTimeout
+		}
+		apiError(w, st.Status, "upstream: "+err.Error())
+		return
+	}
+	defer up.Close()
+	st.Status = up.resp.StatusCode
+	if stream &amp;&amp; st.Status == http.StatusOK {
+		pipeSSE(w, up.body, start, &amp;st)
+		return
+	}
+	raw, err := io.ReadAll(up.body)
+	if err != nil {
+		st.Status = http.StatusBadGateway
+		apiError(w, st.Status, "upstream: "+err.Error())
+		return
+	}
+	var resp struct {
+		Usage struct {
+			CompletionTokens int `json:"completion_tokens"`
+		} `json:"usage"`
+	}
+	if json.Unmarshal(raw, &amp;resp) == nil {
+		st.OutTokens = resp.Usage.CompletionTokens
+	}
+	st.TTFT = time.Since(start) // без стрима пользователь видит первый токен вместе с последним
+	w.Header().Set("Content-Type", up.resp.Header.Get("Content-Type"))
+	w.WriteHeader(st.Status)
+	_, _ = w.Write(raw)
+}
+
+type upstream struct {
+	resp   *http.Response
+	body   *bufio.Reader
+	cancel context.CancelFunc
+}
+
+func (u *upstream) Close() { u.resp.Body.Close(); u.cancel() }
+
+// send повторяет запрос, пока vLLM отвечает 429/502/503/504 или стрим молчит дольше FirstByte.
+// Повторять можно только до первого байта клиенту: после него ответ уже частично отдан.
+func (g *Gateway) send(ctx context.Context, body []byte, stream bool) (*upstream, int, error) {
+	for attempt := 1; ; attempt++ {
+		up, err := g.attempt(ctx, body, stream)
+		if err == nil &amp;&amp; !retryable(up.resp.StatusCode) {
+			return up, attempt, nil
+		}
+		if attempt &gt; g.cfg.MaxRetries || ctx.Err() != nil {
+			return up, attempt, err // последний 429/503 отдаём клиенту как есть
+		}
+		delay := time.Duration(0)
+		if d := g.cfg.Backoff &lt;&lt; (attempt - 1); d &gt; 0 {
+			delay = rand.N(d)
+		}
+		if err == nil {
+			if s, perr := strconv.Atoi(up.resp.Header.Get("Retry-After")); perr == nil {
+				delay = max(delay, time.Duration(s)*time.Second)
+			}
+			up.Close()
+		}
+		select {
+		case &lt;-time.After(delay):
+		case &lt;-ctx.Done():
+			return nil, attempt, ctx.Err()
+		}
+	}
+}
+
+func (g *Gateway) attempt(ctx context.Context, body []byte, stream bool) (*upstream, error) {
+	actx, cancel := context.WithCancel(ctx) // отмена закрывает соединение, и vLLM освобождает слот и KV-cache
+	req, err := http.NewRequestWithContext(actx, http.MethodPost, g.cfg.Upstream+"/v1/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if g.cfg.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+g.cfg.APIKey)
+	}
+	if stream &amp;&amp; g.cfg.FirstByte &gt; 0 {
+		t := time.AfterFunc(g.cfg.FirstByte, cancel)
+		defer t.Stop() // остановится, как только Peek дождётся первого байта
+	}
+	resp, err := g.client.Do(req)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	up := &amp;upstream{resp: resp, body: bufio.NewReader(resp.Body), cancel: cancel}
+	if _, err := up.body.Peek(1); err != nil &amp;&amp; err != io.EOF {
+		up.Close()
+		return nil, err
+	}
+	return up, nil
+}
+
+func retryable(code int) bool {
+	return code == http.StatusTooManyRequests || code == http.StatusBadGateway ||
+		code == http.StatusServiceUnavailable || code == http.StatusGatewayTimeout
+}
+
+// chunk — то, что нужно шлюзу из SSE-чанка chat.completion.chunk.
+type chunk struct {
+	Choices []struct {
+		Delta struct {
+			Content   string `json:"content"`
+			Reasoning string `json:"reasoning"` // reasoning-модели; в старых vLLM поле звалось reasoning_content
+		} `json:"delta"`
+	} `json:"choices"`
+	Usage *struct {
+		CompletionTokens int `json:"completion_tokens"`
+	} `json:"usage"`
+}
+
+// pipeSSE пробрасывает стрим построчно и сбрасывает буфер после каждой строки.
+func pipeSSE(w http.ResponseWriter, src *bufio.Reader, start time.Time, st *Stats) {
+	h := w.Header()
+	h.Set("Content-Type", "text/event-stream")
+	h.Set("Cache-Control", "no-cache")
+	h.Set("X-Accel-Buffering", "no") // nginx перед шлюзом не должен копить стрим
+	w.WriteHeader(http.StatusOK)
+	rc := http.NewResponseController(w)
+	var first, last time.Time
+	chunks := 0
+	for {
+		line, err := src.ReadBytes('\n')
+		if len(line) &gt; 0 {
+			if _, werr := w.Write(line); werr != nil {
+				return // клиент ушёл: defer отменит запрос к vLLM, генерация остановится
+			}
+			_ = rc.Flush()
+			if data, ok := bytes.CutPrefix(line, []byte("data:")); ok {
+				var c chunk
+				if json.Unmarshal(data, &amp;c) == nil { // "[DONE]" не JSON — пропускаем
+					if len(c.Choices) &gt; 0 &amp;&amp; (c.Choices[0].Delta.Content != "" || c.Choices[0].Delta.Reasoning != "") {
+						if first.IsZero() {
+							first = time.Now()
+						}
+						last = time.Now()
+						chunks++
+					}
+					if c.Usage != nil {
+						st.OutTokens = c.Usage.CompletionTokens
+					}
+				}
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	if st.OutTokens == 0 {
+		st.OutTokens = chunks // без usage: чанк ≈ токен, если stream_interval = 1
+	}
+	if !first.IsZero() {
+		st.TTFT = first.Sub(start)
+		if st.OutTokens &gt; 1 {
+			st.TPOT = last.Sub(first) / time.Duration(st.OutTokens-1)
+		}
+	}
+}
+
+func apiError(w http.ResponseWriter, code int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"message": msg, "code": code}})
+}</code></pre></div>
+    <div class="tab-panel" data-tab="Go: запуск"><pre><code class="lang-go">// go run . -upstream http://localhost:8000 -models "clf=ticket-clf,chat=Qwen/Qwen3-8B" -max-inflight 128
+// Локально без GPU: -upstream http://localhost:11434 -models "chat=qwen3:8b" (Ollama).
+package main
+
+import (
+	"flag"
+	"log/slog"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+)
+
+func main() {
+	listen := flag.String("listen", ":8080", "адрес шлюза")
+	upstream := flag.String("upstream", "http://localhost:8000", "vLLM или Ollama")
+	models := flag.String("models", "chat=Qwen/Qwen3-8B", "публичное=имя_в_vLLM через запятую")
+	inflight := flag.Int("max-inflight", 128, "≈ --max-num-seqs × реплики")
+	flag.Parse()
+
+	m := map[string]string{}
+	for _, kv := range strings.Split(*models, ",") {
+		if pub, target, ok := strings.Cut(kv, "="); ok {
+			m[pub] = target
+		}
+	}
+	gw := New(Config{
+		Upstream: *upstream, APIKey: os.Getenv("VLLM_API_KEY"), Models: m,
+		MaxInFlight: *inflight, QueueWait: 2 * time.Second,
+		FirstByte: 10 * time.Second, Timeout: 5 * time.Minute,
+		MaxRetries: 2, Backoff: 200 * time.Millisecond,
+		Observe: func(s Stats) {
+			slog.Info("llm", "model", s.Model, "status", s.Status, "attempts", s.Attempts,
+				"ttft_ms", s.TTFT.Milliseconds(), "tpot_ms", s.TPOT.Milliseconds(), "out_tokens", s.OutTokens)
+		},
+	})
+	srv := &amp;http.Server{Addr: *listen, Handler: gw, ReadHeaderTimeout: 5 * time.Second}
+	slog.Info("gateway", "listen", *listen, "upstream", *upstream, "models", m)
+	if err := srv.ListenAndServe(); err != nil {
+		slog.Error("serve", "err", err)
+		os.Exit(1)
+	}
+}</code></pre></div>
+    <div class="tab-panel" data-tab="Go: тест с фейковым vLLM"><pre><code class="lang-go">// fakeVLLM — httptest-сервер, который отвечает как vLLM; handle решает, что вернуть на n-й вызов.
+func fakeVLLM(t *testing.T, handle func(n int, w http.ResponseWriter, body map[string]any)) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer k" {
+			http.Error(w, "bad request to upstream", http.StatusBadRequest)
+			return
+		}
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&amp;body)
+		handle(int(calls.Add(1)), w, body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &amp;calls
+}
+
+func newGW(upstream string, stats *[]Stats) *Gateway {
+	return New(Config{
+		Upstream: upstream, APIKey: "k",
+		Models:      map[string]string{"clf": "ticket-clf", "chat": "Qwen/Qwen3-8B"},
+		MaxInFlight: 4, QueueWait: 50 * time.Millisecond, FirstByte: 200 * time.Millisecond,
+		Timeout: 5 * time.Second, MaxRetries: 2, Backoff: time.Millisecond,
+		Observe: func(s Stats) { *stats = append(*stats, s) },
+	})
+}
+
+func post(t *testing.T, gw http.Handler, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	gw.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body)))
+	return rec
+}
+
+func TestStreamPassthroughAndMetrics(t *testing.T) {
+	up, _ := fakeVLLM(t, func(_ int, w http.ResponseWriter, body map[string]any) {
+		if so, _ := body["stream_options"].(map[string]any); so["include_usage"] != true {
+			t.Errorf("gateway must request usage in stream, got %v", body["stream_options"])
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fl := w.(http.Flusher)
+		send := func(s string) { fmt.Fprintf(w, "data: %s\n\n", s); fl.Flush() }
+		send(`{"choices":[{"delta":{"role":"assistant","content":""}}]}`)
+		time.Sleep(30 * time.Millisecond) // prefill
+		for _, tok := range []string{"При", "вет", "!"} {
+			send(fmt.Sprintf(`{"choices":[{"delta":{"content":%q}}]}`, tok))
+			time.Sleep(10 * time.Millisecond) // decode
+		}
+		send(`{"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":3}}`)
+		send("[DONE]")
+	})
+	var stats []Stats
+	rec := post(t, newGW(up.URL, &amp;stats), `{"model":"chat","stream":true,"messages":[{"role":"user","content":"привет"}]}`)
+	out := rec.Body.String()
+	if rec.Code != 200 || rec.Header().Get("Content-Type") != "text/event-stream" {
+		t.Fatalf("got %d %q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+	if strings.Index(out, `"При"`) &gt; strings.Index(out, `"вет"`) || !strings.HasSuffix(out, "data: [DONE]\n\n") {
+		t.Fatalf("stream is not passed through in order:\n%s", out)
+	}
+	s := stats[0]
+	if s.OutTokens != 3 || s.TTFT &lt; 30*time.Millisecond || s.TPOT &lt; 5*time.Millisecond || s.TPOT &gt; s.TTFT {
+		t.Fatalf("stats = %+v", s)
+	}
+}
+
+func TestNoFirstByteRetries(t *testing.T) {
+	up, calls := fakeVLLM(t, func(n int, w http.ResponseWriter, _ map[string]any) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.(http.Flusher).Flush() // заголовки ушли, а токенов нет: реплика зависла на prefill
+		if n == 1 {
+			time.Sleep(time.Second)
+			return
+		}
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n")
+	})
+	var stats []Stats
+	rec := post(t, newGW(up.URL, &amp;stats), `{"model":"chat","stream":true,"messages":[]}`)
+	if rec.Code != 200 || calls.Load() != 2 || !strings.Contains(rec.Body.String(), `"ok"`) {
+		t.Fatalf("code %d, calls %d, body %s", rec.Code, calls.Load(), rec.Body)
+	}
+}</code></pre></div>
+  </div>
+  <p>Полный код с тестами (маппинг модели, стрим и метрики, ретрай на 503, исчерпание ретраев, таймаут первого байта, лимит конкурентности) — в <code>examples/m10-models</code>, запуск <code>go test -race ./...</code>. На что обратить внимание:</p>
+  <ul>
+    <li><b>Отмена контекста при уходе клиента.</b> Запрос к vLLM привязан к <code>r.Context()</code>. Пользователь закрыл вкладку, соединение с vLLM закрылось, и он прерывает генерацию и освобождает KV-cache. Шлюз, который дочитывает ответ «в никуда», занимает слот батча впустую.</li>
+    <li><b><code>MaxIdleConnsPerHost</code></b> по умолчанию равен 2. При сотне параллельных стримов к одному хосту соединения пересоздавались бы на каждый запрос.</li>
+    <li><b>Сброс буфера после каждой строки</b> (<code>http.NewResponseController(w).Flush()</code>) и заголовок <code>X-Accel-Buffering: no</code> для nginx: иначе стрим приходит пачками, и TTFT у клиента не совпадает с измеренным.</li>
+    <li><b>Ретрай после таймаута первого байта не бесплатен:</b> отменённая попытка уже потратила prefill. Поэтому таймаут ставится с запасом над p99 TTFT, а не «на всякий случай короткий».</li>
+  </ul>
+  <div class="callout tip"><span class="title">Что упрощено</span>
+    <p>Поле <code>model</code> в ответе не переписывается обратно, и клиент видит имя адаптера. Один upstream: несколько реплик ставятся за балансировщик с политикой least-outstanding-requests или с учётом префикса. Одна общая очередь без справедливости между тенантами: когда тенантов много, нужна очередь на тенанта с весами. Метрики отдаются колбэком <code>Observe</code>, гистограммы Prometheus или OTel из модуля 9 подключаются в нём.</p>
+  </div>
+
+  <h2 id="licenses">Лицензии open-weight моделей</h2>
+  <p>Open-weight значит, что веса можно скачать, а не что с ними можно всё. Лицензия определяет, можно ли использовать модель коммерчески, распространять дообученные версии, учить на её выходах другие модели и где обязательно указать авторство. Проверяют её до выбора модели, а не перед релизом: менять базовую модель после месяца тюнинга и evals дорого.</p>
+  <table>
+    <tr><th>Семейство (октябрь 2026)</th><th>Лицензия</th><th>Что ограничивает</th></tr>
+    <tr><td><b>Qwen3, Qwen3.5</b></td><td>Apache 2.0</td><td>Почти ничего: при распространении сохранить текст лицензии и уведомления. Исключение из прошлого поколения — Qwen2.5-3B (только некоммерческое использование) и Qwen2.5-72B (своя лицензия: порог 100 млн MAU и «Built with Qwen» для моделей, обученных на её выходах)</td></tr>
+    <tr><td><b>Mistral</b>: Small 3.x, Large 3, 7B, Mixtral</td><td>Apache 2.0</td><td>Как выше. Но часть моделей прошлых лет (Mistral Large 2, Codestral 22B) вышла под Mistral Research License и Non-Production License: коммерческое использование только по отдельному договору</td></tr>
+    <tr><td><b>Gemma 4</b></td><td>Apache 2.0</td><td>Как выше</td></tr>
+    <tr><td><b>Gemma 3 и раньше</b></td><td>Gemma Terms of Use</td><td>Prohibited Use Policy, которую при распространении нужно включить в договор с вашими пользователями. Модели, обученные на синтетике от Gemma (дистилляция), считаются производными. Google оставляет за собой право ограничить использование при нарушении</td></tr>
+    <tr><td><b>Llama 3.x, Llama 4</b></td><td>Llama Community License</td><td>При 700 млн MAU и больше на дату релиза модели нужна отдельная лицензия от Meta. При распространении модели или продукта с ней — копия лицензии и надпись «Built with Llama» на видном месте. Модель, созданная или улучшенная с помощью Llama или её выходов, которую вы распространяете или делаете доступной другим, должна называться «Llama…». Обязательна Acceptable Use Policy. Для мультимодальных моделей (Llama 3.2 Vision, Llama 4) права не предоставляются компаниям с основным местом деятельности в ЕС и жителям ЕС; на конечных пользователей продукта это не распространяется</td></tr>
+    <tr><td><b>DeepSeek-R1, V3-0324 и новее</b></td><td>MIT</td><td>Почти ничего: сохранить уведомление</td></tr>
+    <tr><td><b>gpt-oss</b> (OpenAI)</td><td>Apache 2.0 и usage policy</td><td>Как Apache, плюс короткая политика использования в репозитории модели</td></tr>
+  </table>
+  <ul>
+    <li><b>Лицензия модели ≠ лицензия данных.</b> У датасета для дообучения свои ограничения: выходы API-моделей подчиняются условиям провайдера (многие запрещают обучать на них конкурирующие модели), данные клиентов — договору и закону о персональных данных (модуль 11).</li>
+    <li><b>Внутреннее использование и распространение.</b> Многие требования (атрибуция, копия лицензии, правила именования) срабатывают при распространении модели или продукта с ней. SaaS, где модель работает на вашем сервере, — пограничный случай, который юристы трактуют по-разному.</li>
+    <li><b>Производные.</b> Выкладываете адаптер или дообученную модель наружу: Llama требует «Llama» в начале имени, условия Gemma 3 — передать ограничения дальше, Apache 2.0 — сохранить NOTICE.</li>
+    <li><b>Веса — это код.</b> Скачивайте из официальной организации на Hugging Face, предпочитайте <code>safetensors</code> вместо pickle-форматов, включайте <code>trust_remote_code</code> только после ревью кода и фиксируйте ревизию (commit hash). Это LLM03 Supply Chain из <a href="m07.html#owasp">OWASP Top 10 for LLM</a> (модуль 7).</li>
+    <li><b>Решение фиксируйте в ADR</b> (<a href="m13.html#adr">модуль 13</a>): модель, ревизия, лицензия, дата проверки, вывод юриста. Применимость лицензии к конкретной системе определяет юрист.</li>
+  </ul>
+
   <h2 id="when">Когда fine-tuning, а когда промпт или RAG</h2>
+  <p>Вторая половина модуля — адаптация модели под задачу. Свой serving из первой половины понадобится и здесь: дообученную модель придётся где-то запускать. Но сначала вопрос, нужна ли она вообще.</p>
   <p>Главное правило: <b>fine-tuning меняет поведение, а не знания</b>. Дообучение на внутренней вики не научит модель надёжно отвечать фактами из неё. Модель выучит стиль вики и начнёт уверенно галлюцинировать в этом стиле. Знания подключают через RAG (модуль 5): его можно обновлять без переобучения, давать ссылки на источники и учитывать права доступа.</p>
   <p>Fine-tuning оправдан, когда нужно:</p>
   <ul>
@@ -75,7 +735,7 @@
     <li><b>r (rank)</b> — ёмкость адаптера. Обычно 8–64. Больше r — больше выразительности и риска переобучения. Для формата и стиля хватает 8–16.</li>
     <li><b>α (alpha)</b> — масштаб: ΔW умножается на α/r. Обычно α = r или 2r. Меняете r — пересматривайте α или learning rate. Вариант rsLoRA масштабирует на α/√r и стабильнее при больших r.</li>
     <li><b>Какие слои.</b> В исходной статье это только attention (q, v). В QLoRA показано, что адаптеры на <b>все линейные слои</b> (q, k, v, o, gate, up, down) нужны, чтобы догнать full fine-tuning. Сейчас это разумный дефолт: <code>target_modules="all-linear"</code>.</li>
-    <li><b>Инференс.</b> Адаптер можно слить в веса (<code>merge_and_unload</code>), и тогда латентность не меняется. Можно держать отдельно и подгружать на лету: vLLM обслуживает много LoRA-адаптеров поверх одной базовой модели, то есть «модель на тенанта» за копейки.</li>
+    <li><b>Инференс.</b> Адаптер можно слить в веса (<code>merge_and_unload</code>), и тогда латентность не меняется. Можно держать отдельно и подгружать на лету: vLLM обслуживает много LoRA-адаптеров поверх одной базовой модели, то есть «модель на тенанта» за копейки (см. <a href="#ship">multi-LoRA serving</a>).</li>
     <li><b>Learning rate.</b> Для LoRA выше, чем для full FT: порядка 1e-4–2e-4 против 1e-5–2e-5.</li>
   </ul>
   <p><b>QLoRA</b> хранит замороженную базовую модель в 4 битах (тип NF4 плюс double quantization констант), а адаптеры обучает в bf16. Память под базу падает в ~4 раза относительно bf16. Авторы дообучили 65B-модель на одном GPU с 48 ГБ. Платите вы скоростью (деквантизация на лету) и немного качеством, которое обычно близко к 16-битной LoRA.</p>
@@ -131,6 +791,89 @@
     <li><b>Утечка eval.</b> Если учитель генерировал и тестовые примеры, вы проверяете модель на её «родном» распределении. Тест должен быть реальным и размеченным людьми.</li>
     <li><b>ToS</b> провайдера для дистилляции (см. выше).</li>
   </ul>
+  <p>Код генерации и фильтрации — в разделе <a href="#distill">«Синтетика и дистилляция в коде»</a>.</p>
+
+  <h2 id="distill">Синтетика и дистилляция в коде</h2>
+  <p>В прикладной работе дистилляция почти всегда выглядит так: сильная модель (учитель) размечает или генерирует данные, маленькая (ученик) учится на них через SFT. Классический вариант Хинтона учит ученика повторять распределение вероятностей учителя (логиты), а не только итоговый текст. Он доступен, только если учитель — ваша open-weight модель с тем же токенизатором; в TRL для этого есть <code>DistillationTrainer</code> (on-policy дистилляция: ученик генерирует ответы сам, а учитель оценивает его токены). Через API у вас есть только тексты, и это обычный SFT на выходах учителя.</p>
+  <p>Масштаб метода хорошо виден на DeepSeek-R1-Distill: модели Qwen и Llama от 1.5B до 70B дообучили SFT на 800 тысячах примеров, отобранных с помощью DeepSeek-R1. По отчёту авторов, такая дистилляция дала маленьким моделям больше, чем дорогой RL, применённый к ним напрямую.</p>
+  <h3>Пайплайн</h3>
+  <ol>
+    <li><b>Входы.</b> Лучше всего реальные входы без разметки (логи, тикеты): учитель только размечает, и распределение входов честное. Генерировать сами входы приходится, когда реальных мало или в них нет редких классов.</li>
+    <li><b>Разнообразие задаётся явно.</b> У новых моделей Claude нет параметра temperature (модуль 2), а высокая температура и не даёт разнообразия, только шум. Разнообразие задают в промпте: персоны, длина, стиль, опечатки, подтемы, сетка «тема × персона × длина».</li>
+    <li><b>Фильтры от дешёвых к дорогим:</b> схема и длина → точные дубли → близость к eval-набору (утечка) → почти-дубли → независимая разметка второй моделью, которая не знает, под какую метку генерировался текст. Расхождение разметчиков означает либо плохой текст, либо пограничный класс, и такие примеры полезно отдать человеку.</li>
+    <li><b>Отчёт о разнообразии:</b> распределение меток, длины, доля уникальных начал фраз. Если 40% примеров начинаются с «Здравствуйте, у меня проблема», ученик выучит шаблон.</li>
+    <li><b>Смесь с реальными данными</b> и ручная проверка выборки (50–100 примеров) перед обучением. Тест — только реальный.</li>
+  </ol>
+  <div class="tabs">
+    <div class="tab-panel" data-tab="Python: генерация и фильтры"><pre><code class="lang-python"># Полный файл с офлайн-учителем (StubTeacher) и main — examples/m10-models/synth.py
+SYSTEM = "Классифицируй тикет поддержки. Ответ: одна метка из списка: billing, delivery, account, bug, other."
+
+LABELS = {"billing": "оплата, двойные списания, возвраты, счета", "delivery": "сроки и место доставки, курьер",
+          "account": "вход, пароль, профиль, коды подтверждения", "bug": "ошибки и падения сайта или приложения",
+          "other": "всё остальное: вопросы о магазине, отзывы, сотрудничество"}
+
+def norm(t: str) -&gt; str:
+    return re.sub(r"\s+", " ", t.lower()).strip()
+
+def shingles(t: str, k: int = 5) -&gt; set[str]:
+    t = norm(t)
+    return {t[i:i + k] for i in range(max(1, len(t) - k + 1))}
+
+def jaccard(a: set[str], b: set[str]) -&gt; float:
+    return len(a &amp; b) / len(a | b) if a | b else 1.0
+
+class ClaudeTeacher:
+    def __init__(self) -&gt; None:
+        import anthropic
+        self.client = anthropic.Anthropic()  # ANTHROPIC_API_KEY из окружения
+
+    def _text(self, **kw) -&gt; str:
+        resp = self.client.messages.create(**kw)
+        return "".join(b.text for b in resp.content if b.type == "text")
+
+    def generate(self, label: str, persona: str, n: int) -&gt; list[str]:
+        text = self._text(model="claude-opus-5", max_tokens=8000, messages=[{"role": "user", "content":
+            f"Сгенерируй {n} разных обращений в поддержку интернет-магазина на тему «{label}» ({LABELS[label]}). "
+            f"Автор: {persona}. Варьируй длину (5–60 слов), детали и первые слова. "
+            "Не упоминай название темы. Верни только JSON-массив строк."}])
+        return json.loads(text[text.find("["):text.rfind("]") + 1])
+
+    def label(self, text: str) -&gt; str:  # разметчик не знает, под какую метку генерировали текст
+        words = self._text(model="claude-haiku-4-5", max_tokens=10, system=SYSTEM,
+                           messages=[{"role": "user", "content": text}]).split()
+        return words[0].strip(".,").lower() if words else ""
+
+def filter_examples(cands: list[tuple[str, str]], eval_texts: list[str], labeler, sim: float = 0.8):
+    """Дешёвые проверки первыми, вызов LLM-разметчика — последним. Порог sim подбирают по выборке глазами."""
+    kept, dropped, hashes, kept_sh = [], Counter(), set(), []
+    eval_sh = [shingles(t) for t in eval_texts]
+    for text, label in cands:
+        if label not in LABELS or not 15 &lt;= len(text) &lt;= 2000:
+            dropped["схема или длина"] += 1
+            continue
+        h = hashlib.sha256(norm(text).encode()).hexdigest()
+        if h in hashes:
+            dropped["точный дубль"] += 1
+            continue
+        sh = shingles(text)
+        if any(jaccard(sh, e) &gt;= sim for e in eval_sh):
+            dropped["похож на eval"] += 1
+            continue
+        if any(jaccard(sh, k) &gt;= sim for k in kept_sh):  # ponytail: O(n²); от ~10⁴ примеров — MinHash/LSH
+            dropped["почти дубль"] += 1
+            continue
+        if labeler(text) != label:
+            dropped["разметчик не согласен"] += 1
+            continue
+        hashes.add(h)
+        kept_sh.append(sh)
+        kept.append((text, label))
+    return kept, dropped</code></pre></div>
+  </div>
+  <p>Без ключа скрипт работает в режиме заглушки: офлайн-учитель выдаёт по одному дефекту каждого вида, и <code>assert</code> в конце проверяет, что каждый фильтр поймал свой. С ключом учитель — Opus, независимый разметчик — Haiku. Порог похожести 0.8 по символьным 5-граммам подбирается по выборке глазами: слишком низкий выкинет законные вариации, слишком высокий пропустит перефразы.</p>
+  <div class="callout warn"><span class="title">Потолок учителя и ToS</span>
+    <p>Ученик не станет лучше учителя на тех примерах, где учитель ошибается: независимый разметчик и ручная проверка снижают долю ошибок, но не обнуляют её. Отдельно проверьте условия провайдера учителя: обучать на выходах закрытой модели узкий внутренний классификатор обычно можно, универсальную модель-конкурента — как правило, нет. С open-weight учителем действует его лицензия (см. <a href="#licenses">раздел о лицензиях</a>: у Llama и Gemma 3 есть условия для моделей, обученных на их выходах).</p>
+  </div>
 
   <h2 id="training">Train/val/test и кривые обучения</h2>
   <p><b>Train</b> — на нём учимся. <b>Validation</b> — по нему выбираем гиперпараметры и момент остановки. <b>Test</b> — трогаем один раз в конце, чтобы честно оценить результат. Если вы смотрели на test и что-то подкручивали, он стал вторым validation, и оценка уже оптимистична. Типичное разбиение 80/10/10, со <b>стратификацией</b> по классу, чтобы редкие классы были во всех частях.</p>
@@ -205,7 +948,7 @@
     <tr><th>Вариант</th><th>Плюсы</th><th>Минусы</th></tr>
     <tr><td><b>Fine-tuning API провайдера</b> (OpenAI: SFT, DPO, RFT для части моделей; Google Vertex AI; Amazon Bedrock для отдельных семейств)</td><td>Загрузил JSONL и получил эндпоинт. Не нужны GPU и MLOps</td><td>Оплата за обучающие токены плюс, как правило, повышенная цена инференса дообученной модели. Веса не ваши, набор моделей ограничен. У Anthropic на момент написания нет общедоступного self-serve fine-tuning в Claude API (исторически был fine-tuning Claude 3 Haiku через Bedrock), проверьте актуальное состояние</td></tr>
     <tr><td><b>Платформы для open-source</b> (Together, Fireworks и др.)</td><td>LoRA на Llama, Qwen, Mistral в пару кликов, serverless-инференс адаптеров</td><td>Зависимость от платформы, данные уходят третьей стороне</td></tr>
-    <tr><td><b>Свои GPU или аренда</b></td><td>Полный контроль, приватность, веса ваши, можно сервить через vLLM (модуль 9)</td><td>Нужны MLOps, мониторинг и обслуживание инференса</td></tr>
+    <tr><td><b>Свои GPU или аренда</b></td><td>Полный контроль, приватность, веса ваши, можно сервить через vLLM (разделы <a href="#selfhosted">self-hosted</a> и <a href="#ship">multi-LoRA</a>)</td><td>Нужны MLOps, мониторинг и обслуживание инференса</td></tr>
   </table>
   <p><b>Инструменты для своих GPU:</b></p>
   <ul>
@@ -265,53 +1008,142 @@ for name, part in [("train", train), ("val", val), ("test", test)]:
 
 # Почти-дубликаты (MinHash/embeddings) и групповое разбиение по клиенту — следующий шаг,
 # если в данных есть шаблонные тексты или несколько сообщений одного треда.</code></pre></div>
-    <div class="tab-panel" data-tab="Python: LoRA (TRL + PEFT)"><pre><code class="lang-python"># pip install "trl&gt;=1.0" peft datasets transformers accelerate  (+ bitsandbytes для QLoRA)
-# Аргументы сверены с документацией TRL v1.x (SFTTrainer / SFTConfig).
+    <div class="tab-panel" data-tab="Python: LoRA (TRL + PEFT)"><pre><code class="lang-python">"""LoRA-дообучение малой модели под классификацию тикетов (TRL + PEFT) с оценкой до и после.
+
+GPU с bf16 (Colab L4/A100, RTX 30xx+, H100), данные из скрипта подготовки датасета модуля 10:
+  uv run --python 3.12 --with trl==1.14.2 --with peft==0.21.2 --with transformers==5.19.0 \
+      --with datasets==5.1.0 --with accelerate==1.15.0 --with torch \
+      python lora_sft.py --train train.jsonl --val val.jsonl --test test.jsonl --model Qwen/Qwen3-4B
+CPU dry-run (проверка, что пайплайн собирается; метрики на демо-данных ничего не значат):
+  ... python lora_sft.py --demo --model Qwen/Qwen3-0.6B --cpu --max-steps 4
+"""
+import argparse
+import random
+
 import torch
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 from peft import LoraConfig
 from transformers import EarlyStoppingCallback
 from trl import SFTConfig, SFTTrainer
 
-data = load_dataset("json", data_files={"train": "train.jsonl", "validation": "val.jsonl"})
+SYSTEM = "Классифицируй тикет поддержки. Ответ: одна метка из списка: billing, delivery, account, bug, other."
+LABELS = ["billing", "delivery", "account", "bug", "other"]
 
-peft_config = LoraConfig(
-    r=16,                        # ёмкость адаптера
-    lora_alpha=32,               # масштаб ΔW = (alpha / r) · B·A
-    lora_dropout=0.05,
-    target_modules="all-linear", # q,k,v,o + MLP: ближе к full FT, чем только attention
-    task_type="CAUSAL_LM",
-)
 
-args = SFTConfig(
-    output_dir="out/ticket-clf-lora",
-    model_init_kwargs={"dtype": torch.bfloat16},  # без этого модель из строки грузится в fp32
-    assistant_only_loss=True,     # loss только на ответе ассистента (нужен chat template с generation-тегами)
-    max_length=1024,              # длинные примеры обрезаются: проверьте, что метки не теряются
-    num_train_epochs=3,
-    learning_rate=1e-4,           # для LoRA выше, чем для full FT
-    per_device_train_batch_size=8,
-    gradient_accumulation_steps=2,
-    eval_strategy="steps", eval_steps=50,
-    save_strategy="steps", save_steps=50, save_total_limit=3,
-    load_best_model_at_end=True, metric_for_best_model="eval_loss", greater_is_better=False,
-    logging_steps=10, report_to="none", seed=42,
-)
+def demo_split(n: int, seed: int) -&gt; Dataset:
+    texts = {
+        "billing": ["Списали деньги дважды за заказ", "Не пришёл возврат", "Счёт больше, чем сумма в корзине"],
+        "delivery": ["Курьер не приехал", "Где мой заказ, прошла неделя", "Привезли не в тот пункт выдачи"],
+        "account": ["Не могу войти в аккаунт", "Как сменить email в профиле?", "Не приходит код подтверждения"],
+        "bug": ["Приложение падает при оплате", "Кнопка «Купить» не нажимается", "Ошибка 500 на странице заказа"],
+        "other": ["Есть ли подарочные карты?", "Хочу похвалить курьера", "Работаете ли вы в праздники?"],
+    }
+    rnd = random.Random(seed)
+    rows = []
+    for _ in range(n):
+        label = rnd.choice(LABELS)
+        rows.append({"messages": [{"role": "system", "content": SYSTEM},
+                                  {"role": "user", "content": rnd.choice(texts[label])},
+                                  {"role": "assistant", "content": label}]})
+    return Dataset.from_list(rows)
 
-trainer = SFTTrainer(
-    model="Qwen/Qwen3-4B",        # строка: тренер сам загрузит модель и токенизатор
-    args=args,
-    train_dataset=data["train"],
-    eval_dataset=data["validation"],
-    peft_config=peft_config,
-    callbacks=[EarlyStoppingCallback(early_stopping_patience=3)],
-    # QLoRA: quantization_config=BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
-    #          bnb_4bit_compute_dtype=torch.bfloat16, bnb_4bit_use_double_quant=True)
-)
-trainer.train()
-trainer.save_model("out/ticket-clf-lora/best")   # сохраняется только адаптер (десятки МБ)
-print(trainer.evaluate())
-# Дальше: vllm serve Qwen/Qwen3-4B --enable-lora --lora-modules clf=out/ticket-clf-lora/best</code></pre></div>
+
+@torch.no_grad()
+def correct(model, tok, rows: Dataset) -&gt; list[int]:
+    """1/0 на каждый пример: совпала ли первая сгенерированная метка с эталоном (greedy)."""
+    model.eval()
+    out = []
+    for ex in rows:
+        prompt = tok.apply_chat_template(ex["messages"][:-1], add_generation_prompt=True, tokenize=False,
+                                         enable_thinking=False)  # Qwen3: без &lt;think&gt;; другие шаблоны игнорируют
+        ids = tok(prompt, return_tensors="pt", add_special_tokens=False).to(model.device)
+        gen = model.generate(**ids, max_new_tokens=6, do_sample=False)
+        words = tok.decode(gen[0, ids["input_ids"].shape[1]:], skip_special_tokens=True).split()
+        out.append(int(bool(words) and words[0].strip(".,") == ex["messages"][-1]["content"]))
+    return out
+
+
+def paired_bootstrap(before: list[int], after: list[int], n: int = 10_000, seed: int = 0) -&gt; tuple[float, float]:
+    """95% ДИ разницы accuracy (after − before) на ОДНИХ И ТЕХ ЖЕ примерах: ресэмплим пары, а не системы по отдельности."""
+    rnd, k = random.Random(seed), len(before)
+    diffs = sorted(sum(after[i] - before[i] for i in (rnd.randrange(k) for _ in range(k))) / k for _ in range(n))
+    return diffs[int(0.025 * n)], diffs[int(0.975 * n)]
+
+
+def main() -&gt; None:
+    p = argparse.ArgumentParser()
+    p.add_argument("--model", default="Qwen/Qwen3-4B")
+    for f in ("--train", "--val", "--test"):
+        p.add_argument(f)
+    p.add_argument("--demo", action="store_true", help="встроенные игрушечные данные вместо JSONL")
+    p.add_argument("--cpu", action="store_true")
+    p.add_argument("--max-steps", type=int, default=-1, help="-1 — обучать по эпохам")
+    p.add_argument("--out", default="out/ticket-clf-lora")
+    p.add_argument("--merge", action="store_true", help="дополнительно сохранить модель со слитым адаптером")
+    a = p.parse_args()
+
+    if a.demo:
+        train, val, test = demo_split(48, 1), demo_split(8, 2), demo_split(8, 3)
+    else:
+        files = {"train": a.train, "validation": a.val, "test": a.test or a.val}
+        data = load_dataset("json", data_files=files)
+        train, val, test = data["train"], data["validation"], data["test"]
+
+    # bf16 есть на Ampere и новее (L4, A100, RTX 30xx+, H100). На T4 и CPU — fp32: берите модель ≤ 1.7B или QLoRA.
+    bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported() and not a.cpu
+    peft_config = LoraConfig(
+        r=16,                         # ёмкость адаптера
+        lora_alpha=32,                # масштаб ΔW = (alpha / r) · B·A
+        lora_dropout=0.05,
+        target_modules="all-linear",  # q,k,v,o + MLP: ближе к full FT, чем только attention
+        task_type="CAUSAL_LM",
+    )
+    args = SFTConfig(
+        output_dir=a.out,
+        model_init_kwargs={"dtype": torch.bfloat16 if bf16 else torch.float32},
+        bf16=bf16,                    # в SFTConfig по умолчанию True: без bf16 в железе обучение упадёт
+        use_cpu=a.cpu,
+        assistant_only_loss=True,     # loss только на ответе; TRL сам подставит шаблон с {% generation %} для Qwen, Llama, Gemma
+        max_length=1024,              # длинные примеры обрезаются: проверьте, что метки не теряются
+        num_train_epochs=3,
+        max_steps=a.max_steps,
+        learning_rate=1e-4,           # для LoRA выше, чем для full FT (дефолт SFTConfig 2e-5)
+        per_device_train_batch_size=8,
+        gradient_accumulation_steps=2,
+        eval_strategy="steps", eval_steps=2 if a.demo else 50,
+        save_strategy="steps", save_steps=2 if a.demo else 50, save_total_limit=2,
+        load_best_model_at_end=True, metric_for_best_model="eval_loss", greater_is_better=False,
+        logging_steps=1 if a.demo else 10, report_to="none", seed=42,
+    )
+    trainer = SFTTrainer(
+        model=a.model,                # строка: тренер сам загрузит модель и токенизатор
+        args=args,
+        train_dataset=train,
+        eval_dataset=val,
+        peft_config=peft_config,
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)],
+        # QLoRA: quantization_config=BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
+        #          bnb_4bit_compute_dtype=torch.bfloat16, bnb_4bit_use_double_quant=True)
+    )
+    tok = trainer.processing_class
+    trainer.model.print_trainable_parameters()
+
+    before = correct(trainer.model, tok, test)  # B = 0 → адаптер пока ничего не меняет, это базовая модель
+    trainer.train()
+    after = correct(trainer.model, tok, test)
+    lo, hi = paired_bootstrap(before, after)
+    print(f"test accuracy: до {sum(before) / len(before):.3f} → после {sum(after) / len(after):.3f}, "
+          f"разница 95% ДИ [{lo:+.3f}; {hi:+.3f}] на {len(test)} примерах")
+
+    trainer.save_model(f"{a.out}/best")  # только адаптер: десятки МБ
+    if a.merge:  # одна модель без адаптера: проще сервить, но теряется multi-LoRA
+        trainer.model.merge_and_unload().save_pretrained(f"{a.out}/merged")
+        tok.save_pretrained(f"{a.out}/merged")
+    print(f"vllm serve {a.model} --enable-lora --lora-modules ticket-clf={a.out}/best --max-lora-rank 16")
+
+
+if __name__ == "__main__":
+    main()</code></pre></div>
     <div class="tab-panel" data-tab="Python: метрики и порог"><pre><code class="lang-python"># pip install scikit-learn numpy
 import numpy as np
 from sklearn.metrics import (average_precision_score, classification_report,
@@ -473,83 +1305,237 @@ func main() {
   </div>
   <div class="callout tip"><span class="title">Что упрощено</span>
     <p>Валидатор ищет только точные дубликаты после нормализации. Почти-дубликаты требуют MinHash или embeddings, добавляйте их, когда в данных есть шаблонные тексты. Длина считается в символах. Если лимит жёсткий (<code>max_length</code> в тренере), считайте токенизатором целевой модели в Python-части пайплайна.</p>
+    <p>LoRA- и DPO-скрипты сверены с TRL 1.14, PEFT 0.21 и Transformers 5.19 (октябрь 2026) и прогнаны на CPU в режиме <code>--demo</code> на Qwen3-0.6B (4 шага, около минуты): это проверка, что пайплайн собирается, а не обучение. Полноценный запуск — на GPU. Две ловушки версий. <code>assistant_only_loss</code> требует chat template с разметкой <code>{% generation %}</code>: для Qwen, Llama 3 и Gemma 3 TRL подставит обучающий шаблон сам, для остальных (например, SmolLM2) упадёт с ошибкой, и тогда нужен свой шаблон (<code>chat_template_path</code>) или <code>assistant_only_loss=False</code>. И в <code>SFTConfig</code> по умолчанию <code>bf16=True</code>, поэтому на T4 и CPU его надо выключать явно, как в скрипте.</p>
   </div>
+
+  <h2 id="dpo">DPO на практике</h2>
+  <p>SFT учит «вот правильный ответ». Но для тона, краткости и уместности отказов правильного ответа часто нет, а сравнить два ответа легко. DPO (Direct Preference Optimization) учится именно на сравнениях. На тройках (prompt, chosen, rejected) модель повышает вероятность chosen относительно rejected, а замороженная референсная модель (обычно та же модель после SFT) не даёт уйти далеко. Неявная «награда» ответа в DPO равна β · log(π(y|x) / π<sub>ref</sub>(y|x)): насколько обучаемая модель предпочитает этот ответ сильнее, чем референс. Отдельной reward-модели и RL-цикла нет, поэтому DPO и его варианты стали стандартом preference tuning в прикладных задачах.</p>
+  <h3>Откуда брать пары</h3>
+  <ul>
+    <li><b>Правки операторов.</b> Черновик модели — rejected, исправленный оператором текст — chosen. В поддержке это самый ценный источник: пары появляются сами в ходе работы.</li>
+    <li><b>Оценки пользователей</b> (лайк или дизлайк) — непарные сигналы. Для них подходит KTO (<code>KTOTrainer</code> в TRL), которому пары не нужны.</li>
+    <li><b>On-policy пары.</b> SFT-модель генерирует 2–4 ответа на реальные промпты, LLM-судья с откалиброванной рубрикой (модуль 8) выбирает лучший и худший. Пары из распределения самой модели обычно работают лучше, чем «хороший ответ сильной модели против плохого ответа из интернета».</li>
+    <li><b>Проверяемая правильность</b> (тесты, точное совпадение, схема). Тогда лучше RL с наградой от проверки, например GRPO (<code>GRPOTrainer</code>), а не DPO.</li>
+  </ul>
+  <pre><code class="lang-python">{"prompt":   [{"role": "user", "content": "Курьер не приехал"}],
+ "chosen":   [{"role": "assistant", "content": "Извините за ожидание. Курьер опаздывает на 40 минут; перенести на завтра или отменить?"}],
+ "rejected": [{"role": "assistant", "content": "Курьеры иногда опаздывают, это нормально. Подождите ещё."}]}</code></pre>
+  <div class="tabs">
+    <div class="tab-panel" data-tab="Python: DPO (TRL + PEFT)"><pre><code class="lang-python"># Полный файл с демо-парами и запуском — examples/m10-models/dpo.py
+def main() -&gt; None:
+    p = argparse.ArgumentParser()
+    p.add_argument("--model", default="Qwen/Qwen3-4B", help="лучше — уже прошедшая SFT модель")
+    for f in ("--train", "--val"):
+        p.add_argument(f)
+    p.add_argument("--demo", action="store_true")
+    p.add_argument("--cpu", action="store_true")
+    p.add_argument("--max-steps", type=int, default=-1)
+    p.add_argument("--out", default="out/support-dpo")
+    a = p.parse_args()
+
+    if a.demo:
+        train, val = demo_rows(), demo_rows().select(range(4))
+    else:
+        data = load_dataset("json", data_files={"train": a.train, "validation": a.val})
+        train, val = data["train"], data["validation"]
+
+    bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported() and not a.cpu
+    args = DPOConfig(
+        output_dir=a.out,
+        model_init_kwargs={"dtype": torch.bfloat16 if bf16 else torch.float32},
+        bf16=bf16,
+        use_cpu=a.cpu,
+        beta=0.1,               # сила «поводка» к референсной модели: больше β — меньше уход от неё
+        loss_type=["sigmoid"],  # классический DPO; "ipo" устойчивее к шуму в парах
+        learning_rate=5e-6,     # DPO чувствителен к LR: на порядок ниже, чем для SFT
+        max_length=1024,        # prompt + ответ
+        num_train_epochs=1,
+        max_steps=a.max_steps,
+        per_device_train_batch_size=4,
+        gradient_accumulation_steps=4,
+        eval_strategy="steps", eval_steps=2 if a.demo else 50,
+        logging_steps=1 if a.demo else 10, report_to="none", seed=42,
+    )
+    trainer = DPOTrainer(
+        model=a.model,
+        ref_model=None,  # с peft_config референсом служит та же модель с выключенным адаптером: вторая копия не нужна
+        args=args,
+        train_dataset=train,
+        eval_dataset=val,
+        peft_config=LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, target_modules="all-linear", task_type="CAUSAL_LM"),
+    )
+    trainer.train()
+    m = trainer.evaluate()
+    # rewards/accuracies — доля пар, где chosen получил больший неявный reward, чем rejected;
+    # margins — средний разрыв. Растут — модель учится различать; ушли в потолок за пару шагов — проверьте утечку или β.
+    print({k: round(v, 4) for k, v in m.items() if "rewards" in k or k == "eval_loss"})
+    trainer.save_model(f"{a.out}/best")</code></pre></div>
+  </div>
+  <h3>На что смотреть и где ломается</h3>
+  <ul>
+    <li><b>Метрики TRL.</b> <code>rewards/accuracies</code> — доля пар, где chosen получил больший неявный reward, <code>rewards/margins</code> — средний разрыв. Accuracy 1.0 на валидации через пару десятков шагов — повод заподозрить утечку или тривиальные пары (например, chosen всегда короче).</li>
+    <li><b>Эксплуатация длины.</b> Если chosen систематически длиннее, модель выучит «длиннее — значит лучше». Балансируйте длины в парах и сравнивайте распределение длины ответов до и после.</li>
+    <li><b>β и learning rate.</b> Меньший β позволяет уйти от референса дальше: эффект сильнее, но выше риск деградации. Дефолт TRL — 0.1. DPO чувствителен к learning rate, начинайте на порядок ниже, чем для SFT. Варианты лосса (например, <code>loss_type=["ipo"]</code>) устойчивее к шумным парам.</li>
+    <li><b>Оценка</b> — не по loss, а по доле побед (win rate) над SFT-версией на отложенных промптах: судья плюс выборочная проверка людьми. И по регрессионному набору: DPO может ослабить следование формату и safety-поведение.</li>
+  </ul>
+
+  <h2 id="ship">До и после: оценка, выкатка, multi-LoRA</h2>
+  <p>Дообученная модель остаётся гипотезой, пока её не сравнили с альтернативами на одном и том же замороженном тесте.</p>
+  <table>
+    <tr><th>Шаг</th><th>Что делаем</th><th>Зачем</th></tr>
+    <tr><td>Замороженный test</td><td>Реальные примеры, размеченные людьми, без пересечений с train и синтетикой (проверка как в <code>synth.py</code>)</td><td>Иначе измеряется запоминание</td></tr>
+    <tr><td>Базовые линии</td><td>Промпт на API-модели (Haiku, Sonnet), few-shot, та же open-weight модель без адаптера</td><td>Выигрыш считается против лучшей дешёвой альтернативы, а не против «голой» базы</td></tr>
+    <tr><td>Парное сравнение</td><td>Верно ли решён каждый пример «до» и «после», разница с 95% ДИ: парный bootstrap (функция <code>paired_bootstrap</code> в <code>lora_sft.py</code>) или McNemar (модуль 8)</td><td>«+2 п.п.» на 200 примерах часто укладывается в шум</td></tr>
+    <tr><td>Регрессия</td><td>30–50 общих задач: формат, другой язык, отказы на вредные запросы</td><td>Catastrophic forgetting не виден по целевой метрике</td></tr>
+    <tr><td>Латентность и цена</td><td>TTFT и TPOT p95, $ за 1000 запросов на целевом стеке (vLLM и шлюз)</td><td>Обычно ради них и дообучали</td></tr>
+    <tr><td>Выкатка</td><td>Shadow-трафик → canary → A/B через шлюз (модуль 9): смена адаптера — строка в карте моделей</td><td>Офлайн-тест не видит дрейф реального потока</td></tr>
+  </table>
+  <h3>Multi-LoRA serving</h3>
+  <p>Адаптер весит десятки мегабайт, база — гигабайты. vLLM держит в памяти одну базу и подгружает адаптеры, причём в одном батче могут идти запросы к разным адаптерам (так устроены S-LoRA и Punica). Получается «модель на задачу или тенанта» без отдельной GPU на каждую.</p>
+  <pre><code class="lang-bash">vllm serve Qwen/Qwen3-4B --enable-lora \
+  --lora-modules ticket-clf=out/ticket-clf-lora/best support-tone=out/support-dpo/best \
+  --max-loras 4 --max-lora-rank 16 --max-cpu-loras 16
+# адаптеры видны в /v1/models (у каждого parent = базовая модель) и выбираются полем "model"
+curl -s localhost:8000/v1/models | jq '.data[] | {id, parent}'</code></pre>
+  <ul>
+    <li><b><code>--max-loras</code></b> — сколько разных адаптеров может быть в одном батче (по умолчанию 1). <b><code>--max-lora-rank</code></b> — максимальный r среди адаптеров (по умолчанию 16; больше — лишняя память). <b><code>--max-cpu-loras</code></b> — сколько адаптеров держать в RAM для быстрой подгрузки.</li>
+    <li><b>Цена.</b> Запрос с адаптером считается дольше, чем к базе (добавляются умножения на B и A), а смешанный батч обычно медленнее однородного. Меряйте нагрузочным тестом на реальной смеси адаптеров.</li>
+    <li><b>Слить или держать отдельно.</b> <code>merge_and_unload()</code> (флаг <code>--merge</code> в <code>lora_sft.py</code>) даёт одну модель без накладных расходов, её можно квантовать, но каждая задача — отдельная копия весов. Отдельные адаптеры выгоднее, когда задач или тенантов много.</li>
+    <li><b>Горячая загрузка</b> через <code>/v1/load_lora_adapter</code> (с <code>VLLM_ALLOW_RUNTIME_LORA_UPDATING=True</code>) документация vLLM прямо называет небезопасной для продакшна. В проде адаптеры раскладываются вместе с деплоем, а шлюз переключает имена.</li>
+    <li><b>Адаптер привязан к базе</b>, причём к конкретной ревизии весов. Обновили базу — переобучите адаптеры и прогоните evals. Ревизию базы храните рядом с адаптером.</li>
+  </ul>
 
   <h2 id="practice">Практика</h2>
   <div class="task">
-    <h3>Задание 1. Классификатор: промпт против LoRA</h3>
-    <p>Возьмите задачу классификации из своего домена (тикеты, интенты, модерация) или публичный датасет, 3000–5000 примеров, 4–8 классов с дисбалансом. Подготовьте JSONL скриптом выше и прогоните Go-валидатор.</p>
-    <p>Сравните три варианта на <b>одном и том же test</b>: (a) Haiku или Sonnet с zero-shot промптом, (b) тот же промпт с 10–20 few-shot примерами, (c) LoRA на 3–8B open-source модели (Colab или арендованный GPU, Unsloth или TRL).</p>
-    <p><b>Готово, когда:</b> есть таблица macro-F1, per-class recall, латентности p50 и стоимости 1M классификаций для всех трёх вариантов; кривые train/val loss сохранены и показано, где сработал early stopping; написан вывод на 5–7 предложений, какой вариант вы бы выбрали в прод и почему.</p>
-    <label class="check"><input type="checkbox" data-save="m10-t1"> Сделал</label>
+    <h3>Задание 1: open-weight против API на eval-наборе проекта</h3>
+    <p>Возьмите eval-набор проекта B (вопросы к RAG проекта A с эталонами) и поднимите open-weight модель: Qwen3-8B в vLLM на арендованной GPU или <code>qwen3:8b</code> в Ollama, если GPU нет. Подключите её к <code>/ask</code> проекта A через Go-шлюз из этого модуля, не меняя остальной пайплайн. Прогоните набор на трёх вариантах: ваша текущая модель Claude (например, <code>claude-haiku-4-5</code> или <code>claude-sonnet-5</code>), open-weight модель в BF16 и она же в FP8 или AWQ.</p>
+    <ul>
+      <li>Таблица по трём вариантам: качество по метрикам проекта B и разница с Claude с 95% ДИ (парно, модуль 8); доля ответов с корректными цитатами; суммарные tok/s, TTFT и TPOT p50/p95/p99 при 1, 8, 32 и 128 одновременных запросах (метрики шлюза, нагрузочный скрипт или <code>vllm bench serve</code>); стоимость 1000 запросов по формуле из раздела <a href="#selfhosted">self-hosted</a>.</li>
+      <li>Измеренный goodput подставлен в калькулятор, найдена точка безубыточности против Haiku 4.5 по вашей цене GPU-часа; параметры (цена GPU-часа, goodput одной GPU при вашем SLO, C_ops) записаны в README.</li>
+      <li>Если модель работала в Ollama, это явно указано, и латентность не выдаётся за продакшн-цифры.</li>
+      <li>Вывод на 5–7 предложений: какую модель ставить на какие запросы (допустим роутинг: простые — на open-weight, сложные — на Claude).</li>
+    </ul>
+    <label class="check"><input type="checkbox" data-save="m10-t1"> Сделал, есть таблица и решение</label>
   </div>
   <div class="task">
-    <h3>Задание 2. Найти утечку</h3>
-    <p>Намеренно оставьте в датасете 10% почти-дубликатов между train и test (перефразы, другой id заказа) и обучите модель. Потом уберите их и обучите заново.</p>
-    <p><b>Готово, когда:</b> вы можете показать, насколько утечка завысила метрику на test, и в пайплайне есть проверка, которая падает при пересечении сплитов.</p>
-    <label class="check"><input type="checkbox" data-save="m10-t2"> Сделал</label>
+    <h3>Задание 2: LoRA под узкую задачу с доказанным выигрышем</h3>
+    <p>Выберите в проекте A узкую задачу с объёмом: классификацию вопроса перед поиском (раздел документации, «нужен ли поиск вообще», язык) или извлечение полей из вопроса (версия продукта, компонент). Соберите 1000–3000 примеров: реальные вопросы из логов, размеченные вами или сильной моделью, плюс синтетика через <code>synth.py</code> с фильтрами. Test — 200+ реальных примеров, размеченных людьми.</p>
+    <ul>
+      <li>Датасет прошёл Go-валидатор и проверку пересечения сплитов. Намеренно оставленные 10% почти-дубликатов между train и test показали, насколько утечка завышает метрику, после чего их убрали.</li>
+      <li>Сравнение на одном test: zero-shot и few-shot на Claude, база без адаптера, LoRA (<code>lora_sft.py</code>). Метрика задачи (macro-F1 или per-field F1) и разница LoRA с лучшей альтернативой с 95% ДИ. Выигрыш засчитывается, только если нижняя граница ДИ выше нуля; честно опровергнутый выигрыш тоже результат.</li>
+      <li>Регрессионный набор из 30–50 общих задач прогнан до и после, заметной деградации нет.</li>
+      <li>Адаптер поднят в vLLM через <code>--lora-modules</code>, шлюз отдаёт его под публичным именем; латентность p95 и стоимость 1M классификаций сравнены с Claude.</li>
+    </ul>
+    <label class="check"><input type="checkbox" data-save="m10-t2"> Сделал, выигрыш доказан или честно опровергнут</label>
   </div>
   <div class="task">
-    <h3>Задание 3. Порог по бизнес-требованию</h3>
+    <h3>Задание 3: порог по бизнес-требованию</h3>
     <p>Для бинарной задачи «нужна эскалация человеку» подберите порог на validation под требование «recall ≥ 0.9» и под «precision ≥ 0.95». Посчитайте на test, сколько тикетов в день уйдёт людям при 10 000 тикетов в сутки для обоих порогов.</p>
-    <p><b>Готово, когда:</b> есть PR-кривая с двумя отмеченными точками и расчёт нагрузки на операторов, понятный продакт-менеджеру.</p>
+    <ul>
+      <li>Есть PR-кривая с двумя отмеченными точками.</li>
+      <li>Расчёт нагрузки на операторов понятен продакт-менеджеру: сколько тикетов уйдёт людям, сколько из них действительно требуют эскалации, сколько пропустим.</li>
+    </ul>
     <label class="check"><input type="checkbox" data-save="m10-t3"> Сделал</label>
   </div>
 
   <h2 id="selfcheck">Самопроверка</h2>
+  <details class="q"><summary>Qwen3-8B в BF16 на одном H100 80 ГБ: сколько одновременных запросов по 8K токенов поместится и что изменит FP8 для KV-cache?</summary><div class="a"><p>KV на токен: 2 × 36 слоёв × 8 KV-голов × 128 × 2 байта = 144 КБ. Бюджет: 80 × 0.9 − 16.4 ГБ весов − ~2.5 ГБ служебной памяти ≈ 53 ГБ ≈ 360 тысяч токенов, то есть около 44 запросов по 8K. FP8 для KV вдвое уменьшает байты на токен, и помещается около 88. FP8 для весов освободит ещё ~8 ГБ под KV. Точное число vLLM пишет в лог при старте.</p></div></details>
+  <details class="q"><summary>Что такое PagedAttention и continuous batching простыми словами? Почему большой батч почти бесплатен для TPOT?</summary><div class="a"><p>PagedAttention хранит KV-cache страницами фиксированного размера, выделяемыми по требованию, как виртуальная память. Не нужно резервировать память под максимальную длину, фрагментация почти нулевая, а общие префиксы можно разделять, поэтому в GPU помещается больше одновременных запросов. Continuous batching собирает батч заново на каждом шаге декодирования: завершившиеся запросы уходят, новые встают на их место, и GPU не простаивает в ожидании самой длинной последовательности.</p><p>Decode ограничен памятью: веса читаются один раз на весь батч, поэтому, пока доминирует их чтение, лишние запросы почти бесплатны, а throughput растёт линейно. С ростом батча растут чтение KV-cache и вычисления, TPOT начинает расти, а когда KV-cache кончается, новые запросы встают в очередь. Полезная ёмкость — goodput при SLO, а не максимальный throughput.</p></div></details>
+  <details class="q"><summary>Когда self-hosted экономически проигрывает, даже при большом объёме?</summary><div class="a"><p>При неровной нагрузке (пики днём, простой ночью), когда утилизация ниже 20–30%; когда нужна модель уровня frontier, которую сами не поднять; когда учтены инженерное время и HA-реплики; когда API-цены падают быстрее, чем окупается резерв GPU. И если self-hosted модель хуже по evals, экономия фиктивная.</p></div></details>
+  <details class="q"><summary>Когда speculative decoding не ускорит сервис или даже замедлит его?</summary><div class="a"><p>При большом батче, когда GPU уже упирается в вычисления: проверка k лишних позиций и работа черновика съедают выигрыш. При низкой доле принятых токенов: черновик не знает вашего домена или языка, высокая температура. И когда черновик сам по себе дорог. Качество при этом не страдает (правило принятия сохраняет распределение), меняется только скорость, поэтому решение принимают по замеру TPOT и goodput на своём трафике.</p></div></details>
+  <details class="q"><summary>Европейская компания хочет взять Llama 4 Scout для продукта и выложить дообученную версию как SupportBot. Что не так?</summary><div class="a"><p>Llama 4 мультимодальна, а Acceptable Use Policy не предоставляет права по лицензии компаниям с основным местом деятельности в ЕС (конечных пользователей чужого продукта это не касается). Кроме того, модель, улучшенная с помощью Llama, которую вы распространяете или делаете доступной другим, должна называться «Llama…», и нужна надпись «Built with Llama». Практичнее взять модель под Apache 2.0 (Qwen3, Mistral Small, Gemma 4). Окончательное решение — за юристом.</p></div></details>
   <details class="q"><summary>Почему fine-tuning — плохой способ «загрузить в модель» базу знаний компании?</summary><div class="a"><p>Дообучение меняет вероятности токенов, а не создаёт надёжно извлекаемую память. Модель выучит стиль и частые формулировки, но точные факты воспроизводит ненадёжно и галлюцинирует правдоподобно. Кроме того, знания устаревают, и каждое обновление требует переобучения. Нет ссылок на источники и нет контроля прав доступа. Для знаний нужен RAG, для поведения — fine-tuning.</p></div></details>
-  <details class="q"><summary>Сколько параметров обучает LoRA с r = 8 на матрице 4096×4096 и какая это доля?</summary><div class="a"><p>r·(d + k) = 8·(4096 + 4096) = 65 536 параметров против 16 777 216, то есть 0.39%.</p></div></details>
-  <details class="q"><summary>Зачем B инициализируют нулями?</summary><div class="a"><p>Чтобы в начале обучения ΔW = B·A = 0 и модель совпадала с базовой. Обучение стартует из известной хорошей точки, а не с добавленного случайного шума.</p></div></details>
+  <details class="q"><summary>Сколько параметров обучает LoRA с r = 8 на матрице 4096×4096, какая это доля и зачем B инициализируют нулями?</summary><div class="a"><p>r·(d + k) = 8·(4096 + 4096) = 65 536 параметров против 16 777 216, то есть 0.39%. B нулевая, чтобы в начале обучения ΔW = B·A = 0 и модель совпадала с базовой: обучение стартует из известной хорошей точки, а не с добавленного случайного шума. Поэтому <code>lora_sft.py</code> может измерить «до» на модели с только что созданным адаптером.</p></div></details>
   <details class="q"><summary>Чем QLoRA отличается от LoRA и чем за это платите?</summary><div class="a"><p>Замороженная базовая модель хранится в 4 битах (NF4 плюс double quantization), а адаптеры обучаются в bf16. Память под базу меньше в ~4 раза, так что 65–70B помещается в один GPU на 48–80 ГБ. Платите скоростью (деквантизация на каждом шаге) и небольшой потерей качества относительно 16-битной LoRA.</p></div></details>
-  <details class="q"><summary>Train loss падает, val loss с 3-й эпохи растёт. Что происходит и что делать?</summary><div class="a"><p>Overfitting: модель запоминает train. Можно взять чекпойнт с минимумом val (early stopping), уменьшить число эпох, r и learning rate, добавить dropout или weight decay, увеличить и почистить датасет, проверить дубликаты внутри train. Отдельно стоит проверить task-метрику: иногда val loss немного растёт, а accuracy ещё улучшается.</p></div></details>
+  <details class="q"><summary>Train loss падает, val loss с 3-й эпохи растёт. Что происходит и что делать?</summary><div class="a"><p>Overfitting: модель запоминает train. Можно взять чекпойнт с минимумом val (early stopping), уменьшить число эпох, r и learning rate, добавить dropout или weight decay, увеличить и почистить датасет, проверить дубликаты внутри train. Отдельно стоит проверить task-метрику: иногда val loss немного растёт, а accuracy ещё улучшается. Признаки переобучения видны и в ответах: шаблонные формулировки из train, провалы на перефразах, поэтому полезно просматривать ответы на отложенных примерах глазами и параллельно проверять catastrophic forgetting.</p></div></details>
   <details class="q"><summary>Почему дедупликацию делают до разбиения на train/test?</summary><div class="a"><p>Если сначала разбить, копии одного примера окажутся по разные стороны, и тест будет проверять запоминание, а не обобщение. Метрика завышена, в проде провал. По той же причине сообщения одного клиента или треда разбивают группой.</p></div></details>
-  <details class="q"><summary>Модель фрода: accuracy 99.1% при доле фрода 1%. Хорошо это или плохо?</summary><div class="a"><p>Из этой цифры ничего не следует: тривиальная модель «всегда не фрод» даёт 99%. Нужны precision и recall по классу «фрод», PR-AUC и confusion matrix при выбранном пороге.</p></div></details>
-  <details class="q"><summary>Когда лучше macro-F1, а когда weighted-F1?</summary><div class="a"><p>Macro усредняет F1 по классам с равным весом и показывает, как модель работает на редких классах. Он нужен, когда редкие классы важны (жалобы, безопасность). Weighted взвешивает по частоте и отражает средний опыт по всему потоку. Хорошо смотреть на оба вместе с per-class метриками.</p></div></details>
+  <details class="q"><summary>Модель фрода: accuracy 99.1% при доле фрода 1%. Хорошо это или плохо? И когда для мультикласса смотреть macro-F1, а когда weighted-F1?</summary><div class="a"><p>Из этой цифры ничего не следует: тривиальная модель «всегда не фрод» даёт 99%. Нужны precision и recall по классу «фрод», PR-AUC и confusion matrix при выбранном пороге.</p><p>Macro усредняет F1 по классам с равным весом и показывает, как модель работает на редких классах; он нужен, когда редкие классы важны (жалобы, безопасность). Weighted взвешивает по частоте и отражает средний опыт по всему потоку. Хорошо смотреть на оба вместе с per-class метриками.</p></div></details>
   <details class="q"><summary>Что такое catastrophic forgetting и как его заметить?</summary><div class="a"><p>Это потеря общих навыков после дообучения на узкой задаче. Заметить можно регрессионным набором общих задач (формат, инструкции, другой язык, safety-отказы), который прогоняется до и после. Лечится меньшим числом эпох, LoRA с небольшим r, подмешиванием общих данных и тем, что дообученную модель используют только по назначению.</p></div></details>
 
   <h2 id="interview">Вопросы с собеседований</h2>
+  <details class="q interview"><summary>Нужно поднять свою 8B-модель для чата поддержки: SLO p95 TTFT &lt; 1 с и TPOT &lt; 50 мс, в пике 200 одновременных диалогов. Как посчитаете число GPU?</summary><div class="a">
+    <p>Сначала профиль нагрузки из логов: распределение длины промпта (system prompt, история, RAG-контекст) и ответа, пик против среднего. Затем грубая оценка памяти: веса (8B в BF16 — 16 ГБ, в FP8 — 8 ГБ), KV на токен по архитектуре, бюджет KV при <code>gpu-memory-utilization</code> 0.9 и отсюда максимальная конкурентность на реплику для типичной длины. Если 200 диалогов по 6K токенов на одну H100 не помещаются, нужен FP8 для KV или больше реплик.</p>
+    <p>Но оценка — только старт. Ёмкость реплики я меряю нагрузочным тестом (<code>vllm bench serve</code> с длинами из логов и <code>--goodput ttft:1000 tpot:50</code>): поднимаю конкурентность, пока p95 TTFT и TPOT в SLO. Число реплик = пик ÷ goodput реплики, плюс одна сверх того для отказоустойчивости. Дальше рычаги: prefix caching для общего system prompt (резко снижает TTFT), chunked prefill с бюджетом под ITL, FP8-веса после проверки качества на eval-наборе, speculative decoding — только если загрузка средняя. Перед репликами — шлюз с лимитом под <code>max-num-seqs</code>, очередью и fallback на API при перегрузке, потому что GPU поднимаются минутами. И сравнение по формуле с API: при неровной нагрузке API может оказаться дешевле.</p>
+    <p><b>На что смотрит интервьюер:</b> разделяет TTFT и TPOT и знает, от чего каждый зависит; считает конкурентность через KV-cache, а не «по числу GPU»; говорит о goodput при SLO, а не о пиковом throughput; меряет, а не угадывает; помнит про пики, отказоустойчивость и fallback.</p>
+  </div></details>
+  <details class="q interview"><summary>Когда вы бы предложили self-hosted модель вместо API? Посчитайте на примере.</summary><div class="a">
+    <p>Критерии: требования к данным (данные не могут уходить третьей стороне, резидентность), большой и ровный объём, достаточность модели 8–70B по evals (извлечение, классификация, суммаризация, а не сложный reasoning), потребность в своей fine-tuned модели, контроль латентности.</p>
+    <p>Расчёт: 2 млрд токенов в день; API по смешанной цене $2 за 1M обходится в ~$120K в месяц. GPU за $3 в час с 2500 tok/s при утилизации 40% даёт ~86M токенов в день на GPU, то есть нужно 24 GPU, или ~$52K в месяц, плюс люди ~$10–20K. Выигрыш есть, но он чувствителен к утилизации: при 20% GPU нужно вдвое больше, и преимущество почти исчезает. Реальные tok/s надо измерить нагрузочным тестом на своей длине запросов, причём как goodput при SLO, а не пиковый throughput.</p>
+    <p>Упомяну скрытые затраты (пики, HA, дежурства, обновления) и гибрид: self-hosted для массовой простой нагрузки, API для сложного и как fallback.</p>
+    <p><b>На что смотрит интервьюер:</b> начинает с требований и качества на evals, а не с цены GPU-часа; считает через утилизацию и goodput; видит чувствительность вывода к утилизации и пикам; помнит о людях и HA; предлагает гибрид, а не «всё или ничего».</p>
+  </div></details>
+  <details class="q interview"><summary>Хотим квантовать модель в INT4, чтобы сэкономить. Ваши действия?</summary><div class="a">
+    <p>Сначала уточню цель. Если модель не помещается в нужную GPU, то INT4 (AWQ или GPTQ) решает задачу памяти. Если цель — throughput под нагрузкой, на H100 разумнее FP8: weight-only INT4 ускоряет decode при малом батче, но на больших батчах выигрыш тает, а FP8 сокращает и память, и вычисления.</p>
+    <p>Дальше проверка качества как non-inferiority: тот же eval-набор, те же промпты и параметры, парное сравнение с BF16 и доверительный интервал разницы, допуск согласован с продуктом (например, не хуже −1 п.п.). Отдельно смотрю срезы, где квантизация бьёт первой: длинный контекст, русский, строгий JSON, код, а также поведение (отказы, длина, повторы). Калибровку AWQ или GPTQ делаю на своих данных, если домен далёк от английского веба. Затем нагрузочный тест на целевом железе: если goodput и $ за 1M не улучшились, квантизация не нужна. Выкатка через шлюз на долю трафика с онлайн-метриками и быстрым откатом на BF16.</p>
+    <p><b>На что смотрит интервьюер:</b> различает weight-only и W8A8 и понимает, когда что ускоряет; доказывает отсутствие деградации статистически и по срезам, а не по одному среднему; помнит про калибровочные данные и шаблон; связывает решение с деньгами и латентностью.</p>
+  </div></details>
+  <details class="q interview"><summary>Команда выбрала open-weight модель для продукта. Что проверите до начала работ?</summary><div class="a">
+    <p>Лицензию конкретной версии, а не семейства: у Qwen2.5 размеры 3B и 72B лицензированы иначе, чем остальные, у Mistral часть моделей под Research License. Дальше по пунктам: коммерческое использование и пороги MAU (у Llama 700 млн, у Qwen2.5-72B 100 млн); требования при распространении (копия лицензии, «Built with Llama», NOTICE у Apache); правила для производных и моделей, обученных на выходах (имя «Llama…», у Gemma 3 дистилляция считается производной); acceptable use policy; территориальные ограничения (мультимодальные Llama и компании из ЕС).</p>
+    <p>Затем данные для дообучения: условия API-провайдера, если учим на выходах закрытой модели, и права на клиентские данные. И supply chain: официальный источник весов, safetensors, без <code>trust_remote_code</code> без ревью, зафиксированная ревизия. Всё это идёт в ADR с выводом юриста. Если лицензия создаёт риски, выбираю альтернативу под Apache 2.0 или MIT: сейчас она есть почти в каждом классе размеров.</p>
+    <p><b>На что смотрит интервьюер:</b> знает, что open-weight не равно open source и не «можно всё»; называет конкретные ограничения популярных лицензий; помнит про данные и ToS провайдеров; не даёт юридических заключений сам, а фиксирует решение и привлекает юриста.</p>
+  </div></details>
   <details class="q interview"><summary>Продакт просит «дообучить GPT/Claude на нашей документации, чтобы бот отвечал правильно». Что ответите?</summary><div class="a">
     <p>Сначала переформулирую задачу. Здесь проблема в знаниях, и её решает RAG: документация меняется, нужны ссылки на источники и учёт прав, а fine-tuning плохо запоминает факты и склонен к уверенным галлюцинациям.</p>
     <p>План: eval-набор из 100–200 реальных вопросов с эталонами, RAG с гибридным поиском и reranking, метрики faithfulness и answer relevance. Fine-tuning появляется позже и только если останется проблема <i>поведения</i>: тон бренда, формат ответа, дорогой длинный промпт на большом объёме (дистилляция). И тогда я бы дообучал модель, которая работает <i>поверх</i> RAG, на примерах «контекст + вопрос → хороший ответ».</p>
     <p>Также упомяну, что у части провайдеров fine-tuning недоступен или ограничен набором моделей, а дообученная модель привязывает вас к версии.</p>
+    <p><b>На что смотрит интервьюер:</b> отделяет знания от поведения; начинает с evals и RAG; не отвергает fine-tuning догматически, а называет условия, при которых он нужен.</p>
   </div></details>
   <details class="q interview"><summary>Объясните LoRA. Почему она работает и какие гиперпараметры вы крутите?</summary><div class="a">
     <p>Базовые веса W заморожены, а обновление ΔW параметризуется как B·A с рангом r ≪ d и масштабом α/r. Работает это потому, что изменения весов при адаптации к задаче имеют низкий внутренний ранг, и богатая базовая модель требует небольшой «поправки». Обучается 0.1–1% параметров, состояние оптимизатора крошечное, и памяти нужно в разы меньше. Адаптер весит десятки мегабайт, его можно слить в веса (без потерь в латентности) или сервить много адаптеров поверх одной базы.</p>
     <p>Гиперпараметры: r (8–64), α (r–2r), target modules (all-linear обычно лучше, чем только attention), learning rate (~1e-4–2e-4), число эпох (1–3), dropout. Настраиваю по val loss и task-метрике с early stopping. Ограничение: LoRA хуже учит много нового, но меньше забывает. Для памяти есть QLoRA с 4-битной базой.</p>
+    <p><b>На что смотрит интервьюер:</b> объясняет, почему низкий ранг работает, а не только пишет формулу; связывает r, α и learning rate; знает ограничения LoRA и следствия для сервинга (merge или multi-LoRA).</p>
   </div></details>
   <details class="q interview"><summary>Как вы соберёте датасет для fine-tuning классификатора обращений и как убедитесь, что метрики честные?</summary><div class="a">
     <p>Источник — реальные обращения с разметкой. Инструкция для разметчиков с примерами пограничных случаев, двойная разметка 10% и Cohen's κ. Если согласие низкое, сначала чиню таксономию классов.</p>
     <p>Чистка: нормализация, удаление PII, дедупликация (точная и MinHash), разбор конфликтующих меток. Балансировка: oversampling редких классов только в train, test с реальным распределением. Синтетика от сильной модели допустима для train, с проверкой выборки глазами, но не для test.</p>
     <p>Честность метрик: дедупликация до разбиения, стратификация, групповое разбиение по клиенту или треду, а для данных со временем — разбиение по времени. Порог и гиперпараметры выбираются на validation, test используется один раз. Автоматическая проверка пересечения сплитов в CI. Ключевая метрика — macro-F1 и per-class recall, а не accuracy.</p>
+    <p><b>На что смотрит интервьюер:</b> утечка между сплитами как главный риск; групповое и временное разбиение; согласие разметчиков; test, который трогают один раз.</p>
   </div></details>
   <details class="q interview"><summary>Модель модерации: как выберете порог и как объясните бизнесу цену ошибок?</summary><div class="a">
     <p>Сначала переведу ошибки в деньги и риски: FN (пропущенный вредный контент) — репутационный и юридический риск, FP (заблокирован нормальный пользователь) — отток и нагрузка на поддержку. Дальше либо ограничение («recall ≥ 0.95 на категории X»), либо минимизация ожидаемой стоимости <code>c_FN·FN + c_FP·FP</code>.</p>
     <p>Порог подбираю на validation по PR-кривой и проверяю на test. Показываю бизнесу простыми словами: «при этом пороге из 10 000 постов в день 120 уйдёт на ручную проверку, из них 90 действительно нарушения, и мы пропустим около 5». Часто лучший ответ — три зоны: автоблок при высоком скоре, ручная проверка в серой зоне, пропуск при низком. После запуска слежу за дрейфом: распределение скоров меняется, и порог надо пересматривать.</p>
-  </div></details>
-  <details class="q interview"><summary>Что такое overfitting и как вы его диагностируете при fine-tuning LLM?</summary><div class="a">
-    <p>Модель подстраивается под шум и конкретные примеры train и хуже работает на новых данных. Признаки: train loss падает, val loss развернулся вверх, а на eval-наборе растут шаблонные ответы, модель повторяет формулировки из train и хуже справляется с перефразами.</p>
-    <p>Инструменты: регулярная оценка на validation, early stopping с восстановлением лучшего чекпойнта, мониторинг task-метрик, а не только loss, и ручной просмотр ответов на отложенных примерах. Лечение: больше и разнообразнее данных, меньше эпох, меньше r, ниже learning rate, регуляризация. Дополнительно проверяю catastrophic forgetting на общем регрессионном наборе.</p>
+    <p><b>На что смотрит интервьюер:</b> переводит ошибки в деньги и нагрузку на людей; выбирает порог на validation; предлагает серую зону и мониторинг дрейфа.</p>
   </div></details>
   <details class="q interview"><summary>SFT, DPO и RLHF: в чём разница, и что бы вы использовали в продукте?</summary><div class="a">
     <p>SFT учит воспроизводить эталонные ответы: нужны пары «вход → правильный выход». DPO учит предпочтениям по парам «лучше/хуже» без reward-модели, напрямую сдвигая вероятности относительно референсной модели. RLHF обучает reward-модель на сравнениях людей, а затем оптимизирует политику через PPO с KL-штрафом. Это мощно, но сложно и нестабильно, и в основном используется лабораториями.</p>
     <p>В продукте: SFT для формата и задачи, затем, если есть пары «хороший и плохой ответ» (например, из оценок пользователей или правок операторов), DPO для тона и уместности. Если правильность проверяется автоматически, можно RL с верифицируемой наградой через провайдера или TRL. Полноценный RLHF — почти никогда.</p>
+    <p><b>На что смотрит интервьюер:</b> прагматизм; знает, откуда в продукте берутся пары; выделяет RL с проверяемой наградой в отдельный класс; понимает, что DPO оценивают по win rate и регрессии, а не по loss.</p>
   </div></details>
   <details class="q interview"><summary>Дистилляция: как вы бы заменили вызов Opus на маленькую модель для задачи извлечения полей из писем?</summary><div class="a">
     <p>Шаги: (1) eval-набор из 300–500 писем с эталонами, проверенными людьми, и измеренное качество Opus как потолок; (2) прогон 5–20 тысяч реальных писем через Opus со structured outputs, фильтрация по валидности схемы и согласию двух прогонов или LLM-судье; (3) LoRA на 3–8B модели на этих данных плюс исправленные людьми примеры; (4) сравнение на eval: per-field F1, доля валидного JSON, латентность, стоимость; (5) раскатка через shadow-трафик и A/B, с роутингом сложных писем (низкая уверенность, длинные) обратно на Opus.</p>
     <p>Риски: ошибки учителя становятся потолком ученика, синтетика уже реального распределения, ToS провайдера про обучение на выходах, дрейф входных данных (нужен мониторинг и периодическое переобучение).</p>
+    <p><b>На что смотрит интервьюер:</b> начинает с eval и потолка учителя; фильтрует данные учителя; помнит про ToS; оставляет роутинг сложных случаев на большую модель и выкатывает через shadow и A/B.</p>
   </div></details>
 
   <h2 id="links">Источники</h2>
   <ul>
+    <li><a href="https://docs.vllm.ai/" target="_blank" rel="noopener">vLLM docs</a>: <a href="https://docs.vllm.ai/en/latest/serving/online_serving/openai_compatible_server/" target="_blank" rel="noopener">vLLM — OpenAI-Compatible Server</a> (эндпоинты, <code>--api-key</code>, extra-параметры), <a href="https://docs.vllm.ai/en/latest/configuration/optimization/" target="_blank" rel="noopener">Optimization and Tuning</a> (preemption, chunked prefill), <a href="https://docs.vllm.ai/en/latest/usage/metrics/" target="_blank" rel="noopener">Metrics</a></li>
+    <li><a href="https://docs.vllm.ai/en/latest/features/lora/" target="_blank" rel="noopener">vLLM — LoRA Adapters</a> (multi-LoRA, <code>--lora-modules</code>, динамическая загрузка) и <a href="https://docs.vllm.ai/en/latest/features/speculative_decoding/" target="_blank" rel="noopener">Speculative Decoding</a></li>
+    <li><a href="https://docs.vllm.ai/en/latest/cli/bench/serve/" target="_blank" rel="noopener">vLLM — vllm bench serve</a> (TTFT, TPOT, ITL, goodput)</li>
+    <li><a href="https://arxiv.org/abs/2309.06180" target="_blank" rel="noopener">Kwon et al., 2023. Efficient Memory Management for LLM Serving with PagedAttention</a></li>
+    <li><a href="https://www.usenix.org/conference/osdi22/presentation/yu" target="_blank" rel="noopener">Yu et al., OSDI 2022. Orca: A Distributed Serving System for Transformer-Based Generative Models</a> (continuous batching, iteration-level scheduling)</li>
+    <li><a href="https://arxiv.org/abs/2403.02310" target="_blank" rel="noopener">Agrawal et al., 2024. Taming Throughput-Latency Tradeoff in LLM Inference with Sarathi-Serve</a> (chunked prefill)</li>
+    <li><a href="https://arxiv.org/abs/2401.09670" target="_blank" rel="noopener">Zhong et al., 2024. DistServe: Disaggregating Prefill and Decoding for Goodput-optimized LLM Serving</a></li>
+    <li><a href="https://arxiv.org/abs/2312.07104" target="_blank" rel="noopener">Zheng et al., 2023. SGLang: Efficient Execution of Structured Language Model Programs</a> и <a href="https://docs.sglang.io/" target="_blank" rel="noopener">документация SGLang</a></li>
+    <li><a href="https://arxiv.org/abs/2211.17192" target="_blank" rel="noopener">Leviathan et al., 2022. Fast Inference from Transformers via Speculative Decoding</a>, <a href="https://arxiv.org/abs/2302.01318" target="_blank" rel="noopener">Chen et al., 2023. Speculative Sampling</a>, <a href="https://arxiv.org/abs/2503.01840" target="_blank" rel="noopener">Li et al., 2025. EAGLE-3</a></li>
+    <li><a href="https://arxiv.org/abs/2306.00978" target="_blank" rel="noopener">Lin et al., 2023. AWQ: Activation-aware Weight Quantization</a>, <a href="https://arxiv.org/abs/2210.17323" target="_blank" rel="noopener">Frantar et al., 2022. GPTQ</a>, <a href="https://arxiv.org/abs/2209.05433" target="_blank" rel="noopener">Micikevicius et al., 2022. FP8 Formats for Deep Learning</a></li>
+    <li><a href="https://github.com/vllm-project/llm-compressor" target="_blank" rel="noopener">llm-compressor</a> (квантизация AWQ, GPTQ, FP8 на своих данных) и <a href="https://github.com/ggml-org/llama.cpp" target="_blank" rel="noopener">llama.cpp</a> (GGUF)</li>
+    <li><a href="https://docs.ollama.com/api/openai-compatibility" target="_blank" rel="noopener">Ollama — OpenAI compatibility</a> и <a href="https://docs.ollama.com/faq" target="_blank" rel="noopener">FAQ</a> (контекст, параллелизм, очередь)</li>
+    <li><a href="https://github.com/huggingface/text-generation-inference" target="_blank" rel="noopener">Hugging Face — text-generation-inference</a> (статус maintenance mode в README) и <a href="https://github.com/ollama/ollama" target="_blank" rel="noopener">Ollama на GitHub</a></li>
     <li><a href="https://arxiv.org/abs/2106.09685" target="_blank" rel="noopener">Hu et al., 2021. LoRA: Low-Rank Adaptation of Large Language Models</a></li>
     <li><a href="https://arxiv.org/abs/2305.14314" target="_blank" rel="noopener">Dettmers et al., 2023. QLoRA: Efficient Finetuning of Quantized LLMs</a></li>
     <li><a href="https://arxiv.org/abs/2405.09673" target="_blank" rel="noopener">Biderman et al., 2024. LoRA Learns Less and Forgets Less</a></li>
+    <li><a href="https://arxiv.org/abs/2311.03285" target="_blank" rel="noopener">Sheng et al., 2023. S-LoRA: Serving Thousands of Concurrent LoRA Adapters</a></li>
     <li><a href="https://arxiv.org/abs/2305.18290" target="_blank" rel="noopener">Rafailov et al., 2023. Direct Preference Optimization</a></li>
     <li><a href="https://arxiv.org/abs/2203.02155" target="_blank" rel="noopener">Ouyang et al., 2022. Training language models to follow instructions with human feedback (InstructGPT, RLHF)</a></li>
     <li><a href="https://arxiv.org/abs/2305.11206" target="_blank" rel="noopener">Zhou et al., 2023. LIMA: Less Is More for Alignment</a></li>
-    <li><a href="https://arxiv.org/abs/1503.02531" target="_blank" rel="noopener">Hinton et al., 2015. Distilling the Knowledge in a Neural Network</a></li>
-    <li><a href="https://huggingface.co/docs/trl/sft_trainer" target="_blank" rel="noopener">TRL: SFT Trainer</a>, <a href="https://huggingface.co/docs/peft" target="_blank" rel="noopener">PEFT docs</a></li>
+    <li><a href="https://arxiv.org/abs/1503.02531" target="_blank" rel="noopener">Hinton et al., 2015. Distilling the Knowledge in a Neural Network</a>, <a href="https://arxiv.org/abs/2306.13649" target="_blank" rel="noopener">Agarwal et al., 2023. On-Policy Distillation of Language Models</a></li>
+    <li><a href="https://arxiv.org/abs/2501.12948" target="_blank" rel="noopener">DeepSeek-AI, 2025. DeepSeek-R1</a> (раздел о дистилляции в Qwen и Llama)</li>
+    <li><a href="https://huggingface.co/docs/trl/sft_trainer" target="_blank" rel="noopener">TRL: SFT Trainer</a>, <a href="https://huggingface.co/docs/trl/dpo_trainer" target="_blank" rel="noopener">DPO Trainer</a>, <a href="https://huggingface.co/docs/peft" target="_blank" rel="noopener">PEFT docs</a></li>
     <li><a href="https://docs.unsloth.ai/" target="_blank" rel="noopener">Unsloth docs</a>, <a href="https://github.com/axolotl-ai-cloud/axolotl" target="_blank" rel="noopener">Axolotl</a></li>
+    <li><a href="https://github.com/meta-llama/llama-models/blob/main/models/llama4/LICENSE" target="_blank" rel="noopener">Meta — Llama 4 Community License</a> и <a href="https://github.com/meta-llama/llama-models/blob/main/models/llama4/USE_POLICY.md" target="_blank" rel="noopener">Acceptable Use Policy</a></li>
+    <li><a href="https://ai.google.dev/gemma/terms" target="_blank" rel="noopener">Google — Gemma Terms of Use</a> и <a href="https://ai.google.dev/gemma/docs/gemma_4_license" target="_blank" rel="noopener">лицензия Gemma 4</a></li>
+    <li><a href="https://huggingface.co/Qwen/Qwen2.5-72B-Instruct/blob/main/LICENSE" target="_blank" rel="noopener">Qwen LICENSE AGREEMENT</a> (Qwen2.5-72B), <a href="https://mistral.ai/licenses/MRL-0.1.md" target="_blank" rel="noopener">Mistral AI Research License</a>, <a href="https://www.apache.org/licenses/LICENSE-2.0" target="_blank" rel="noopener">Apache License 2.0</a></li>
     <li><a href="https://platform.openai.com/docs/guides/fine-tuning" target="_blank" rel="noopener">OpenAI: Fine-tuning guide</a></li>
     <li><a href="https://docs.claude.com/" target="_blank" rel="noopener">Документация Claude</a> (prompt engineering, evals, structured outputs — то, что пробовать до fine-tuning)</li>
     <li><a href="https://scikit-learn.org/stable/modules/model_evaluation.html" target="_blank" rel="noopener">scikit-learn: Metrics and scoring</a></li>
@@ -558,12 +1544,199 @@ func main() {
 </main>
 <script src="assets/course.js"></script>
 <script>
-/* ---------- 1. Дерево решений ---------- */
+/* ---------- 1. Serving: VRAM, конкурентность, TTFT и TPOT ---------- */
+(function () {
+  const S = (tag, a, p) => { if (tag === 'text' && a.fill) a.style = 'fill:' + a.fill; return Course.svg(tag, a, p); };
+  const $ = id => document.getElementById(id);
+  const svg = $('sv-svg'), out = $('sv-read');
+  const MODELS = { // параметры и архитектура — из config.json моделей
+    q4: { name: 'Qwen3-4B', P: 4.02e9, L: 36, kv: 8, hd: 128 },
+    q8: { name: 'Qwen3-8B', P: 8.19e9, L: 36, kv: 8, hd: 128 },
+    q32: { name: 'Qwen3-32B', P: 32.8e9, L: 64, kv: 8, hd: 128 },
+    l70: { name: 'Llama 3.3 70B', P: 70.6e9, L: 80, kv: 8, hd: 128 },
+  };
+  const GPUS = { // паспорт: память ГБ, полоса ТБ/с, BF16 dense TFLOPS, есть ли FP8
+    l4: { name: 'L4 24 ГБ', mem: 24, bw: 0.3, tf: 121, fp8: true },
+    a100: { name: 'A100 80 ГБ', mem: 80, bw: 2.0, tf: 312, fp8: false },
+    h100: { name: 'H100 80 ГБ', mem: 80, bw: 3.35, tf: 989, fp8: true },
+    h200: { name: 'H200 141 ГБ', mem: 141, bw: 4.8, tf: 989, fp8: true },
+  };
+  const WQ = { bf16: { b: 2, name: 'BF16' }, fp8: { b: 1, name: 'FP8' }, int4: { b: 0.56, name: 'INT4' } }; // INT4 с масштабами ≈ 0.56 байта
+  const TP = [1, 2, 4, 8];
+  const RESERVE = 2; // ГБ на GPU: активации, CUDA graphs
+  const SLO = 0.05;  // 50 мс на токен
+  const tok = v => v >= 1024 ? (v / 1024).toFixed(v % 1024 ? 1 : 0) + 'K' : String(v);
+  const num = v => v >= 1e3 ? Math.round(v).toLocaleString('ru-RU') : v >= 10 ? v.toFixed(0) : v.toFixed(1);
+  const gb = v => (v >= 100 || Number.isInteger(v) ? v.toFixed(0) : v.toFixed(1)) + ' ГБ';
+
+  function params() {
+    return {
+      M: MODELS[$('sv-model').value], G: GPUS[$('sv-gpu').value], W: WQ[$('sv-wq').value],
+      n: TP[+$('sv-tp').value], kv8: $('sv-kv8').checked,
+      inp: Math.round(Math.pow(2, +$('sv-in').value)), outp: Math.round(Math.pow(2, +$('sv-out').value)),
+      c: Math.round(Math.pow(2, +$('sv-c').value)),
+    };
+  }
+
+  function model(o) {
+    const wGB = o.M.P * o.W.b / 1e9;
+    const kvTok = 2 * o.M.L * o.M.kv * o.M.hd * (o.kv8 ? 1 : 2);   // байт на токен
+    const total = o.G.mem * o.n, usable = total * 0.9;
+    const kvGB = usable - wGB - RESERVE * o.n;
+    const perReq = kvTok * (o.inp + o.outp) / 1e9;                 // ГБ на запрос полной длины
+    const maxSeq = kvGB > 0 ? Math.floor(kvGB / perReq) : 0;
+    const bw = o.G.bw * 1e12 * o.n * 0.7;                          // достижимая полоса
+    const fl = o.G.tf * 1e12 * o.n * 0.5 * (o.W.name === 'FP8' && o.G.fp8 ? 2 : 1);
+    // шаг decode: веса читаются один раз на батч + KV всех последовательностей (в среднем вход + половина ответа)
+    const step = b => Math.max((wGB * 1e9 + b * kvTok * (o.inp + o.outp / 2)) / bw, 2 * o.M.P * b / fl);
+    const prefill = 2 * o.M.P * o.inp / fl;
+    return { wGB, kvTok, total, usable, kvGB, perReq, maxSeq, step, prefill };
+  }
+
+  function chart(px, title, xs, ys, cur, vline, hline, fmt) {
+    const w = 254, h = 150, top = 120, L = px + 46;
+    const ymax = Math.max(...ys, hline || 0) * 1.1 || 1;
+    const X = e => L + e / 9 * w, Y = v => top + h - Math.min(v, ymax) / ymax * h;
+    S('text', { x: L, y: top - 8, 'font-size': 12, 'font-weight': 600 }, svg).textContent = title;
+    S('rect', { x: L, y: top, width: w, height: h, fill: 'none', stroke: 'var(--border)' }, svg);
+    [0, 0.5, 1].forEach(f => S('text', { x: L - 4, y: Y(ymax * f / 1.1) + 4, 'font-size': 10, 'text-anchor': 'end', fill: 'var(--muted)' }, svg).textContent = fmt(ymax * f / 1.1));
+    [0, 3, 6, 9].forEach(e => S('text', { x: X(e), y: top + h + 13, 'font-size': 10, 'text-anchor': 'middle', fill: 'var(--muted)' }, svg).textContent = 2 ** e);
+    if (hline) {
+      S('line', { x1: L, x2: L + w, y1: Y(hline), y2: Y(hline), stroke: 'var(--bad)', 'stroke-dasharray': '4 3' }, svg);
+      S('text', { x: L + 4, y: Y(hline) - 4, 'font-size': 10, fill: 'var(--bad)' }, svg).textContent = 'SLO 50 мс';
+    }
+    if (vline > 0 && vline < 512) {
+      const vx = X(Math.log2(Math.max(1, vline)));
+      S('line', { x1: vx, x2: vx, y1: top, y2: top + h, stroke: 'var(--warn)', 'stroke-dasharray': '5 3' }, svg);
+      S('text', { x: vx - 3, y: top + h - 6, 'font-size': 10, 'text-anchor': 'end', fill: 'var(--warn)' }, svg).textContent = 'KV кончился';
+    }
+    S('polyline', { points: xs.map((e, i) => `${X(e)},${Y(ys[i])}`).join(' '), fill: 'none', stroke: 'var(--accent)', 'stroke-width': 2.2 }, svg);
+    S('circle', { cx: X(Math.log2(cur[0])), cy: Y(cur[1]), r: 5, fill: 'var(--accent)', stroke: 'var(--card)', 'stroke-width': 2 }, svg);
+  }
+
+  function draw() {
+    const o = params(), m = model(o);
+    svg.innerHTML = '';
+    // Полоса VRAM.
+    const bx = 20, bw = 600, by = 30, bh = 26, sc = bw / Math.max(m.total, m.wGB + RESERVE * o.n);
+    const B = Math.min(o.c, m.maxSeq);
+    const used = Math.min(Math.max(m.kvGB, 0), B * m.perReq);
+    S('text', { x: bx, y: 18, 'font-size': 12, 'font-weight': 600 }, svg).textContent = `VRAM: ${o.n} × ${o.G.name} = ${gb(m.total)}`;
+    let x = bx;
+    const seg = (v, fill, label) => {
+      if (v <= 0) return;
+      const wd = v * sc;
+      S('rect', { x, y: by, width: Math.max(wd, 1), height: bh, fill }, svg);
+      if (wd > 46) S('text', { x: x + wd / 2, y: by + bh / 2 + 4, 'font-size': 11, 'text-anchor': 'middle', fill: fill === 'var(--violet)' || fill === 'var(--accent)' ? 'var(--card)' : 'var(--text)' }, svg).textContent = label;
+      x += wd;
+    };
+    seg(m.wGB, 'var(--violet)', 'веса ' + gb(m.wGB));
+    seg(used, 'var(--accent)', 'KV ' + gb(used));
+    seg(Math.max(m.kvGB, 0) - used, 'var(--accent-soft)', 'свободно');
+    seg(Math.max(0, m.total - x / sc + bx / sc), 'var(--border)', 'запас');
+    S('rect', { x: bx, y: by, width: m.total * sc, height: bh, fill: 'none', stroke: 'var(--text)', 'stroke-width': 1 }, svg);
+    if (m.kvGB <= 0) S('text', { x: bx, y: by + bh + 16, 'font-size': 11.5, 'font-weight': 600, fill: 'var(--bad)' }, svg).textContent = 'Веса не оставляют места под KV-cache: нужна квантизация или больше GPU';
+    else S('text', { x: bx, y: by + bh + 16, 'font-size': 11, fill: 'var(--muted)' }, svg).textContent = `KV-бюджет ${gb(m.kvGB)} · ${num(m.kvGB * 1e9 / m.kvTok)} токенов · запросов по ${tok(o.inp)} + ${tok(o.outp)}: ${m.maxSeq}`;
+
+    // Графики от конкурентности.
+    const xs = [], thr = [], tpot = [];
+    for (let e = 0; e <= 9.001; e += 0.1) {
+      const b = Math.min(Math.pow(2, e), m.maxSeq);
+      xs.push(e);
+      thr.push(b >= 1 ? b / m.step(b) : 0);
+      tpot.push(b >= 1 ? m.step(b) : 0);
+    }
+    const tp = B >= 1 ? m.step(B) : 0, th = B >= 1 ? B / tp : 0;
+    chart(0, 'throughput, ток/с', xs, thr, [o.c, th], m.maxSeq, 0, v => num(v));
+    chart(320, 'TPOT, мс', xs, tpot.map(v => v * 1000), [o.c, tp * 1000], m.maxSeq, SLO * 1000, v => v.toFixed(0));
+    S('text', { x: 620, y: 296, 'font-size': 10, 'text-anchor': 'end', fill: 'var(--muted)' }, svg).textContent = 'одновременных запросов (лог. шкала) →';
+
+    const lines = [
+      `${o.M.name}, веса ${o.W.name}, KV ${o.kv8 ? 'FP8' : 'BF16'} · ${o.n} × ${o.G.name}` + (o.W.name === 'FP8' && !o.G.fp8 ? ' (у A100 нет FP8: экономится только память)' : ''),
+      `веса ${gb(m.wGB)} · KV на токен ${(m.kvTok / 1024).toFixed(0)} КБ · на запрос ${tok(o.inp)} + ${tok(o.outp)}: ${gb(m.perReq)}`,
+    ];
+    if (m.kvGB <= 0) lines.push('Веса не помещаются или не оставляют места под KV-cache: квантуйте веса или добавьте GPU в tensor parallel.');
+    else if (m.maxSeq < 1) lines.push('Запрос такой длины не помещается в KV-бюджет: уменьшите контекст, включите FP8 для KV или добавьте GPU.');
+    else {
+      lines.push(`одновременно помещается запросов: ${m.maxSeq} (--max-num-seqs выше этого числа не поможет)`);
+      lines.push(`при ${o.c} одновременных: батч ${B}, TPOT ≈ ${(tp * 1000).toFixed(1)} мс (${(1 / tp).toFixed(0)} ток/с на пользователя), throughput ≈ ${num(th)} ток/с, TTFT ≥ ${(m.prefill * 1000).toFixed(0)} мс (prefill без очереди)`);
+      if (o.c > m.maxSeq) lines.push(`⚠ ${o.c - m.maxSeq} запросов ждут в очереди: их TTFT растёт на время, пока освободится место в батче`);
+      if (tp > SLO) lines.push('⚠ TPOT выше SLO 50 мс: уменьшите батч, квантуйте или добавьте GPU');
+    }
+    out.textContent = lines.join('\n');
+  }
+
+  ['sv-model', 'sv-wq', 'sv-gpu'].forEach(id => $(id).addEventListener('change', draw));
+  $('sv-kv8').addEventListener('change', draw);
+  Course.bindRange($('sv-tp'), v => String(TP[v]), draw);
+  Course.bindRange($('sv-in'), v => tok(Math.round(Math.pow(2, v))), draw);
+  Course.bindRange($('sv-out'), v => tok(Math.round(Math.pow(2, v))), draw);
+  Course.bindRange($('sv-c'), v => String(Math.round(Math.pow(2, v))), draw);
+})();
+
+/* ---------- 2. Self-hosted против API ---------- */
+(function () {
+  const svg = document.getElementById('gpu-svg');
+  const out = document.getElementById('gpu-read');
+  const $ = id => document.getElementById(id);
+  const S = (tag, a, p) => { if (tag === 'text' && a.fill) a.style = 'fill:' + a.fill; return Course.svg(tag, a, p); };
+  const money = v => v >= 1e6 ? '$' + (v / 1e6).toFixed(2) + 'M' : v >= 1e3 ? '$' + (v / 1e3).toFixed(1) + 'K' : '$' + v.toFixed(0);
+  const toks = v => v >= 1e9 ? (v / 1e9).toFixed(2) + ' млрд' : (v / 1e6).toFixed(0) + ' млн';
+
+  function p() { return { vol: Math.pow(10, +$('g-vol').value), api: +$('g-api').value, gpu: +$('g-gpu').value, tps: +$('g-tps').value, util: +$('g-util').value, ops: +$('g-ops').value, ha: $('g-ha').checked }; }
+  const apiCost = (v, o) => v * 30 / 1e6 * o.api;
+  const gpus = (v, o) => Math.max(o.ha ? 2 : 1, Math.ceil(v / (o.tps * o.util * 86400)));
+  const selfCost = (v, o) => gpus(v, o) * o.gpu * 24 * 30 + o.ops;
+
+  function draw() {
+    const o = p();
+    svg.innerHTML = '';
+    const L = 56, R = 14, T = 14, B = 34, W = 640, H = 300;
+    const lx0 = 6, lx1 = 10;
+    const xs = [];
+    for (let e = lx0; e <= lx1 + 1e-9; e += 0.02) xs.push(Math.pow(10, e));
+    const all = xs.flatMap(v => [apiCost(v, o), selfCost(v, o)]);
+    const ly0 = Math.floor(Math.log10(Math.max(10, Math.min(...all)))), ly1 = Math.ceil(Math.log10(Math.max(...all)));
+    const x = v => L + (Math.log10(v) - lx0) / (lx1 - lx0) * (W - L - R);
+    const y = v => H - B - (Math.log10(Math.max(v, 1)) - ly0) / (ly1 - ly0) * (H - B - T);
+    for (let e = ly0; e <= ly1; e++) { S('line', { x1: L, x2: W - R, y1: y(10 ** e), y2: y(10 ** e), stroke: 'var(--border)' }, svg); S('text', { x: L - 6, y: y(10 ** e) + 4, 'font-size': 11, 'text-anchor': 'end' }, svg).textContent = money(10 ** e); }
+    for (let e = lx0; e <= lx1; e++) { S('line', { x1: x(10 ** e), x2: x(10 ** e), y1: T, y2: H - B, stroke: 'var(--border)' }, svg); S('text', { x: x(10 ** e), y: H - B + 16, 'font-size': 11, 'text-anchor': e === lx1 ? 'end' : 'middle' }, svg).textContent = ['1 млн', '10 млн', '100 млн', '1 млрд', '10 млрд'][e - lx0]; }
+    S('text', { x: W - R, y: H - 4, 'font-size': 11, 'text-anchor': 'end', fill: 'var(--muted)' }, svg).textContent = 'токенов в день →';
+    S('text', { x: L + 6, y: T + 12, 'font-size': 11, fill: 'var(--muted)' }, svg).textContent = '$/мес';
+    S('polyline', { points: xs.map(v => `${x(v)},${y(apiCost(v, o))}`).join(' '), fill: 'none', stroke: 'var(--accent)', 'stroke-width': 2.5 }, svg);
+    S('polyline', { points: xs.map(v => `${x(v)},${y(selfCost(v, o))}`).join(' '), fill: 'none', stroke: 'var(--violet)', 'stroke-width': 2.5 }, svg);
+    let be = null;
+    for (const v of xs) if (selfCost(v, o) < apiCost(v, o)) { be = v; break; }
+    if (be) {
+      S('line', { x1: x(be), x2: x(be), y1: T, y2: H - B, stroke: 'var(--ok)', 'stroke-width': 1.5, 'stroke-dasharray': '5 4' }, svg);
+      S('circle', { cx: x(be), cy: y(apiCost(be, o)), r: 5, fill: 'var(--ok)' }, svg);
+    }
+    S('line', { x1: x(o.vol), x2: x(o.vol), y1: T, y2: H - B, stroke: 'var(--text)', 'stroke-width': 1, opacity: 0.6 }, svg);
+    S('circle', { cx: x(o.vol), cy: y(apiCost(o.vol, o)), r: 4.5, fill: 'var(--accent)' }, svg);
+    S('circle', { cx: x(o.vol), cy: y(selfCost(o.vol, o)), r: 4.5, fill: 'var(--violet)' }, svg);
+    const a = apiCost(o.vol, o), s = selfCost(o.vol, o), n = gpus(o.vol, o);
+    const eff = s / (o.vol * 30 / 1e6);
+    out.textContent =
+      `Объём: ${toks(o.vol)} токенов/день (${toks(o.vol * 30)} в мес)\n` +
+      `API: ${money(a)}/мес    Self-hosted: ${money(s)}/мес (${n} GPU + ops)    эффективно $${eff.toFixed(2)} за 1M\n` +
+      (be ? `Безубыточность ≈ ${toks(be)} токенов/день. ` : 'В этом диапазоне self-hosted не окупается. ') +
+      (s < a ? `Self-hosted дешевле в ${(a / s).toFixed(1)}×, если модель проходит ваши evals.` : `API дешевле в ${(s / a).toFixed(1)}×.`);
+  }
+  Course.bindRange($('g-vol'), v => toks(Math.pow(10, v)), draw);
+  Course.bindRange($('g-api'), v => '$' + v.toFixed(1), draw);
+  Course.bindRange($('g-gpu'), v => '$' + v.toFixed(1), draw);
+  Course.bindRange($('g-tps'), v => String(v), draw);
+  Course.bindRange($('g-util'), v => Math.round(v * 100) + '%', draw);
+  Course.bindRange($('g-ops'), v => money(v), draw);
+  $('g-ha').addEventListener('change', draw);
+})();
+
+/* ---------- 3. Дерево решений ---------- */
 (function () {
   const svg = document.getElementById('dt-svg');
   const btns = document.getElementById('dt-btns');
   const rec = document.getElementById('dt-rec');
-  const S = Course.svg;
+  const S = (tag, a, p) => { if (tag === 'text' && a.fill) a.style = 'fill:' + a.fill; return Course.svg(tag, a, p); };
   const N = {
     q1: { q: 'Не хватает знаний? Факты меняются, нужны источники', yes: 'rag', no: 'q2', y: 40 },
     q2: { q: 'Есть evals, и промпт уже выжат?', yes: 'q3', no: 'prompt', y: 125 },
@@ -628,11 +1801,11 @@ func main() {
   render();
 })();
 
-/* ---------- 2. LoRA: параметры и память ---------- */
+/* ---------- 4. LoRA: параметры и память ---------- */
 (function () {
   const svg = document.getElementById('lora-svg');
   const out = document.getElementById('lora-read');
-  const S = Course.svg;
+  const S = (tag, a, p) => { if (tag === 'text' && a.fill) a.style = 'fill:' + a.fill; return Course.svg(tag, a, p); };
   const RANKS = [1, 2, 4, 8, 16, 32, 64, 128, 256];
   const MODELS = {
     7: { name: '7B (Llama-2-7B-подобная)', P: 6.74e9, d: 4096, L: 32, m: 11008, kv: 4096 },
@@ -714,11 +1887,11 @@ func main() {
   Course.bindRange(document.getElementById('lo-r'), v => String(RANKS[v]), draw);
 })();
 
-/* ---------- 3. Кривые обучения ---------- */
+/* ---------- 5. Кривые обучения ---------- */
 (function () {
   const svg = document.getElementById('lc-svg');
   const out = document.getElementById('lc-read');
-  const S = Course.svg;
+  const S = (tag, a, p) => { if (tag === 'text' && a.fill) a.style = 'fill:' + a.fill; return Course.svg(tag, a, p); };
   const $ = id => document.getElementById(id);
 
   function curves(N, E, reg) {
@@ -777,12 +1950,12 @@ func main() {
   Course.bindRange($('lc-reg'), v => v.toFixed(2), draw);
 })();
 
-/* ---------- 4. Confusion matrix + PR ---------- */
+/* ---------- 6. Confusion matrix + PR ---------- */
 (function () {
   const svg = document.getElementById('cm-svg');
   const cv = document.getElementById('cm-curves');
   const out = document.getElementById('cm-read');
-  const S = Course.svg;
+  const S = (tag, a, p) => { if (tag === 'text' && a.fill) a.style = 'fill:' + a.fill; return Course.svg(tag, a, p); };
   const $ = id => document.getElementById(id);
   const TOTAL = 2000;
 

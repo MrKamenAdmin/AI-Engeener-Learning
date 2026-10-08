@@ -17,6 +17,8 @@
   .seg button { font: inherit; font-size: 13px; border: 0; background: var(--card); color: var(--text); padding: 5px 10px; cursor: pointer; }
   .seg button + button { border-left: 1px solid var(--border); }
   .seg button.active { background: var(--accent); color: #fff; }
+  #viz-ct select { width: auto; font-size: 13px; }
+  #viz-ct .controls b { font-size: 13px; color: var(--muted); }
 </style>
 </head>
 <body data-module="m04">
@@ -24,8 +26,8 @@
   <div class="module-hero">
     <div class="eyebrow">Модуль 4</div>
     <h1>Инструменты</h1>
-    <p class="lead">Python для Go-разработчика без вводного курса: соответствия конструкций, окружение на uv, pydantic, async. Затем рабочие инструменты AI engineer: FastAPI-обёртка со стримингом, pandas для анализа evals, SDK провайдеров, фреймворки (LangChain, LlamaIndex, LangGraph) с честным разбором минусов и Jupyter — где он уместен, а где нет.</p>
-    <div class="meta-row"><span class="chip">≈ 6 часов</span><span class="chip">Python + Go</span><span class="chip">3 визуализации</span><span class="chip">актуально на сентябрь 2026</span></div>
+    <p class="lead">Python для Go-разработчика без вводного курса: соответствия конструкций, окружение на uv, pydantic, async. Затем рабочие инструменты AI engineer: FastAPI-обёртка со стримингом, pandas для анализа evals, SDK провайдеров, фреймворки (LangChain, LlamaIndex, LangGraph) с честным разбором минусов и Jupyter — где он уместен, а где нет. В конце — coding agents (Claude Code, Codex CLI, Cursor и другие): как работать с ними циклом «план → тесты → код → ревью», что писать в AGENTS.md и CLAUDE.md, как ограничить права и где они ошибаются.</p>
+    <div class="meta-row"><span class="chip">≈ 8 часов</span><span class="chip">Python + Go</span><span class="chip">4 визуализации</span><span class="chip">на момент написания: октябрь 2026</span></div>
   </div>
 
   <h2 id="why">Зачем Go-разработчику Python</h2>
@@ -335,7 +337,7 @@ async def healthz() -&gt; dict:
     <div class="readout" id="ev-out"></div>
   </div>
 
-  <p>Что стоит заметить на этих данных. По версиям v3 выглядит лучше всех, но в разрезе «версия × категория» видно, что v3 просела на billing (3 из 6 против 5 и 4 у v1 и v2) — при n = 6 на ячейку это может быть и шум, и реальная регрессия, интервалы огромные. v3 также медленнее и расходует больше выходных токенов. Решение «катим v3» требует больше данных по billing и оценки стоимости, а не одного числа в сводке. Именно это — работа AI engineer с evals.</p>
+  <p>Что стоит заметить на этих данных. По версиям v3 выглядит лучше всех, но в разрезе «версия × категория» видно, что v3 просела на billing (3 из 6 против 5 и 4 у v1 и v2) — при n = 6 на ячейку это может быть и шум, и реальная регрессия, интервалы огромные. v3 также медленнее и расходует больше выходных токенов. Решение «катим v3» требует больше данных по billing и оценки стоимости, а не одного числа в сводке. Именно это — работа AI engineer с evals. Здесь pandas — инструмент; методология целиком (golden dataset, LLM-as-a-judge, размер выборки, quality gate в CI) — в модуле 8.</p>
 
   <pre><code class="lang-python">import pandas as pd
 
@@ -451,7 +453,7 @@ print(chat.choices[0].message.content, chat.choices[0].finish_reason,
 
   <div class="grid">
     <div class="card"><h4>LangChain</h4><p>Общий слой абстракций: единый интерфейс chat-моделей разных провайдеров, шаблоны промптов, парсеры вывода, сотни интеграций (векторные БД, загрузчики документов, инструменты), композиция цепочек. Сильная сторона — скорость прототипа и интеграции. Слабая — много слоёв поверх простого HTTP-вызова.</p></div>
-    <div class="card"><h4>LlamaIndex</h4><p>Фокус на данных и RAG: коннекторы к источникам, парсинг документов, стратегии чанкинга, индексы, query engines, reranking, оценка retrieval. Хорош, чтобы за день собрать RAG над корпусом и сравнить стратегии. Прод-логику retrieval часто потом переписывают под свои данные.</p></div>
+    <div class="card"><h4>LlamaIndex</h4><p>Фокус на данных и RAG: коннекторы к источникам, парсинг документов, стратегии чанкинга, индексы, query engines, reranking, оценка retrieval. Хорош, чтобы за день собрать RAG (retrieval-augmented generation — ответ модели по найденным в вашей базе фрагментам; подробно в модуле 5) над корпусом и сравнить стратегии. Прод-логику retrieval часто потом переписывают под свои данные.</p></div>
     <div class="card"><h4>LangGraph</h4><p>Низкоуровневая библиотека для агентов как графа состояний: узлы — шаги, рёбра — переходы (в т.ч. условные), общее состояние, checkpointing (сохранение состояния между шагами), human-in-the-loop, возобновление после сбоя. Меньше «магии», чем LangChain; по сути — движок конечного автомата с персистентностью.</p></div>
   </div>
 
@@ -479,7 +481,7 @@ print(chat.choices[0].message.content, chat.choices[0].finish_reason,
   </div>
 
   <div class="callout go"><span class="title">А в Go?</span>
-    <p>Экосистема меньше: есть langchaingo (порт LangChain от сообщества), Eino от CloudWeGo, Genkit с поддержкой Go. Но в Go культура «тонкие библиотеки + свой код» и так сильнее, и это совпадает с советом Anthropic: SDK провайдера, свой агентный цикл на 100–200 строк, pgvector, OpenTelemetry. Агентный цикл — это <code>for</code> с <code>switch resp.StopReason</code>; граф состояний — таблица переходов и состояние в Postgres. Фреймворк здесь чаще мешает, чем помогает.</p>
+    <p>Экосистема меньше: есть langchaingo (порт LangChain от сообщества), Eino от CloudWeGo, Genkit с поддержкой Go. Но в Go культура «тонкие библиотеки + свой код» и так сильнее, и это совпадает с советом Anthropic: SDK провайдера, свой агентный цикл на 100–200 строк (вы напишете его в модуле 6), pgvector, OpenTelemetry. Агентный цикл — это <code>for</code> с <code>switch resp.StopReason</code>; граф состояний — таблица переходов и состояние в Postgres. Фреймворк здесь чаще мешает, чем помогает.</p>
   </div>
 
   <h2 id="jupyter">Jupyter: для экспериментов, не для прода</h2>
@@ -492,6 +494,155 @@ print(chat.choices[0].message.content, chat.choices[0].finish_reason,
     <li><b>Нет жизненного цикла сервиса:</b> ни graceful shutdown, ни лимитов, ни наблюдаемости.</li>
   </ul>
   <p>Нормальный путь: ноутбук → код, который доказал ценность, выносится в модуль с функциями → скрипт с аргументами (PEP 723) → тесты и CI → при необходимости сервис (FastAPI или Go). Ноутбук остаётся как отчёт об эксперименте, импортирующий этот модуль.</p>
+
+  <h2 id="coding-agents">Coding agents в работе AI-инженера</h2>
+  <p><b>Coding agent</b> — LLM в агентном цикле с инструментами разработчика: читать и искать по коду, править файлы, запускать команды (<code>go test</code>, <code>git diff</code>), вызывать MCP-серверы. Это тот же цикл tool use из модуля 2, только «мир» агента — ваш репозиторий (как цикл устроен изнутри, разберём в модуле 6). Код — область, где агенты работают лучше всего: компилятор и тесты дают объективную обратную связь без человека. Отсюда главный принцип: <b>доверие к изменению от агента строится на проверяемости, а не на уверенном тоне отчёта</b>. То, что автоматически не проверяется (промпты, тексты, конкурентность, безопасность), требует evals и человека.</p>
+
+  <h3>Классы инструментов</h3>
+  <table>
+    <tr><th>Класс</th><th>Примеры (по состоянию на октябрь 2026)</th><th>Когда брать</th></tr>
+    <tr><td><b>CLI</b></td><td>Claude Code, OpenAI Codex CLI (open source), Gemini CLI (для бесплатных аккаунтов Google заменён на Antigravity CLI)</td><td>Основной инструмент бэкендера: тот же shell и <code>make</code>, есть неинтерактивный режим для CI (<code>claude -p</code>, <code>codex exec</code>)</td></tr>
+    <tr><td><b>IDE</b></td><td>Cursor, GitHub Copilot agent mode, JetBrains AI Assistant (Junie и подключаемые агенты по протоколу ACP)</td><td>Точечные правки под постоянным контролем, ревью диффа в редакторе</td></tr>
+    <tr><td><b>Облачные</b></td><td>Claude Code on the web, Codex Cloud, Copilot cloud agent, Cursor Cloud Agents, Jules, Devin</td><td>Чётко поставленные задачи, которые можно запускать параллельно; результат — PR на ревью</td></tr>
+  </table>
+  <p>Сравнивайте не бренды, а свойства: какой файл инструкций читается, какие есть режимы разрешений и sandbox, поддерживается ли MCP, где исполняется код и какие секреты туда попадают.</p>
+
+  <h3>Рабочий цикл</h3>
+  <ol>
+    <li><b>Исследование</b> без права правок (в Claude Code — plan mode, <code>--permission-mode plan</code>). Большое исследование — субагенту, чтобы не засорять основной контекст.</li>
+    <li><b>План</b> письменно: файлы, функции, тесты, чего не трогать. Правка плана стоит одного сообщения, правка 600 строк диффа — часа.</li>
+    <li><b>Тесты сначала</b>: агент пишет табличный тест, запускает, тест падает по правильной причине. Тесты коммитятся отдельно, до реализации.</li>
+    <li><b>Реализация маленькими шагами</b>: «сделай так, чтобы тесты прошли; тесты не меняй». Коммит после зелёных <code>go vet</code> и <code>go test -race</code>.</li>
+    <li><b>Ревью диффа</b>: сначала <code>git diff --stat</code> (не вышел ли за план), потом отдельно дифф <code>*_test.go</code> (не ослаблены ли проверки), потом всё. Агент пишет, человек отвечает за мерж.</li>
+  </ol>
+  <div class="callout go"><span class="title">Аналогия из Go</span>Тесты до кода для агента — то же, что интерфейс до реализации: контракт фиксируется раньше, чем появится код, под который его захочется подогнать. А <code>go test</code> в цикле агента — компилятор для поведения: модель не нужно уговаривать, ей достаточно красного вывода.</div>
+
+  <h3>Настройка репозитория: AGENTS.md, права, хуки</h3>
+  <p><b>Файл инструкций</b> агент загружает в контекст в начале каждой сессии. <b>AGENTS.md</b> — открытый формат (обычный Markdown), его читают Codex, Cursor, Copilot и большинство других агентов; вложенные файлы в подкаталогах уточняют правила, приоритет у ближайшего. Claude Code читает <b>CLAUDE.md</b> (а AGENTS.md — если CLAUDE.md нет); для команды со смешанными инструментами удобно держать правила в AGENTS.md, а в CLAUDE.md написать строку <code>@AGENTS.md</code> и специфику Claude Code. Пишите только то, чего агент не выведет из кода: команды проверки, карту, неочевидные конвенции, запреты, критерий «готово». Каждая строка едет в контекст каждой сессии — это «всегда загруженная» часть контекста (<a href="m06.html#context">модуль 6</a>), документация Claude Code советует держаться в пределах ~200 строк.</p>
+  <p>Но инструкция — не гарантия: документация Claude Code прямо называет CLAUDE.md контекстом, а не принудительной конфигурацией. То, что должно выполняться всегда, живёт в двух механизмах вне модели. <b>Права</b>: режим решает, спрашивать ли человека (в Claude Code — от Manual с подтверждениями до <code>auto</code>, где действия проверяет модель-классификатор, и <code>bypassPermissions</code> — только в изолированном контейнере), правила allow/ask/deny уточняют его, а <b>sandbox</b> средствами ОС ограничивает, до каких файлов и доменов вообще дотянутся shell-команды. Правила для команд хрупкие (вариация синтаксиса их обходит), поэтому граница безопасности — sandbox или контейнер. <b>Хуки</b>: ваши команды на событиях агента; <code>PreToolUse</code> с кодом выхода 2 блокирует вызов инструмента, <code>Stop</code> с кодом 2 не даёт агенту закончить ход и возвращает ему stderr.</p>
+  <div class="tabs">
+    <div class="tab-panel" data-tab="AGENTS.md"><pre><code># docrag — RAG по документации (Go, Postgres + pgvector)
+
+## Команды
+- `docker compose up -d db` — Postgres для интеграционных тестов
+- `make check` — gofmt -l, go vet, go test -race ./...; запускай перед «готово»
+- `make eval-smoke` — ~40 вопросов из golden set; обязателен при правке prompts/ и internal/generate/
+
+## Структура и конвенции
+- internal/retrieve — гибридный поиск; internal/generate — промпт и вызов Claude; prompts/ — версии промптов
+- Ошибки: fmt.Errorf("...: %w", err); логи только slog; имена моделей — из internal/generate/models.go
+
+## Нельзя
+- Менять evals/data/ (эталон) и применённые migrations/*.sql; ослаблять или пропускать тесты
+- Добавлять зависимости без вопроса, читать .env, ходить в прод
+
+## Готово, когда
+- make check зелёный; при правке prompts/ — eval-smoke не хуже baseline; дифф ≤ 300 строк
+</code></pre></div>
+    <div class="tab-panel" data-tab=".claude/settings.json"><pre><code class="lang-json">{
+  "permissions": {
+    "allow": ["Bash(make check)", "Bash(go test *)", "Bash(git diff *)"],
+    "ask":   ["Bash(git push *)", "Bash(go get *)", "Edit(/migrations/**)"],
+    "deny":  ["Read(./.env)", "Edit(/evals/data/**)", "Bash(kubectl *)"]
+  },
+  "sandbox": {
+    "enabled": true,
+    "filesystem": { "denyRead": ["./.env", "~/.ssh", "~/.aws", "~/.kube"] },
+    "network": { "allowedDomains": ["proxy.golang.org", "sum.golang.org"] }
+  },
+  "hooks": {
+    "Stop": [{ "hooks": [{ "type": "command", "timeout": 900,
+      "command": "cd \"$CLAUDE_PROJECT_DIR\" &amp;&amp; go run ./cmd/agentgate" }] }]
+  }
+}</code></pre></div>
+  </div>
+  <p>Stop-хук <code>agentgate</code> превращает «готово, когда» из AGENTS.md в код: смотрит, что изменилось относительно <code>main</code>, и решает, какие проверки обязательны.</p>
+  <pre><code class="lang-go">// Plan по изменениям возвращает обязательные проверки (цели Makefile — те же,
+// что перечислены в AGENTS.md) и нарушения, которые агент должен откатить.
+func Plan(cs []Change) (checks [][]string, violations []string) {
+	var goCode, prompts bool
+	for _, c := range cs {
+		switch {
+		case strings.HasPrefix(c.Path, "evals/data/"):
+			violations = append(violations, c.Path+": эталон evals меняет человек отдельным PR, а не агент вместе с кодом")
+		case strings.HasPrefix(c.Path, "migrations/") &amp;&amp; c.Status != 'A':
+			violations = append(violations, c.Path+": применённую миграцию не правят, добавьте новую")
+		case strings.HasPrefix(c.Path, "prompts/"):
+			prompts = true
+		case strings.HasSuffix(c.Path, ".go"), c.Path == "go.mod", c.Path == "go.sum":
+			goCode = true
+		}
+	}
+	if goCode {
+		checks = append(checks, []string{"make", "check"}) // gofmt -l, go vet, go test -race
+	}
+	if prompts {
+		checks = append(checks, []string{"make", "eval-smoke"}) // промпт не проверить go test
+	}
+	return checks, violations
+}
+</code></pre>
+  <p>Полная версия (запуск git и проверок, коды выхода 0/1/2, табличные тесты на fake-раннере) — в <code>examples/m04-tools</code> репозитория курса. Нарушения и упавшие проверки хук пишет в stderr с хвостом лога, и агент продолжает работу. От зацикливания Claude Code защищён сам: подряд идущие продолжения от Stop-хуков ограничены. <code>make eval-smoke</code> ходит в API модели с ключом, поэтому его запускает хук (хуки работают вне sandbox), а не агент из своего shell.</p>
+
+  <h3>Безопасность</h3>
+  <ul>
+    <li><b>Секреты и прод.</b> Всё, что агент прочитал, попадает в контекст, а оттуда — в логи и, при инъекции, к атакующему. Агенту — dev-ключи с лимитом расходов и токены со scope на один репозиторий; никаких DSN прод-БД, kube-контекста прода и облачных admin-ключей: <code>DROP TABLE</code> не откатывается. Данные — через read-only MCP-инструмент с allowlist запросов (как <code>db_query</code> в проекте C).</li>
+    <li><b>Prompt injection.</b> Агент читает чужой текст: README и код зависимостей, issues и комментарии в PR, веб-страницы, ответы MCP-инструментов. Это lethal trifecta из <a href="m03.html#injection">модуля 3</a>: приватный код + недоверенный текст + каналы наружу (сеть, <code>git push</code>, публичный комментарий). Пример: Invariant Labs (2025) через вредоносный issue заставили агента с GitHub MCP-сервером выложить данные приватных репозиториев в публичный PR. Защита — минимальные права, allowlist сети, подтверждение действий, выносящих данные наружу; систематически — в <a href="m07.html#owasp">модуле 7</a>.</li>
+    <li><b>MCP-серверы</b> проекта описываются в <code>.mcp.json</code> (в git, секреты — через <code>${VAR}</code>). Для docrag естественный кандидат — ваш <code>docs-mcp</code> из проекта C (модуль 6). Каждый сервер — новые права и новый источник недоверенного текста: по умолчанию только чтение, свои или прочитанные вами серверы, версии зафиксированы.</li>
+  </ul>
+
+  <h3>Типичные провалы и как их ловить</h3>
+  <table>
+    <tr><th>Провал</th><th>Как ловить</th></tr>
+    <tr><td><b>Огромный дифф</b> «заодно отрефакторил»</td><td>План со списком файлов; лимит ~300 строк в AGENTS.md; <code>git diff --stat</code> первым делом</td></tr>
+    <tr><td><b>Тесты подогнаны под код</b>: изменён assert, <code>t.Skip</code>, удалён «нестабильный» тест</td><td>Тесты отдельным коммитом до кода; дифф <code>*_test.go</code> отдельно; сломайте код руками — тест обязан упасть</td></tr>
+    <tr><td><b>Галлюцинированный API</b>: несуществующий метод, устаревший параметр, выдуманное имя модели или пакета</td><td>Методы ловит компилятор Go (в Python нужен mypy/pyright в цикле). Имена моделей и параметры — константы с правилом в AGENTS.md. Новые строки <code>go.mod</code> — глазами: модели «вспоминают» несуществующие пакеты (Spracklen et al., 2025), а атакующий может их зарегистрировать (slopsquatting)</td></tr>
+    <tr><td><b>Дрейф от задачи</b>: правит соседнее, меняет CI, «чтобы прошло»</td><td>«Что не трогать» в плане; CODEOWNERS на CI и эталон evals</td></tr>
+    <tr><td><b>«Готово» без проверки</b></td><td>Stop-хук, который сам запускает проверки; финальный судья — CI</td></tr>
+    <tr><td><b>Деградация длинной сессии</b> (context rot)</td><td>Одна задача — одна сессия; после двух неудачных поправок — сброс и новый запрос</td></tr>
+  </table>
+  <p>Ощущение скорости — не метрика: в исследовании METR (2025) опытные разработчики с AI-инструментами работали на 19% дольше, хотя считали, что ускорились. Меряйте своё: время до мержа и долю PR от агента, которые пришлось переделать.</p>
+
+  <h3>Специфика AI-инженерии</h3>
+  <ul>
+    <li><b>Агент правит промпт — обязателен прогон evals.</b> Зелёный <code>go test</code> ничего не говорит о поведении модели. То же для кода вокруг модели: сборки контекста, параметров вызова, парсинга ответа, retrieval. Smoke-набор — до мержа, полный — в CI (<a href="m08.html#ci">модуль 8</a>).</li>
+    <li><b>Агент правит эталон evals — конфликт интересов.</b> Если в одном диффе меняются и код, и ожидаемые ответы, зелёный результат ничего не доказывает. Эталон меняет человек отдельным PR; обеспечивают это deny-правило, CODEOWNERS и хук.</li>
+    <li><b>Агент генерирует eval-кейсы</b> — полезно для покрытия (перефразировки, граничные случаи, атаки, вопросы без ответа), но: ожидаемый ответ задаёт человек или источник, а не модель (иначе её ошибки становятся эталоном); проверяйте разнообразие и то, что текущая версия падает хотя бы на части кейсов; не тащите в фикстуры реальные логи с ПДн; помечайте <code>"source": "synthetic"</code>. Подробно — в модулях 8 и 10.</li>
+  </ul>
+
+  <div class="viz" id="viz-ct">
+    <p class="viz-title">Насколько доверять изменению от агента</p>
+    <p class="viz-sub">Опишите дифф, который принёс агент: размер, что затронуто, какие проверки пройдены и в каком режиме он работал. Справа — что повышает риск, слева — что его снижает, внизу — итог и что сделать до мержа. Веса — эвристика курса, а не стандарт индустрии: важна структура решения, а не точные числа.</p>
+    <div class="controls">
+      <label>размер диффа <input type="range" id="ct-size" min="1" max="7" step="1" value="3"> <output></output></label>
+      <label>режим агента <select id="ct-mode">
+        <option value="manual">Manual: подтверждаю действия</option>
+        <option value="edits">правки без подтверждения</option>
+        <option value="cloud">облачный агент в sandbox → PR</option>
+        <option value="bypass">bypassPermissions без изоляции</option>
+      </select></label>
+    </div>
+    <div class="controls" id="ct-area">
+      <b>Затронуто:</b>
+      <label><input type="checkbox" data-k="code" checked> Go-код</label>
+      <label><input type="checkbox" data-k="prompts"> промпты</label>
+      <label><input type="checkbox" data-k="golden"> эталон evals</label>
+      <label><input type="checkbox" data-k="migr"> миграции</label>
+      <label><input type="checkbox" data-k="deps"> go.mod</label>
+      <label><input type="checkbox" data-k="cfg"> CI, конфиги</label>
+    </div>
+    <div class="controls" id="ct-checks">
+      <b>Проверки:</b>
+      <label><input type="checkbox" data-k="first"> тесты написаны до кода</label>
+      <label><input type="checkbox" data-k="ci" checked> make check зелёный</label>
+      <label><input type="checkbox" data-k="evals"> eval-smoke прогнан</label>
+      <label><input type="checkbox" data-k="review"> человек прочитал дифф</label>
+    </div>
+    <svg id="ct-svg" viewBox="0 0 640 220" role="img" aria-label="Вклад факторов в риск изменения от агента и итоговая шкала"></svg>
+    <div class="readout" id="ct-out"></div>
+  </div>
+  <p>Обратите внимание: правка промпта без evals и эталон evals в одном диффе с кодом — блокеры при любом числе ревьюеров, а ревью 1 200 строк снижает риск втрое слабее, чем ревью 150. Командные правила работы с агентами (что можно отдавать, как ревьюить) — в <a href="m13.html">модуле 13</a>.</p>
+  <div class="callout tip"><span class="title">Как это звучит на собеседовании</span>«Агент пишет — я отвечаю за мерж. Доверяю не агенту, а проверкам: тесты до кода, зелёный CI, evals для всего, что трогает модель, дифф, который реально прочитать. Права минимальные, прода нет, а обязательные правила живут в хуках и CI, а не в AGENTS.md».</div>
 
   <h2 id="practice">Практика</h2>
   <div class="task">
@@ -510,9 +661,26 @@ print(chat.choices[0].message.content, chat.choices[0].finish_reason,
   </div>
   <div class="task">
     <h3>Задание 3: фреймворк на вкус</h3>
-    <p>Соберите RAG над 20 документами двумя способами: на LlamaIndex (или LangChain) и на «голом» SDK + простом векторном поиске. Включите трейсинг и найдите все промпты, которые фреймворк отправил в модель.</p>
+    <p>Соберите наивный RAG над 20 документами (эмбеддинги + косинусная близость + ответ модели по найденному; как делать RAG хорошо — модуль 5) двумя способами: на LlamaIndex (или LangChain) и на «голом» SDK. Включите трейсинг или логирование запросов и найдите все промпты, которые фреймворк отправил в модель.</p>
     <label class="check"><input type="checkbox" data-save="m04-t7"> Выписаны скрытые промпты фреймворка; сравнены токены на запрос в обоих вариантах</label>
     <label class="check"><input type="checkbox" data-save="m04-t8"> Сформулировано своё правило: когда вы возьмёте фреймворк, а когда нет</label>
+  </div>
+
+  <div class="task">
+    <h3>Задание 4: coding agent для проекта A</h3>
+    <p>Настройте coding agent (Claude Code, Codex CLI или другой — критерии те же) для своего репозитория docrag из проекта A и сделайте с ним одну фичу полным циклом. Примеры фич: параметр <code>min_score</code> в <code>/ask</code>; кэш эмбеддингов запросов в Postgres; фильтр <code>/search</code> по разделу документации.</p>
+    <ul>
+      <li><b>Контекст.</b> AGENTS.md (и CLAUDE.md с импортом, если работаете в Claude Code) не длиннее 100 строк: команды, карта, конвенции, запреты, «готово, когда». Проверка: в новой сессии агент на вопрос «как запустить тесты и что нельзя трогать» отвечает правильно, не открывая Makefile.</li>
+      <li><b>Права.</b> Без вопроса — только проверочные команды; запрещено — <code>.env</code> и эталон evals; с подтверждением — push, новые зависимости, миграции. Включён sandbox, или агент работает в контейнере. Проверка: попросите агента прочитать <code>.env</code> через встроенный инструмент и через <code>cat</code> — оба отказа происходят на уровне инструмента или ОС, а не из вежливости модели.</li>
+      <li><b>«Готово, когда» в коде.</b> Stop-хук (<code>agentgate</code> или свой аналог) или CI-проверка: агент не может закончить работу с красным <code>make check</code> или с правкой <code>prompts/</code> без <code>make eval-smoke</code>. Проверка: специально сломайте тест — агент продолжает чинить, а не докладывает об успехе.</li>
+      <li><b>MCP.</b> Подключён хотя бы один полезный для разработки read-only сервер, описанный в <code>.mcp.json</code> без секретов. После модуля 6 замените его своим <code>docs-mcp</code> из проекта C и покажите, что агент сам находит в нём ответ.</li>
+      <li><b>Фича циклом «план → тесты → реализация → ревью».</b> План сохранён; тесты закоммичены отдельно до реализации и после этого не менялись (<code>git diff</code> по <code>*_test.go</code> пуст); итоговый дифф не больше 300 строк; вы прочитали его целиком.</li>
+      <li><b>Журнал ошибок агента</b>: минимум 3 записи вида «что агент сделал не так → как вы это заметили → что поменяли в AGENTS.md, правах или хуках, чтобы не повторилось».</li>
+    </ul>
+    <label class="check"><input type="checkbox" data-save="m04-t9"> AGENTS.md/CLAUDE.md, права и sandbox настроены; запреты срабатывают на уровне инструмента, а не на честном слове</label>
+    <label class="check"><input type="checkbox" data-save="m04-t10"> Хук или CI-гейт не даёт завершить работу с красными проверками; MCP-сервер подключён через <code>.mcp.json</code></label>
+    <label class="check"><input type="checkbox" data-save="m04-t11"> Фича сделана циклом «план → тесты → реализация → ревью», тесты не менялись после реализации, дифф ≤ 300 строк</label>
+    <label class="check"><input type="checkbox" data-save="m04-t12"> Журнал ошибок агента (3+ записи) с изменениями в настройке</label>
   </div>
 
   <h2 id="selfcheck">Самопроверка</h2>
@@ -524,6 +692,10 @@ print(chat.choices[0].message.content, chat.choices[0].finish_reason,
   <details class="q"><summary>Почему при сравнении двух промптов на одном наборе полезно смотреть на «починенные» и «сломанные» примеры, а не только на разницу pass rate?</summary><div class="a"><p>Одинаковая разница может получиться из «починил 5, сломал 0» и из «починил 25, сломал 20». Второй случай — нестабильный промпт, который меняет поведение на половине набора. Парный тест McNemar использует только эти два числа и чувствительнее сравнения двух независимых долей.</p></div></details>
   <details class="q"><summary>Назовите три конкретных минуса LangChain в проде.</summary><div class="a"><p>Скрытые промпты и шаблоны внутри цепочек, которые влияют на поведение и стоимость; тяжёлая отладка через многослойные абстракции; нестабильность API между версиями и отставание от новых возможностей провайдеров. Плюс транзитивные зависимости и «наименьший общий знаменатель» в абстракции моделей.</p></div></details>
   <details class="q"><summary>Что не так с ноутбуком, который «работает у меня»?</summary><div class="a"><p>Ячейки могли выполняться не по порядку, а часть состояния — прийти из удалённых ячеек. Проверка: Restart &amp; Run All. Для воспроизводимости код выносится в модули, ноутбук только импортирует и визуализирует.</p></div></details>
+
+  <details class="q"><summary>В AGENTS.md написано «не меняй evals/data/». Почему этого недостаточно и что сделать?</summary><div class="a"><p>Файл инструкций — это контекст, а не принудительная конфигурация (так прямо сказано в документации Claude Code). В длинной сессии, при противоречивых указаниях или под prompt injection модель может нарушить любой пункт. Гарантию дают механизмы вне модели: deny-правило <code>Edit(/evals/data/**)</code>, хук, который блокирует завершение при изменённом эталоне, CODEOWNERS и проверка в CI. Строку в AGENTS.md оставляют как объяснение «почему», чтобы агент не тратил шаги на попытки.</p></div></details>
+  <details class="q"><summary>Агент изменил <code>prompts/answer.v2.txt</code>, <code>make check</code> зелёный. Можно мержить?</summary><div class="a"><p>Нет. <code>go test</code> проверяет код, а не поведение модели: промпт меняет ответы так, что ни один юнит-тест этого не увидит. Нужен прогон evals (smoke-набор до мержа, полный в CI) со сравнением с baseline, ревью диффа промпта человеком, а после мержа — canary. Это правило для всего, что влияет на вход и выход модели: сборки контекста, параметров вызова, retrieval.</p></div></details>
+  <details class="q"><summary>Чем режим разрешений агента отличается от sandbox и почему нужны оба?</summary><div class="a"><p>Режим решает, спрашивать ли человека перед действием (Manual, acceptEdits, auto и т. д.). Sandbox решает, до чего действие может дотянуться: файлы, сеть, процессы — на уровне ОС или контейнера. Подтверждения устают и ошибаются, классификатор вероятностен, а правила для команд обходятся вариациями синтаксиса. Sandbox ограничивает ущерб, даже если решение пропустить действие было неверным. <code>bypassPermissions</code> без внешней изоляции снимает оба уровня сразу.</p></div></details>
 
   <h2 id="interview">Вопросы с собеседований</h2>
   <details class="q interview"><summary>Вы бы взяли LangChain для нового продукта?</summary><div class="a">
@@ -548,6 +720,19 @@ print(chat.choices[0].message.content, chat.choices[0].finish_reason,
     <p>Ноутбук — для исследований: итерации над промптами на небольших выборках, анализ evals, графики, разбор провалов. Правила: выводы очищаются перед коммитом (nbstripout) или используется jupytext/marimo, секреты только из окружения, данные с ПДн не сохраняются в выводах. Как только код нужен повторно, он переезжает в модуль с тестами, ноутбук его импортирует. Прод-код — модули, скрипты с CLI и сервисы, с CI, типами и наблюдаемостью. Ноутбук никогда не запускается «по крону».</p>
   </div></details>
 
+  <details class="q interview"><summary>Как вы работаете с coding agents и как контролируете качество кода, который они пишут?</summary><div class="a">
+    <p>Агент для меня — исполнитель с быстрыми руками, а ответственность за мерж на мне. Цикл: исследование в режиме только чтения, письменный план с перечнем файлов и тем, чего не трогать, тесты до кода отдельным коммитом, реализация маленькими шагами с зелёными <code>go build</code>, <code>go vet</code>, <code>go test -race</code> после каждого, ревью диффа: сначала <code>--stat</code>, потом тесты отдельно, потом всё. В репозитории лежит короткий AGENTS.md: команды, конвенции, запреты, критерий готовности. Всё, что обязано выполняться, вынесено в права, хуки и CI: агент не может завершить работу с красными проверками или с правкой промпта без evals. Не отдаю агенту целиком то, что плохо проверяется автоматически: конкурентность, безопасность, миграции данных. Там он максимум предлагает, а решение и ревью — построчно мои. Полезная метрика для себя — доля PR от агента, которые пришлось переделывать или откатывать. Если она растёт, значит, я отдаю слишком крупные задачи.</p>
+    <p><b>На что смотрит интервьюер:</b> зрелую позицию между «AI пишет всё» и «не пользуюсь». Ключевое — доверие через проверяемость (тесты до кода, CI, evals), маленькие диффы, явное владение результатом и понимание, где агент систематически ошибается. Плюс, если кандидат называет конкретные механизмы (хуки, deny-правила, sandbox), а не только «я внимательно смотрю».</p>
+  </div></details>
+  <details class="q interview"><summary>Команда из 10 человек начинает пользоваться coding agents. Что вы настроите по безопасности в первый день?</summary><div class="a">
+    <p>Исхожу из того, что агент может быть скомпрометирован через текст, который он читает: README зависимостей, issues, комментарии в PR, веб-страницы, описания MCP-инструментов. Значит, разрываю lethal trifecta и ограничиваю ущерб, а не надеюсь на промпт. Первое: никаких прод-доступов в окружении агента — ни прод-БД, ни kube-контекста прода, ни облачных admin-ключей; для данных — read-only реплика или обезличенный дамп. Второе: секреты — deny-правила на <code>.env</code> и каталоги с ключами, отдельные dev-ключи с лимитом расходов, короткоживущие токены со scope на один репозиторий, особенно у облачных агентов. Третье: sandbox или контейнер для shell-команд, сеть через allowlist (реестр модулей, git-хостинг), режим «разрешено всё» — только в одноразовых контейнерах. Четвёртое: действия, которые выносят данные наружу или необратимы (push, публикация, комментарии в публичных репозиториях, миграции), — с подтверждением человека. Пятое: allowlist MCP-серверов с закреплёнными версиями и правило «по умолчанию только чтение». Шестое: общие настройки и AGENTS.md — в репозитории под ревью, CODEOWNERS на CI и эталон evals, логи действий агента для расследований. Правила работы команды (что можно отдавать агенту, как ревьюить) оформляю отдельным стандартом.</p>
+    <p><b>На что смотрит интервьюер:</b> мышление моделью угроз, а не списком запретов в промпте: least privilege, разделение «режим подтверждений» и «изоляция», понимание непрямых инъекций через issues и зависимости, отсутствие прод-доступов как жёсткое правило. Хороший знак — кандидат помнит про облачных агентов и их токены и про то, что настройки должны быть общими и версионироваться, а не жить на ноутбуках.</p>
+  </div></details>
+  <details class="q interview"><summary>Агент за вечер сгенерировал 200 eval-кейсов для вашего RAG. Как вы их используете?</summary><div class="a">
+    <p>Как черновик, а не как готовый набор. Первым делом разделяю входы и ожидаемые ответы: вопросы агент может придумывать, а ожидаемое (какие документы должны найтись, какие факты должны быть в ответе) задаю я или источник — сама документация. Иначе модель проверяет себя собственными ответами, и её систематические ошибки становятся эталоном. Дальше чистка: дедупликация и проверка разнообразия по темам, стилям и сложности против распределения реальных запросов из логов. Агенты склонны генерировать лёгкие и похожие кейсы, на которых всё зелёное. Смотрю, что текущая версия системы падает хотя бы на части набора, иначе набор ничего не различает. Проверяю утечки: нет ли в кейсах реальных персональных данных из логов и не совпадают ли они с примерами в промпте. Синтетические кейсы помечаю (<code>source: synthetic</code>), читаю случайную выборку глазами и держу отдельной частью набора, чтобы видеть метрики по реальным и синтетическим кейсам раздельно. Особенно ценна синтетика для того, чего мало в логах: вопросы без ответа в документации, атаки injection, граничные формулировки.</p>
+    <p><b>На что смотрит интервьюер:</b> понимание круговой зависимости «оракул = испытуемый», внимание к качеству и разнообразию данных, проверку различающей способности набора, разделение синтетических и реальных кейсов в метриках. Красный флаг — «добавлю все 200 в golden set».</p>
+  </div></details>
+
   <h2 id="links">Источники</h2>
   <ul>
     <li><a href="https://docs.astral.sh/uv/" target="_blank" rel="noopener">uv — документация</a>; <a href="https://peps.python.org/pep-0723/" target="_blank" rel="noopener">PEP 723 — inline script metadata</a></li>
@@ -562,6 +747,15 @@ print(chat.choices[0].message.content, chat.choices[0].finish_reason,
     <li><a href="https://github.com/tmc/langchaingo" target="_blank" rel="noopener">langchaingo</a>, <a href="https://github.com/cloudwego/eino" target="_blank" rel="noopener">Eino</a></li>
     <li><a href="https://jupyter.org/" target="_blank" rel="noopener">Jupyter</a>, <a href="https://marimo.io/" target="_blank" rel="noopener">marimo</a>, <a href="https://github.com/kynan/nbstripout" target="_blank" rel="noopener">nbstripout</a></li>
     <li><a href="https://hamel.dev/blog/posts/evals/" target="_blank" rel="noopener">Hamel Husain — Your AI Product Needs Evals</a> (анализ ошибок глазами)</li>
+    <li><a href="https://code.claude.com/docs/en/best-practices" target="_blank" rel="noopener">Claude Code — Best practices</a> (исследование → план → код, проверяемость, управление контекстом) и <a href="https://www.anthropic.com/engineering/claude-code-best-practices" target="_blank" rel="noopener">Anthropic — Claude Code: best practices for agentic coding</a></li>
+    <li>Claude Code: <a href="https://code.claude.com/docs/en/memory" target="_blank" rel="noopener">CLAUDE.md и AGENTS.md</a>, <a href="https://code.claude.com/docs/en/permission-modes" target="_blank" rel="noopener">режимы разрешений</a>, <a href="https://code.claude.com/docs/en/permissions" target="_blank" rel="noopener">правила allow/ask/deny</a>, <a href="https://code.claude.com/docs/en/sandboxing" target="_blank" rel="noopener">sandbox</a>, <a href="https://code.claude.com/docs/en/hooks" target="_blank" rel="noopener">хуки</a>, <a href="https://code.claude.com/docs/en/mcp" target="_blank" rel="noopener">MCP</a></li>
+    <li><a href="https://agents.md/" target="_blank" rel="noopener">AGENTS.md</a> (формат и список инструментов) и <a href="https://www.linuxfoundation.org/press/linux-foundation-announces-the-formation-of-the-agentic-ai-foundation" target="_blank" rel="noopener">Linux Foundation — Agentic AI Foundation</a> (декабрь 2025)</li>
+    <li>OpenAI Codex: <a href="https://github.com/openai/codex" target="_blank" rel="noopener">репозиторий Codex CLI</a>, <a href="https://learn.chatgpt.com/docs/agent-configuration/agents-md" target="_blank" rel="noopener">AGENTS.md в Codex</a>, <a href="https://learn.chatgpt.com/docs/sandboxing" target="_blank" rel="noopener">sandbox и подтверждения</a></li>
+    <li><a href="https://cursor.com/docs/rules" target="_blank" rel="noopener">Cursor — Rules</a> и <a href="https://cursor.com/docs/cloud-agent" target="_blank" rel="noopener">Cloud Agents</a>; <a href="https://docs.github.com/en/copilot/how-tos/use-copilot-agents/cloud-agent/use-cloud-agent-on-github" target="_blank" rel="noopener">GitHub — Copilot cloud agent</a>; <a href="https://www.jetbrains.com/help/ai-assistant/agents.html" target="_blank" rel="noopener">JetBrains AI Assistant — агенты</a> и <a href="https://agentclientprotocol.com/" target="_blank" rel="noopener">Agent Client Protocol</a></li>
+    <li><a href="https://developers.googleblog.com/en/an-important-update-transitioning-gemini-cli-to-antigravity-cli/" target="_blank" rel="noopener">Google — Transitioning Gemini CLI to Antigravity CLI</a> (май 2026)</li>
+    <li><a href="https://invariantlabs.ai/blog/mcp-github-vulnerability" target="_blank" rel="noopener">Invariant Labs — GitHub MCP Exploited</a> (инъекция через issue, утечка из приватного репозитория)</li>
+    <li><a href="https://arxiv.org/abs/2406.10279" target="_blank" rel="noopener">Spracklen et al., 2025 — We Have a Package for You! (package hallucinations)</a></li>
+    <li><a href="https://metr.org/blog/2025-07-10-early-2025-ai-experienced-os-dev-study/" target="_blank" rel="noopener">METR — исследование продуктивности опытных open-source разработчиков (2025)</a> и <a href="https://metr.org/blog/2026-02-24-uplift-update/" target="_blank" rel="noopener">обновление 2026 года</a></li>
   </ul>
 </main>
 <script src="assets/course.js"></script>
@@ -785,6 +979,102 @@ print(chat.choices[0].message.content, chat.choices[0].finish_reason,
   }
   seg('ev-group', v => group = v);
   seg('ev-metric', v => metric = v);
+  draw();
+})();
+// ---------- Насколько доверять изменению от агента ----------
+(function () {
+  const S = (tag, a, p) => { if (tag === 'text' && a.fill) a.style = 'fill:' + a.fill; return Course.svg(tag, a, p); };
+  const svg = document.getElementById('ct-svg'), out = document.getElementById('ct-out');
+  const areaBox = document.getElementById('ct-area'), checkBox = document.getElementById('ct-checks'), modeSel = document.getElementById('ct-mode');
+  const SIZES = [30, 80, 150, 300, 600, 1200, 2500];
+  const SIZE_PTS = [2, 5, 9, 14, 22, 30, 36];
+  let si = 2;
+  const AREAS = {
+    code: ['Go-код', 8], prompts: ['промпты (prompts/)', 18], golden: ['эталон evals', 25],
+    migr: ['миграции БД', 20], deps: ['новые зависимости (go.mod)', 12], cfg: ['CI, конфиги, секреты', 22],
+  };
+  const MODES = {
+    manual: ['Manual: подтверждаю действия', 0],
+    edits: ['правки без подтверждения (acceptEdits/auto)', 4],
+    cloud: ['облачный агент в sandbox → PR', -4],
+    bypass: ['bypassPermissions без изоляции', 18],
+  };
+  const flags = box => { const s = {}; box.querySelectorAll('input[type=checkbox]').forEach(c => s[c.dataset.k] = c.checked); return s; };
+
+  function assess() {
+    const a = flags(areaBox), m = flags(checkBox), mode = modeSel.value, L = SIZES[si];
+    const rows = [['размер диффа ≈ ' + L + ' строк', SIZE_PTS[si]]];
+    if (MODES[mode][1]) rows.push(['режим: ' + MODES[mode][0], MODES[mode][1]]);
+    for (const k in AREAS) if (a[k]) rows.push(['затронуто: ' + AREAS[k][0], AREAS[k][1]]);
+    const code = a.code || a.deps || a.migr;
+    if (m.first && code) rows.push(['тесты написаны до кода', -8]);
+    if (m.ci && code) rows.push(['make check зелёный', -14]);
+    if (m.evals && a.prompts) rows.push(['eval-smoke не хуже baseline', -18]);
+    const eff = L <= 300 ? 1 : L <= 600 ? 0.6 : 0.3;
+    if (m.review) rows.push([eff < 1 ? 'ревью человеком (дифф велик — внимание рассеяно)' : 'ревью диффа человеком', -Math.round(16 * eff)]);
+    const score = Math.max(0, Math.min(100, rows.reduce((s, r) => s + r[1], 0)));
+
+    const block = [], todo = [];
+    if (a.golden) block.push('Эталон evals изменён в одном диффе с кодом: зелёные evals больше ничего не доказывают. Откатить; правка эталона — отдельный PR от человека.');
+    if (a.prompts && !m.evals) block.push('Промпт изменён без прогона evals: go test не видит поведения модели.');
+    if (code && !m.ci) block.push('Нет зелёного make check (build, vet, test): дифф не обсуждается до прогона проверок.');
+    if (a.migr && !m.review) block.push('Миграция без ревью человека: изменение схемы БД необратимо.');
+    if (a.cfg && !m.review) block.push('CI и конфиги без ревью: проверьте, не ослаблены ли проверки и не попали ли в дифф ключи.');
+    if (L >= 600) todo.push('Разбить на PR примерно до 300 строк, по одному логическому изменению: большой дифф ревьюят по диагонали.');
+    if (code && !m.first) todo.push('Проверить тесты независимо от реализации: сломать код руками — тест должен упасть. Иначе тест мог подстроиться под код.');
+    if (a.deps) todo.push('Проверить новые зависимости: пакет существует и поддерживается, имя не выдумано (slopsquatting), зависимость действительно нужна.');
+    if (!m.review) todo.push('Прочитать дифф: сначала git diff --stat (не вышел ли за план), потом *_test.go отдельно.');
+    if (a.prompts && m.evals) todo.push('После мержа — canary и онлайн-метрики: офлайн-evals ловят не всё (модуль 3, модуль 8).');
+    if (mode === 'bypass') todo.push('Агент работал без изоляции: дифф не показывает всё, что он сделал на машине (файлы вне репозитория, сеть). В следующий раз — контейнер или sandbox.');
+    if (mode === 'cloud') todo.push('Облачный агент: проверьте, что у его окружения были только нужные права (токен на один репозиторий, без прод-секретов).');
+    if (!code && !a.prompts && !a.golden && !a.cfg) todo.push('Дифф без кода и промптов (документация?): достаточно беглого ревью.');
+    return { rows, score, block, todo };
+  }
+
+  function draw() {
+    const { rows, score, block, todo } = assess();
+    svg.innerHTML = '';
+    const AX = 330, K = 6, RH = 22, Y0 = 30;
+    const H = Y0 + rows.length * RH + 78;
+    svg.setAttribute('viewBox', '0 0 640 ' + H);
+    S('text', { x: AX - 8, y: 16, 'font-size': 11, 'text-anchor': 'end', fill: 'var(--ok)' }, svg).textContent = '← снижает риск';
+    S('text', { x: AX + 8, y: 16, 'font-size': 11, fill: 'var(--bad)' }, svg).textContent = 'повышает риск →';
+    rows.forEach((r, i) => {
+      const y = Y0 + i * RH, v = r[1], w = Math.abs(v) * K;
+      S('rect', { x: v >= 0 ? AX : AX - w, y: y, width: Math.max(w, 1), height: RH - 6, rx: 3, fill: v >= 0 ? 'var(--bad)' : 'var(--ok)', opacity: 0.8 }, svg);
+      const lx = v >= 0 ? AX - 8 : AX + 8;
+      S('text', { x: lx, y: y + 12, 'font-size': 11.5, 'text-anchor': v >= 0 ? 'end' : 'start' }, svg).textContent = r[0];
+      S('text', { x: v >= 0 ? AX + w + 5 : AX - w - 5, y: y + 12, 'font-size': 11, 'text-anchor': v >= 0 ? 'start' : 'end', fill: 'var(--muted)' }, svg).textContent = (v > 0 ? '+' : '') + v;
+    });
+    S('line', { x1: AX, x2: AX, y1: Y0 - 6, y2: Y0 + rows.length * RH, stroke: 'var(--muted)' }, svg);
+
+    // шкала итога
+    const sy = Y0 + rows.length * RH + 22, X0 = 20, X1 = 620, sx = v => X0 + v / 100 * (X1 - X0);
+    const ZONES = [[0, 20, 'var(--ok)', 'низкий'], [20, 45, 'var(--warn)', 'средний'], [45, 70, 'var(--bad)', 'высокий'], [70, 100, 'var(--bad)', 'стоп']];
+    ZONES.forEach(([a, b, c, t], i) => {
+      S('rect', { x: sx(a), y: sy, width: sx(b) - sx(a), height: 14, fill: c, opacity: i === 3 ? 0.55 : 0.25 }, svg);
+      S('text', { x: (sx(a) + sx(b)) / 2, y: sy + 30, 'font-size': 11, 'text-anchor': 'middle', fill: 'var(--muted)' }, svg).textContent = t;
+    });
+    const stop = block.length > 0;
+    const mx = sx(stop ? Math.max(score, 85) : score);
+    S('path', { d: 'M' + mx + ' ' + (sy - 2) + ' l-7 -10 h14 z', fill: stop ? 'var(--bad)' : 'var(--text)' }, svg);
+    S('text', { x: Math.min(Math.max(mx, 90), 550), y: sy - 16, 'font-size': 12, 'font-weight': 700, 'text-anchor': 'middle', fill: stop ? 'var(--bad)' : 'var(--text)' }, svg).textContent =
+      stop ? 'стоп: есть блокеры (' + block.length + ')' : 'риск ' + score + '/100';
+
+    const level = stop ? 'СТОП — не мержить, пока не сняты блокеры.'
+      : score < 20 ? 'Низкий — обычное ревью и мерж.'
+      : score < 45 ? 'Средний — мерж после пунктов ниже.'
+      : score < 70 ? 'Высокий — не мержить, пока не закрыты пункты ниже; подумайте, не разбить ли задачу.'
+      : 'Стоп — слишком много риска в одном изменении: разбить и проверить по частям.';
+    out.textContent = 'Итог: ' + level +
+      (block.length ? '\n\nБлокеры:\n' + block.map(s => '✗ ' + s).join('\n') : '') +
+      (todo.length ? '\n\nЧто ещё сделать:\n' + todo.map(s => '• ' + s).join('\n') : '');
+  }
+
+  Course.bindRange(document.getElementById('ct-size'), v => '≈ ' + SIZES[v - 1] + ' строк', v => { si = v - 1; draw(); });
+  areaBox.addEventListener('change', draw);
+  checkBox.addEventListener('change', draw);
+  modeSel.addEventListener('change', draw);
   draw();
 })();
 </script>

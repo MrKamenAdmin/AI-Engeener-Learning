@@ -23,8 +23,8 @@
   <div class="module-hero">
     <div class="eyebrow">Модуль 9</div>
     <h1>Продакшн: надёжность, стоимость, латентность</h1>
-    <p class="lead">LLM-провайдер ведёт себя как ненадёжная, медленная и дорогая внешняя зависимость с жёсткими квотами. В этом модуле собираем вокруг неё то же, что вы строили вокруг любого внешнего API: ретраи, таймауты, circuit breaker, лимиты, кэши, трейсинг и guardrails. Отдельно разбираем, когда стоит поднимать собственный инференс.</p>
-    <div class="meta-row"><span class="chip">≈ 10 часов</span><span class="chip">Go + Python</span><span class="chip">5 визуализаций</span><span class="chip">цены на сентябрь 2026</span></div>
+    <p class="lead">LLM-провайдер ведёт себя как ненадёжная, медленная и дорогая внешняя зависимость с жёсткими квотами. В этом модуле собираем вокруг неё то же, что вы строили вокруг любого внешнего API: ретраи, таймауты, circuit breaker, лимиты, кэши, LLM-шлюз с роутингом по сложности, трейсинг и guardrails. А затем то, чего у обычного API не бывает: SLO для недетерминированных ответов, мониторинг дрейфа и фича-флаги для промптов и моделей.</p>
+    <div class="meta-row"><span class="chip">≈ 12 часов</span><span class="chip">Go</span><span class="chip">6 визуализаций</span><span class="chip">на момент написания: октябрь 2026</span></div>
   </div>
 
   <p>Большая часть модуля знакома любому Go-бэкендеру: backoff, <code>context</code>, middleware, circuit breaker, token bucket, OpenTelemetry. У LLM есть три особенности, из-за которых привычные приёмы приходится донастраивать.</p>
@@ -220,10 +220,11 @@ func StreamWithDeadlines(ctx context.Context, c anthropic.Client, p anthropic.Me
   <ol>
     <li><b>Сократить вывод.</b> Структурированный короткий ответ, «без преамбулы», JSON вместо прозы, ограничение <code>max_tokens</code>. Эффект линейный и бесплатный.</li>
     <li><b>Стриминг.</b> Полное время не уменьшается, но воспринимаемая латентность сокращается до TTFT. Для чата это главный UX-рычаг.</li>
-    <li><b>Модель поменьше или ниже effort.</b> Haiku-класс генерирует в разы быстрее и дешевле. Для новых Claude <code>output_config.effort: "low"</code> сокращает thinking. Маршрутизируйте по сложности: простое на маленькую модель, сложное на большую.</li>
+    <li><b>Модель поменьше или ниже effort.</b> Haiku-класс генерирует в разы быстрее и дешевле. Для новых Claude <code>output_config.effort: "low"</code> сокращает thinking. Маршрутизируйте по сложности: простое на маленькую модель, сложное на большую (код и схема — в <a href="#gateway">уроке про шлюз</a>).</li>
     <li><b>Параллелизм.</b> Retrieval из нескольких источников, независимые подзадачи, input guardrail параллельно с основным вызовом — это <code>errgroup</code>.</li>
     <li><b>Кэши.</b> Точный и семантический кэш убирают вызов целиком. Prompt caching сокращает TTFT на длинном префиксе (по заявлению Anthropic до ~85% для длинных промптов) и снижает стоимость input до 0.1×.</li>
   </ol>
+  <p>Бюджет латентности голосового агента — <a href="m16.html#latency">модуль 16</a> (факультатив).</p>
 
   <div class="viz" id="viz-waterfall">
     <p class="viz-title">Водопад латентности RAG-запроса</p>
@@ -280,23 +281,281 @@ func StreamWithDeadlines(ctx context.Context, c anthropic.Client, p anthropic.Me
   <h4>Prompt caching на практике</h4>
   <p>Коротко (подробно в модуле 2). Порядок: tools → system → messages. Ставьте <code>cache_control</code> на конец стабильной части, всего до 4 breakpoint'ов. Любой байт, изменившийся раньше breakpoint'а, инвалидирует всё после него. Классические ошибки: <code>time.Now()</code> в system prompt, недетерминированный порядок tools (ключи <code>map</code> в Go!), id запроса в начале сообщения. Проверяйте кэш метрикой <code>cache_read_input_tokens / (input + cache_read + cache_write)</code> в дашборде. Если она внезапно упала до нуля, значит, кто-то поменял префикс.</p>
 
+  <p>Механика у провайдеров разная, и это влияет на дизайн промпта и на то, сломает ли шлюз кэш (по состоянию на октябрь 2026, сверено с документацией):</p>
+  <table>
+    <tr><th></th><th>Anthropic</th><th>OpenAI</th><th>Gemini API</th></tr>
+    <tr><td>Как включается</td><td>Явно: <code>cache_control</code> на блоке, до 4 breakpoint'ов (есть и автоматический режим, который занимает один из них)</td><td>Автоматически для промптов от 1024 токенов</td><td>Неявный кэш включён по умолчанию у моделей 2.5 и новее, но экономия не гарантирована; явный — объект <code>cachedContents</code></td></tr>
+    <tr><td>Минимальный префикс</td><td>От 512 до 4096 токенов, зависит от модели</td><td>1024 токена</td><td>Для неявного 2048–4096 токенов, зависит от модели</td></tr>
+    <tr><td>Время жизни</td><td>5 минут, продлевается при каждом попадании; или 1 час</td><td>Минуты в памяти или расширенное хранение до 24 часов; параметры зависят от модели</td><td>Явный кэш: TTL задаёте вы, по умолчанию 1 час</td></tr>
+    <tr><td>Цена</td><td>Чтение 0.1× input, запись 1.25× (5 мин) или 2× (1 ч); сверяйте с прайсом конкретной модели</td><td>Скидка на чтение до 90–95% в зависимости от модели; у новейших моделей запись тарифицируется 1.25×</td><td>Чтение — 10% цены input; у явного кэша ещё почасовая оплата хранения</td></tr>
+    <tr><td>Особенности</td><td>Изоляция кэша по организации, на Claude API — по workspace</td><td><code>prompt_cache_key</code> помогает направлять запросы с общим префиксом на один кэш</td><td>Явный кэш — отдельный ресурс со своим жизненным циклом и ценой хранения</td></tr>
+    <tr><td>Где смотреть попадания</td><td><code>usage.cache_read_input_tokens</code>, <code>cache_creation_input_tokens</code></td><td><code>usage.prompt_tokens_details.cached_tokens</code></td><td><code>usage_metadata.cached_content_token_count</code></td></tr>
+  </table>
+  <p>Практический вывод для шлюза с fallback: префикс, стабильный для одного провайдера, у другого может не дотянуть до минимума или кэшироваться иначе. Метрику cache hit rate считайте по провайдеру и модели, а при переключении трафика (fallback, эксперимент на флаге) закладывайте временное падение попаданий и рост стоимости.</p>
+
+  <h2 id="gateway">LLM-шлюз: роутинг, провайдеры, build vs buy</h2>
+  <p>Ретраи, fallback, лимиты, бюджеты и кэши из уроков выше вместе и составляют <b>LLM-шлюз</b> (LLM gateway) — единую точку, через которую приложение ходит к моделям. Вопрос не в том, нужен ли он, а в том, где он живёт: библиотекой внутри сервиса (цепочка middleware из <a href="#code">последнего урока</a>) или отдельным сервисом-прокси. Полный system design шлюза для компании из 40 команд, с расчётами и режимами отказа, — в <a href="m12.html#case-gateway">модуле 12</a>. Здесь — решения, которые принимает инженер одного продукта.</p>
+  <table>
+    <tr><th></th><th>Библиотека в сервисе</th><th>Отдельный сервис-шлюз</th></tr>
+    <tr><td>Латентность</td><td>Без лишнего hop</td><td>+1 hop, единицы миллисекунд; стриминг надо проксировать без буферизации</td></tr>
+    <tr><td>Ключи провайдеров</td><td>В каждом сервисе</td><td>Только в шлюзе; сервисы получают виртуальные ключи</td></tr>
+    <tr><td>Квоты и бюджеты</td><td>В пределах сервиса; общий лимит организации делить трудно</td><td>Централизованно: на команду, тенанта, модель</td></tr>
+    <tr><td>Смена модели или провайдера</td><td>Релиз каждого сервиса</td><td>Конфиг шлюза</td></tr>
+    <tr><td>Аудит, PII, политика данных</td><td>Каждый сервис реализует сам</td><td>В одном месте</td></tr>
+    <tr><td>Отказ</td><td>Падает один сервис</td><td>Общая точка отказа: N+2 реплик, понятная политика fail-open</td></tr>
+  </table>
+  <p>Правило: один-два сервиса на одном стеке — библиотека. Три и больше команд, требования комплаенса к ключам и аудиту, несколько языков — сервис. На практике часто и то и другое: тонкая клиентская библиотека (таймауты, трейсинг, идемпотентность) поверх шлюза (ключи, квоты, роутинг, аудит).</p>
+  <div class="callout go"><span class="title">Аналогия из Go</span>
+    <p>Это тот же выбор, что между gRPC-интерцепторами и service mesh. Интерцептор дешевле и ближе к коду, но его надо обновить в каждом сервисе. Mesh-прокси централизует политику, но добавляет hop и ещё один компонент, который должен быть надёжнее всего, что за ним стоит.</p>
+  </div>
+
+  <h3 id="routing">Роутинг по стоимости и сложности</h3>
+  <p>Haiku 4.5 стоит $1 / $5 за 1M токенов, Opus 5 — $5 / $25: разница в 5 раз при той же длине запроса. Если 60% трафика простые вопросы, которые маленькая модель решает так же хорошо, перевод их на Haiku снижает счёт почти вдвое: <code>0.4 + 0.6 × 0.2 = 0.52</code> от исходного. Вопрос в том, как отличить простое от сложного до ответа и что делать, когда классификатор ошибся.</p>
+  <ul>
+    <li><b>Эвристика</b> — длина, ключевые слова («сравни», «почему», код), число вопросов, глубина диалога. Бесплатно и за микросекунды, но шумно. Хороша как первый фильтр.</li>
+    <li><b>Дешёвая модель как классификатор</b> — Haiku отвечает «simple / complex». +200–400 мс и доли цента. Разумно звать её только в серой зоне эвристики.</li>
+    <li><b>Обученный классификатор</b> — эмбеддинг запроса и логистическая регрессия на размеченных логах (разметка: «ответ маленькой модели прошёл judge или нет»). Миллисекунды и лучшая точность, но нужен датасет и переобучение при дрейфе.</li>
+    <li><b>Каскад с откатом</b> — сначала дешёвая модель, проверка ответа (схема JSON, бизнес-правила, <code>stop_reason</code>, при необходимости быстрый judge), при провале — эскалация на сильную. Ловит ошибки классификатора, но платите дважды и дольше ждёте именно на трудных запросах.</li>
+  </ul>
+
+  <div class="viz" id="viz-route">
+    <p class="viz-title">Роутинг по сложности: доля дешёвой модели против качества и стоимости</p>
+    <p class="viz-sub">4000 синтетических запросов, большинство простые. Маленькая модель хорошо решает простые и заметно хуже — сложные. Классификатор видит сложность с шумом. Кривая — все пороги сразу: слева «всё на Opus 5», справа «всё на Haiku 4.5». Пунктир — идеальный классификатор. Двигайте порог, меняйте классификатор и включите эскалацию. Цены — из модуля 2, профиль запроса 3000 токенов на вход и 400 на выход; качество — модель для иллюстрации, не бенчмарк.</p>
+    <div class="controls">
+      <label>порог сложности <input type="range" id="rt-th" min="0" max="1" step="0.01" value="0.3"> <output></output></label>
+      <label>классификатор <select class="inline" id="rt-cls"><option value="heur">эвристика (шумная, бесплатно)</option><option value="llm">Haiku как классификатор (+$0.0004)</option><option value="trained">обученный на логах</option></select></label>
+      <label><input type="checkbox" id="rt-esc"> эскалация при провале проверки</label>
+    </div>
+    <svg id="rt-svg" viewBox="0 0 640 320" role="img" aria-label="Кривая качество — стоимость для разных порогов роутинга"></svg>
+    <div class="legend"><span><i style="background:var(--accent)"></i>ваш классификатор</span><span><i style="background:var(--muted)"></i>идеальный классификатор</span><span><i style="background:var(--warn)"></i>текущий порог</span></div>
+    <div class="stat-row" id="rt-stats"></div>
+  </div>
+  <p>Что видно на схеме: с обученным классификатором или с эскалацией можно отправить на Haiku больше половины трафика, сэкономить около 40% и потерять меньше пункта качества; шумная эвристика при том же пороге теряет больше. Правее порога кривая резко падает — это сложные запросы, ошибочно принятые за простые. Лучший классификатор сдвигает всю кривую к идеальной. Эскалация поднимает качество на дешёвом конце, но съедает часть экономии.</p>
+  <pre><code class="lang-go">package llmmw
+
+import (
+	"context"
+	"expvar"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/anthropics/anthropic-sdk-go"
+)
+
+// Classifier оценивает сложность запроса в [0, 1].
+type Classifier func(ctx context.Context, req Request) (float64, error)
+
+// Heuristic — бесплатный классификатор на признаках текста. Веса и слова подбираются
+// на размеченной выборке из логов, а не на глаз.
+// ponytail: словарь признаков; когда его станет мало — ModelClassifier или свой маленький классификатор.
+func Heuristic(_ context.Context, req Request) (float64, error) {
+	q := strings.ToLower(lastUserText(req))
+	score := 0.0
+	switch n := utf8.RuneCountInString(q); {
+	case n &gt; 1500:
+		score += 0.4
+	case n &gt; 400:
+		score += 0.2
+	}
+	for _, w := range []string{"почему", "сравни", "проанализируй", "спроектируй", "оптимизируй", "```"} {
+		if strings.Contains(q, w) {
+			score += 0.3
+		}
+	}
+	if strings.Count(q, "?") &gt; 1 {
+		score += 0.15 // несколько вопросов в одном
+	}
+	if len(req.Messages) &gt; 6 {
+		score += 0.15 // длинный диалог: контекст запутаннее
+	}
+	return min(score, 1), nil
+}
+
+// ModelClassifier спрашивает дешёвую модель «simple или complex». Это +200–400 мс и доли цента,
+// поэтому зовите её только в «серой зоне» эвристики, а не на каждый запрос.
+func ModelClassifier(cheap LLM) Classifier {
+	return func(ctx context.Context, req Request) (float64, error) {
+		resp, err := cheap.Complete(ctx, Request{
+			Tenant: req.Tenant, Model: "claude-haiku-4-5", MaxTokens: 5,
+			System:   "Оцени, нужна ли для ответа сильная модель. Ответь одним словом: simple или complex.",
+			Messages: []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(lastUserText(req)))},
+		})
+		if err != nil {
+			return 0, err
+		}
+		if strings.Contains(strings.ToLower(resp.Text), "complex") {
+			return 1, nil
+		}
+		return 0, nil
+	}
+}
+
+// routed — счётчики решений роутера; expvar отдаёт их на /debug/vars, в проде — та же метрика в OTel.
+var routed = expvar.NewMap("llm_router")
+
+// Router отправляет простое на дешёвую цепочку, сложное — на сильную.
+// Cheap и Strong — обычные LLM: как правило, каждая — свой Fallback[...] со своими моделями.
+type Router struct {
+	Cheap, Strong LLM
+	Classify      Classifier
+	Threshold     float64              // score ≥ Threshold → Strong; значение приходит из фича-флага
+	Accept        func(*Response) bool // проверка ответа дешёвой модели; false → эскалация
+}
+
+func (r *Router) Complete(ctx context.Context, req Request) (*Response, error) {
+	score, err := r.Classify(ctx, req)
+	if err != nil {
+		routed.Add("classifier_error", 1)
+		score = 1 // не знаем — платим за качество, а не экономим вслепую
+	}
+	if score &gt;= r.Threshold {
+		routed.Add("strong", 1)
+		return r.Strong.Complete(ctx, req)
+	}
+	routed.Add("cheap", 1)
+	resp, err := r.Cheap.Complete(ctx, req)
+	if err != nil {
+		return nil, err // доступность — забота Fallback внутри цепочки; роутер отвечает за качество
+	}
+	if r.Accept != nil &amp;&amp; !r.Accept(resp) {
+		// Откат на сильную модель: платим за оба вызова. Доля эскалаций — главная метрика роутера:
+		// если она растёт, порог пора поднимать (или дешёвая модель деградировала).
+		routed.Add("escalated", 1)
+		return r.Strong.Complete(ctx, req)
+	}
+	return resp, nil
+}
+</code></pre>
+  <ul>
+    <li><b>Метрики роутера.</b> Доля трафика на дешёвую модель, доля эскалаций, качество по маршрутам (онлайн-judge на выборке, см. <a href="#drift">урок про дрейф</a>), стоимость на запрос. Рост эскалаций — сигнал, что поменялся трафик или деградировала маленькая модель.</li>
+    <li><b>Откат.</b> <code>Threshold</code> приходит из фича-флага (<a href="#flags">урок ниже</a>): поднять порог до 1.0 — значит мгновенно вернуть весь трафик на сильную модель без деплоя.</li>
+    <li><b>Где в цепочке.</b> <code>Traced → SemCache → Metered → Router → Fallback[…]</code>: у каждой из двух ветвей роутера своя цепочка fallback. Кэш стоит до роутера, потому что попадание не требует ни классификации, ни модели.</li>
+    <li><b>Качество проверяется на evals, а не на вере.</b> Перед включением прогоните golden set из модуля 8 через обе модели: роутинг оправдан, только если на «простых» запросах разница в пределах доверительного интервала.</li>
+  </ul>
+
+  <h3>Fallback на другого провайдера: адаптер</h3>
+  <p>Цепочка fallback из урока выше умеет переключаться между звеньями, но второму провайдеру нужен адаптер под интерфейс <code>LLM</code>. Главное в нём не HTTP-вызов, а нормализация. Ошибки надо привести к той же классификации, иначе <code>Retryable</code> не узнает 503 чужого провайдера: он не будет ретраиться и не откроет breaker. <code>stop_reason</code> тоже переводится в общий словарь, иначе семантический кэш закэширует обрезанный ответ. Тот же адаптер подходит для self-hosted vLLM или Ollama: у них OpenAI-совместимый API.</p>
+  <pre><code class="lang-go">package llmmw
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strconv"
+	"time"
+)
+
+// HTTPError — ошибка адаптера в той же классификации, что и ошибки Anthropic SDK:
+// по ней работают Retryable, breaker и метрика error.type.
+type HTTPError struct {
+	StatusCode int
+	RetryAfter time.Duration
+	Body       string
+}
+
+func (e *HTTPError) Error() string { return fmt.Sprintf("http %d: %s", e.StatusCode, e.Body) }
+
+// OpenAICompat — звено под второго провайдера или self-hosted (vLLM, Ollama)
+// через OpenAI-совместимый Chat Completions. Только текст, без tools: для fallback этого хватает.
+func OpenAICompat(hc *http.Client, baseURL, apiKey string) LLM {
+	type msg struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+	return Func(func(ctx context.Context, req Request) (*Response, error) {
+		msgs := []msg{{Role: "system", Content: req.System}}
+		for _, m := range req.Messages {
+			msgs = append(msgs, msg{Role: string(m.Role), Content: textOf(m)})
+		}
+		body, err := json.Marshal(map[string]any{"model": req.Model, "messages": msgs, "max_tokens": req.MaxTokens})
+		if err != nil {
+			return nil, err
+		}
+		hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		hreq.Header.Set("Content-Type", "application/json")
+		hreq.Header.Set("Authorization", "Bearer "+apiKey)
+		resp, err := hc.Do(hreq)
+		if err != nil {
+			return nil, err // net.Error: Retryable разберётся
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+			sec, _ := strconv.Atoi(resp.Header.Get("retry-after"))
+			return nil, &amp;HTTPError{StatusCode: resp.StatusCode, RetryAfter: time.Duration(sec) * time.Second, Body: string(b)}
+		}
+		var out struct {
+			Model   string `json:"model"`
+			Choices []struct {
+				Message      msg    `json:"message"`
+				FinishReason string `json:"finish_reason"`
+			} `json:"choices"`
+			Usage struct {
+				PromptTokens     int64 `json:"prompt_tokens"`
+				CompletionTokens int64 `json:"completion_tokens"`
+			} `json:"usage"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&amp;out); err != nil {
+			return nil, err
+		}
+		if len(out.Choices) == 0 {
+			return nil, &amp;HTTPError{StatusCode: http.StatusBadGateway, Body: "no choices"}
+		}
+		c := out.Choices[0]
+		// stop_reason приводим к словарю Anthropic: остальная цепочка (кэш, метрики) знает только его.
+		stop := map[string]string{"stop": "end_turn", "length": "max_tokens", "content_filter": "refusal"}[c.FinishReason]
+		return &amp;Response{Text: c.Message.Content, Model: out.Model, StopReason: stop,
+			InputTokens: out.Usage.PromptTokens, OutputTokens: out.Usage.CompletionTokens}, nil
+	})
+}
+</code></pre>
+  <p>Чтобы <code>Retryable</code>, breaker и метрика <code>error.type</code> понимали обе ошибки, классификация статуса вынесена в одну функцию <code>httpStatus</code> (вкладка 1 в <a href="#code">сборке</a>). Ретраи с backoff и jitter — из <a href="#retries">первого урока</a>: в шлюзе они живут ровно на одном слое, а клиенты свои выключают. Бюджеты на тенанта — <code>Metered</code> из той же сборки.</p>
+
+  <h3>Build vs buy</h3>
+  <p>Готовые шлюзы закрывают большую часть функций за дни. Ландшафт по состоянию на октябрь 2026:</p>
+  <table>
+    <tr><th>Продукт</th><th>Что это</th><th>Что важно знать</th></tr>
+    <tr><td><b>LiteLLM Proxy</b></td><td>Open source (MIT, кроме enterprise-части), Python; OpenAI-совместимый API к 100+ провайдерам</td><td>Виртуальные ключи, бюджеты и лимиты на ключ и пользователя, fallback и балансировка, кэш, в том числе семантический (Redis, Qdrant). Активно развивается</td></tr>
+    <tr><td><b>Agent Router</b> (бывший Envoy AI Gateway)</td><td>Apache-2.0, Go, поверх Envoy Gateway в Kubernetes или standalone</td><td>Квоты токенов на команду и модель, failover, MCP-роутинг. В сентябре 2026 переименован и передан в Agentic AI Foundation</td></tr>
+    <tr><td><b>Kong AI Gateway</b></td><td>Плагины Kong</td><td>В open source — базовые <code>ai-proxy</code> и prompt-плагины; семантический кэш, балансировка, PII-санитайзер — в Enterprise и Konnect</td></tr>
+    <tr><td><b>Bifrost</b></td><td>Apache-2.0, Go</td><td>OpenAI-совместимый API, fallback, виртуальные ключи, иерархические бюджеты, семантический кэш</td></tr>
+    <tr><td><b>Apache APISIX</b></td><td>Apache-2.0, AI-плагины API-шлюза</td><td><code>ai-proxy-multi</code>: балансировка и fallback по 429/5xx; есть плагины кэша и rate limiting</td></tr>
+    <tr><td><b>Portkey Gateway</b></td><td>MIT, TypeScript, плюс облако</td><td>Fallback, ретраи, балансировка, guardrails. В мае 2026 куплен Palo Alto Networks; активность open-source репозитория снизилась</td></tr>
+    <tr><td><b>Облачные</b>: Cloudflare AI Gateway, Azure API Management</td><td>Managed-сервисы</td><td>Логи, аналитика, лимиты, кэш (у Cloudflare — только точный), у Azure — лимиты токенов, семантический кэш, балансировка с circuit breaker</td></tr>
+    <tr><td><b>OpenRouter</b></td><td>Хостинговый роутер</td><td>Один API ко многим моделям, fallback списком моделей; комиссия при покупке кредитов. Данные идут через третью сторону</td></tr>
+  </table>
+  <ul>
+    <li><b>Что заставляет писать своё:</b> специфичные политики данных (классы данных, PII-маскирование с обратной подстановкой), требования к аудиту и резидентности, жёсткий бюджет на overhead, нативные функции провайдеров. Унифицированный OpenAI-формат теряет prompt caching с явными breakpoint'ами, thinking, citations — проверьте, умеет ли шлюз проксировать нативные API без переупаковки.</li>
+    <li><b>Что заставляет покупать:</b> скорость, покрытие провайдеров, готовый UI для ключей и бюджетов, отсутствие команды на поддержку.</li>
+    <li><b>Риск вендора реален.</b> Только за 2026 год TensorZero заархивировали, Helicone после покупки Mintlify перешёл в режим поддержки, Portkey сменил владельца. Держите шлюз за своим интерфейсом <code>LLM</code> в коде, чтобы миграция была конфигом, а не переписыванием.</li>
+  </ul>
+
   <h2 id="observability">Observability</h2>
   <p>Классических RED-метрик (rate, errors, duration) для LLM мало. Вам нужны токены, стоимость, TTFT, stop reasons, cache hit rate, а для отладки ещё и содержимое промптов и ответов, что сразу упирается в PII.</p>
 
   <h3>OpenTelemetry GenAI semantic conventions</h3>
-  <p>В OpenTelemetry есть семантические конвенции для GenAI (на момент написания в статусе Development, то есть имена ещё могут меняться; см. переменную <code>OTEL_SEMCONV_STABILITY_OPT_IN</code>). Их поддерживают Langfuse, Arize Phoenix, Datadog и другие бэкенды, поэтому, если придерживаться конвенций, трейсы читаются где угодно.</p>
+  <p>В OpenTelemetry есть семантические конвенции для GenAI. Их поддерживают Langfuse, Arize Phoenix, Datadog и другие бэкенды, поэтому, если придерживаться конвенций, трейсы читаются где угодно. Статус на октябрь 2026 — <b>Development</b>: имена ещё меняются. С semconv 1.42 GenAI-конвенции вынесены в отдельный репозиторий <code>semantic-conventions-genai</code>, у которого пока нет релизов; последний релиз с GenAI-разделом — v1.41.1 (май 2026), и имена ниже даны по нему. Инструментации, которые пишут имена до v1.36, переключаются на новые переменной <code>OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental</code>. В основной ветке нового репозитория уже лежат несовместимые переименования (например, <code>cache_creation</code> → <code>cache_write</code>, метрики инференса <code>gen_ai.client.inference.*</code>), поэтому имена держите в одном пакете, а переходные маппинги делайте в OTel Collector.</p>
   <table>
     <tr><th>Атрибут</th><th>Пример</th><th>Зачем</th></tr>
-    <tr><td><code>gen_ai.operation.name</code></td><td><code>chat</code>, <code>embeddings</code>, <code>execute_tool</code>, <code>invoke_agent</code></td><td>Тип операции; имя спана: <code>"{operation} {model}"</code></td></tr>
+    <tr><td><code>gen_ai.operation.name</code></td><td><code>chat</code>, <code>embeddings</code>, <code>retrieval</code>, <code>execute_tool</code>, <code>invoke_agent</code>, <code>create_agent</code>, <code>invoke_workflow</code></td><td>Тип операции; имя спана инференса: <code>"{operation} {model}"</code></td></tr>
     <tr><td><code>gen_ai.provider.name</code></td><td><code>anthropic</code></td><td>Провайдер. В ранних версиях конвенций это <code>gen_ai.system</code></td></tr>
     <tr><td><code>gen_ai.request.model</code> / <code>gen_ai.response.model</code></td><td><code>claude-opus-5</code></td><td>Запрошенная модель и фактически ответившая (алиас разворачивается в конкретную версию)</td></tr>
     <tr><td><code>gen_ai.request.max_tokens</code></td><td>2000</td><td>Сопоставлять с <code>finish_reasons=max_tokens</code></td></tr>
     <tr><td><code>gen_ai.usage.input_tokens</code> / <code>output_tokens</code></td><td>12040 / 380</td><td>Стоимость и ёмкость</td></tr>
+    <tr><td><code>gen_ai.usage.cache_read.input_tokens</code> / <code>cache_creation.input_tokens</code></td><td>10400 / 0</td><td>Попадания prompt caching (атрибуты появились в v1.40)</td></tr>
+    <tr><td><code>gen_ai.conversation.id</code></td><td><code>conv_5f…</code></td><td>Склеить все вызовы одного диалога или задачи агента</td></tr>
+    <tr><td><code>gen_ai.agent.name</code>, <code>gen_ai.tool.name</code>, <code>gen_ai.tool.call.id</code></td><td><code>support</code>, <code>lookup_order</code>, <code>toolu_01…</code></td><td>Спаны <code>invoke_agent</code> и <code>execute_tool</code>; id вызова связывает спан с <code>tool_use</code> в ответе модели</td></tr>
     <tr><td><code>gen_ai.response.finish_reasons</code></td><td><code>["end_turn"]</code></td><td>Доля обрезанных ответов и refusal</td></tr>
     <tr><td><code>gen_ai.response.id</code></td><td><code>msg_01…</code></td><td>Связь с логами провайдера при разборе инцидента</td></tr>
     <tr><td><code>error.type</code></td><td><code>429</code>, <code>overloaded_error</code></td><td>Стандартный атрибут ошибок OTel</td></tr>
   </table>
-  <p>Метрики по конвенциям: гистограмма <code>gen_ai.client.token.usage</code> (с <code>gen_ai.token.type = input|output</code>) и <code>gen_ai.client.operation.duration</code>. Для серверов инференса есть ещё TTFT и time per output token. Содержимое промптов и ответов по конвенциям пишется только при явном opt-in, и это правильный дефолт.</p>
+  <p>Метрики по конвенциям — гистограммы с рекомендованными границами бакетов: <code>gen_ai.client.operation.duration</code> (секунды, от 0.01 до 81.92 с удвоением), <code>gen_ai.client.token.usage</code> (с <code>gen_ai.token.type = input|output</code>, бакеты — степени 4) и, с v1.41, клиентский TTFT <code>gen_ai.client.operation.time_to_first_chunk</code> вместе с <code>time_per_output_chunk</code>. Для серверов инференса — <code>gen_ai.server.request.duration</code>, <code>gen_ai.server.time_to_first_token</code> и <code>gen_ai.server.time_per_output_token</code>. Содержимое промптов и ответов (<code>gen_ai.input.messages</code>, <code>gen_ai.output.messages</code>, <code>gen_ai.system_instructions</code>) по конвенциям пишется только при явном opt-in, и это правильный дефолт.</p>
 
   <h3>Структура трейса</h3>
   <pre><code>POST /api/ask                                   1.84s   tenant=acme  user=u_9f2… (hash)
@@ -311,11 +570,81 @@ func StreamWithDeadlines(ctx context.Context, c anthropic.Client, p anthropic.Me
 └─ guardrail.output                              0.06s</code></pre>
   <p>Для агентов спаны вкладываются так: <code>invoke_agent</code>, внутри него каждая итерация с <code>chat</code> и <code>execute_tool</code>. Так видно, на какой итерации агент «заблудился», и сколько стоила каждая.</p>
 
+  <h3>Спаны агента и TTFT в коде</h3>
+  <p>Агент, работающий в вашем процессе, получает спан <code>invoke_agent {имя}</code> с kind <code>INTERNAL</code>; вызов удалённого агента по сети — <code>CLIENT</code>. Вызов инструмента — <code>execute_tool {имя}</code>, тоже <code>INTERNAL</code>. Вложенность получается сама: <code>Traced</code> и <code>ExecuteTool</code> берут родителя из <code>ctx</code>. TTFT пишется колбэком из стриминга: первый чанк записывает гистограмму, остальные ничего не делают.</p>
+  <pre><code class="lang-go">package llmmw
+
+import (
+	"context"
+	"sync"
+	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
+)
+
+// TTFT на клиенте — метрика конвенции (semconv v1.41, статус Development).
+var ttftHist, _ = meter.Float64Histogram("gen_ai.client.operation.time_to_first_chunk", metric.WithUnit("s"),
+	metric.WithExplicitBucketBoundaries(0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24, 20.48, 40.96, 81.92))
+
+// FirstChunk возвращает колбэк для стрима: первый вызов пишет TTFT, остальные — no-op.
+// Вызывайте его из onText в StreamWithDeadlines.
+func FirstChunk(ctx context.Context, start time.Time, attrs ...attribute.KeyValue) func() {
+	var once sync.Once
+	return func() {
+		once.Do(func() { ttftHist.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(attrs...)) })
+	}
+}
+
+// InvokeAgent — спан всей задачи агента. Спаны chat и execute_tool внутри run
+// становятся его детьми через ctx: в трейсе видно, на какой итерации агент «заблудился».
+func InvokeAgent(ctx context.Context, agent string, run func(ctx context.Context) error) error {
+	ctx, span := tracer.Start(ctx, "invoke_agent "+agent,
+		trace.WithSpanKind(trace.SpanKindInternal), // агент в нашем процессе; удалённый агент — CLIENT
+		trace.WithAttributes(
+			attribute.String("gen_ai.operation.name", "invoke_agent"),
+			attribute.String("gen_ai.agent.name", agent),
+		))
+	defer span.End()
+	err := run(ctx)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "agent failed")
+		span.SetAttributes(attribute.String("error.type", errorType(err)))
+	}
+	return err
+}
+
+// ExecuteTool — спан одного вызова инструмента. Аргументы и результат в атрибуты
+// не пишем: по конвенции это opt-in (gen_ai.tool.call.arguments/result), там бывают PII.
+func ExecuteTool(ctx context.Context, tool, callID string, fn func(ctx context.Context) (string, error)) (string, error) {
+	ctx, span := tracer.Start(ctx, "execute_tool "+tool,
+		trace.WithSpanKind(trace.SpanKindInternal),
+		trace.WithAttributes(
+			attribute.String("gen_ai.operation.name", "execute_tool"),
+			attribute.String("gen_ai.tool.name", tool),
+			attribute.String("gen_ai.tool.call.id", callID),
+			attribute.String("gen_ai.tool.type", "function"),
+		))
+	defer span.End()
+	out, err := fn(ctx)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "tool failed")
+		span.SetAttributes(attribute.String("error.type", errorType(err)))
+	}
+	return out, err
+}
+</code></pre>
+  <p>Использование: <code>onText</code> в <code>StreamWithDeadlines</code> оборачивается так: <code>first := FirstChunk(ctx, time.Now(), attribute.String("gen_ai.request.model", model))</code>, а внутри колбэка первой строкой вызывается <code>first()</code>. Тест в <code>examples/m09-prod</code> проверяет вложенность спанов через <code>tracetest.SpanRecorder</code> и наличие метрик через <code>metric.NewManualReader</code>, без коллектора и сети.</p>
+
   <h3>Инструменты</h3>
   <ul>
     <li><b>Langfuse</b> — open source, можно поднять у себя (важно для приватности), принимает OTLP, умеет трейсы, промпт-менеджмент, датасеты и оценки.</li>
     <li><b>LangSmith</b> — SaaS от LangChain, удобен, если вы уже на LangChain/LangGraph; поддерживает OTel.</li>
-    <li><b>Arize Phoenix</b>, <b>Helicone</b> (прокси-gateway с логированием), <b>Datadog LLM Observability</b> — альтернативы. Выбор определяется тем, где у вас уже OTel-коллектор и что разрешает security.</li>
+    <li><b>Arize Phoenix</b>, <b>Datadog LLM Observability</b> — альтернативы. Выбор определяется тем, где у вас уже OTel-коллектор и что разрешает security.</li>
   </ul>
   <p>Практичная схема: инструментируете код OTel-ом, отправляете в свой OTel Collector, а оттуда и в Tempo/Jaeger/Datadog для SRE, и в Langfuse для AI-команды. Вы не привязаны к вендору, а PII можно вычищать процессором на коллекторе.</p>
 
@@ -347,8 +676,323 @@ func MaskPII(s string) string {
 	return s
 }</code></pre>
 
+  <h2 id="slo">SLO для недетерминированных систем</h2>
+  <p>«Доступность 99.9%» для LLM-фичи почти ничего не говорит. Провайдер может вернуть 200 с обрезанным стримом, невалидным JSON или уверенной ерундой, а может тихо деградировать после обновления модели. Классический подход SRE при этом работает, если правильно выбрать, что считать «хорошим событием». <b>SLI</b> (service level indicator) — доля хороших событий среди всех; <b>SLO</b> — цель для этой доли за окно (обычно 30 дней); <b>error budget</b> — разрешённая доля плохих событий, <code>1 − SLO</code>.</p>
+  <table>
+    <tr><th>SLI</th><th>Хорошее событие</th><th>Как мерить</th><th>Пример SLO</th></tr>
+    <tr><td>Доступность</td><td>Ответ без 5xx и таймаута. Ответ fallback-звена — хороший; «сервис перегружен» — плохой</td><td>100% запросов, метрики шлюза</td><td>99.5%</td></tr>
+    <tr><td>TTFT</td><td>Первый токен быстрее порога из UX, например 2 с</td><td>Гистограмма <code>time_to_first_chunk</code></td><td>95% запросов быстрее 2 с</td></tr>
+    <tr><td>Полнота стрима</td><td>Стрим дошёл до конца, <code>stop_reason</code> не <code>max_tokens</code> там, где ответ должен быть коротким</td><td>Событие конца стрима</td><td>99.5%</td></tr>
+    <tr><td>Валидный структурированный вывод</td><td>JSON прошёл схему и бизнес-правила (с учётом одного ретрая)</td><td>Валидатор в коде</td><td>99%</td></tr>
+    <tr><td>Качество</td><td>Онлайн-judge на выборке 1–5% ответов говорит «по делу и по источникам»; нет дизлайка</td><td>Асинхронный judge, откалиброванный по людям (модуль 8)</td><td>97%</td></tr>
+  </table>
+  <p>Латентность записывайте как долю запросов быстрее порога, а не как «p95 ≤ 2 с». Доля складывается в error budget так же, как ошибки, а перцентиль — нет.</p>
+
+  <h3>Burn rate и multiwindow-алерты</h3>
+  <p><b>Burn rate</b> — во сколько раз быстрее допустимого тратится бюджет: доля плохих событий в окне, делённая на <code>1 − SLO</code>. При burn rate 1 бюджет кончится ровно к концу 30-дневного окна, при 14.4 — за 30 / 14.4 ≈ 2 дня. Алерт «доля ошибок больше 1% за 5 минут» либо будит дежурного на каждый всплеск, либо, при длинном окне, срабатывает через час после начала аварии и ещё час горит после её конца. Google SRE Workbook рекомендует несколько правил с разными burn rate, каждое на двух окнах. Длинное окно отвечает за значимость, короткое (1/12 длинного) — за то, чтобы алерт погас, как только инцидент закончился.</p>
+  <table>
+    <tr><th>Burn rate</th><th>Длинное окно</th><th>Короткое окно</th><th>Расход бюджета до срабатывания</th><th>Реакция</th></tr>
+    <tr><td>14.4</td><td>1 час</td><td>5 минут</td><td>2%</td><td>Page</td></tr>
+    <tr><td>6</td><td>6 часов</td><td>30 минут</td><td>5%</td><td>Page</td></tr>
+    <tr><td>1</td><td>3 дня</td><td>6 часов</td><td>10%</td><td>Тикет</td></tr>
+  </table>
+  <p>Параметры из SRE Workbook для SLO 99.9% на 30 дней; burn rate и окна не зависят от цели SLO, от неё зависит только порог по доле ошибок (<code>burn × (1 − SLO)</code>). Recording rules и такие алерты для Prometheus руками обычно не пишут: генераторы вроде Sloth и Pyrra строят их из короткого описания SLO.</p>
+
+  <h3>Особенность LLM: SLI качества по выборке</h3>
+  <ul>
+    <li><b>Шум.</b> Judge оценивает 2% ответов: при 100 запросах в минуту это 10 оценок за 5 минут и 120 за час. Долю плохих в доли процента на таком объёме не измерить: одна плохая оценка — уже «10% плохих» в коротком окне, и быстрое правило срабатывает от случайного скопления нескольких плохих оценок. Для выборочных SLI берите длинные пары окон (6 ч / 30 мин и 3 дня / 6 ч) или минимум событий в коротком окне, а во время инцидента временно поднимайте долю выборки.</li>
+    <li><b>Ошибки самого судьи.</b> Измеренная доля плохих = истинная × TPR + (1 − истинная) × (1 − TNR). Судья с TNR 97% даже на идеальной системе показывает около 3% «плохих», а это шесть бюджетов SLO 99.5%. Калибруйте судью (<a href="m08.html#judge">модуль 8</a>) и задавайте SLO, соизмеримый с его точностью (например, 97% «хороших» по мнению судьи), а не 99.5%.</li>
+    <li><b>Задержка.</b> Асинхронный judge отстаёт на минуты. Для быстрых алертов годятся только SLI, которые считаются на месте: доступность, TTFT, полнота стрима, валидность.</li>
+    <li><b>Тихая деградация.</b> Обновление модели у провайдера выглядит как падение качества без единой ошибки. Это ловит только SLI качества и мониторинг дрейфа (следующий урок).</li>
+  </ul>
+
+  <div class="viz" id="viz-burn">
+    <p class="viz-title">Error budget и burn-rate алерты</p>
+    <p class="viz-sub">30 дней трафика по 100 запросов в минуту, истинная фоновая доля плохих — пятая часть бюджета (burn rate 0.2). На 12-й день — инцидент. Линия — остаток бюджета, полосы снизу — когда горит каждое из трёх правил; масштаб «30 дней» показывает весь месяц. Меняйте силу и длительность инцидента: найдите аварию, которую не ловит ни одно правило, и медленное тление, которое ловит только тикет. Затем переключите SLI на «качество по judge»: оценивается 2% ответов, судья ошибается (TPR 90%, TNR 98%). Посмотрите, что ошибки судьи делают с бюджетом при SLO 99.5% и при 97%, и что минимум событий делает с быстрым правилом.</p>
+    <div class="controls">
+      <label>SLO <select class="inline" id="bn-slo"><option value="0.97">97%</option><option value="0.99">99%</option><option value="0.995" selected>99.5%</option><option value="0.999">99.9%</option></select></label>
+      <label>доля плохих в инцидент <input type="range" id="bn-err" min="0.005" max="0.5" step="0.005" value="0.1"> <output></output></label>
+      <label>длительность <input type="range" id="bn-dur" min="0" max="10" step="1" value="4"> <output></output></label>
+      <label>SLI <select class="inline" id="bn-sli"><option value="all">доступность (все запросы)</option><option value="judge">качество: judge на 2% выборки</option></select></label>
+      <label><input type="checkbox" id="bn-min"> минимум 50 событий в коротком окне</label>
+      <label>масштаб <select class="inline" id="bn-zoom"><option value="zoom">48 ч вокруг инцидента</option><option value="month">30 дней</option></select></label>
+    </div>
+    <svg id="bn-svg" viewBox="0 0 640 300" role="img" aria-label="Остаток error budget за 30 дней и интервалы срабатывания алертов"></svg>
+    <div class="legend"><span><i style="background:var(--accent)"></i>остаток бюджета</span><span><i style="background:var(--bad-soft)"></i>инцидент</span><span><i style="background:var(--bad)"></i>page</span><span><i style="background:var(--warn)"></i>тикет</span></div>
+    <div class="readout" id="bn-read"></div>
+  </div>
+
+  <pre><code class="lang-go">package slo
+
+import "time"
+
+// Counts — события SLI за окно: всего и «плохих».
+type Counts struct{ Total, Bad float64 }
+
+// BurnRate — во сколько раз быстрее допустимого тратится error budget:
+// 1 — бюджет кончится ровно к концу окна SLO, 14.4 — за 30 дней / 14.4 ≈ 2 дня.
+func BurnRate(c Counts, objective float64) float64 {
+	if c.Total == 0 {
+		return 0
+	}
+	return (c.Bad / c.Total) / (1 - objective)
+}
+
+// BudgetLeft — какая доля error budget осталась за окно SLO (уходит в минус при перерасходе).
+func BudgetLeft(c Counts, objective float64) float64 {
+	if c.Total == 0 {
+		return 1
+	}
+	return 1 - c.Bad/(c.Total*(1-objective))
+}
+
+type Rule struct {
+	Long, Short time.Duration
+	Burn        float64
+	Page        bool // false — тикет, а не звонок дежурному
+}
+
+// Workbook — multiwindow, multi-burn-rate правила из Google SRE Workbook для SLO на 30 дней.
+// Короткое окно = 1/12 длинного: алерт гаснет, как только инцидент закончился.
+var Workbook = []Rule{
+	{Long: time.Hour, Short: 5 * time.Minute, Burn: 14.4, Page: true},   // 2% бюджета за час
+	{Long: 6 * time.Hour, Short: 30 * time.Minute, Burn: 6, Page: true}, // 5% за 6 часов
+	{Long: 72 * time.Hour, Short: 6 * time.Hour, Burn: 1, Page: false},  // 10% за 3 дня
+}
+
+// Firing возвращает сработавшие правила. window(d) отдаёт счётчики за последние d.
+// minEvents отсекает решения по горстке событий: на малом трафике и на выборочном SLI
+// (онлайн-judge на 2% ответов) короткое окно — это шум, а не сигнал.
+func Firing(rules []Rule, objective, minEvents float64, window func(time.Duration) Counts) []Rule {
+	var out []Rule
+	for _, r := range rules {
+		long, short := window(r.Long), window(r.Short)
+		if short.Total &lt; minEvents {
+			continue
+		}
+		if BurnRate(long, objective) &gt;= r.Burn &amp;&amp; BurnRate(short, objective) &gt;= r.Burn {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+</code></pre>
+  <p>Тест в <code>examples/m09-prod/slo</code> прогоняет четыре сценария: норма (тишина), 20-минутная авария на 30% (только быстрый page), четыре дня тлеющей деградации на 0.6% при SLO 99.5% (только тикет) и авария, закончившаяся два часа назад (тишина благодаря короткому окну). Отдельно проверяется выборочный SLI: 9 плохих оценок judge за 15 минут без порога событий будят дежурного, а с порогом 50 событий в коротком окне — нет. Это осознанный компромисс: по выборочному SLI быстрый page не строят.</p>
+  <p>Организационная сторона — что делать, когда бюджет кончился (заморозка выкаток промптов и моделей, приоритет надёжности над фичами), кто дежурит и как писать постмортем AI-инцидента, — в модуле 13 (<a href="m13.html#postmortem">постмортем</a>).</p>
+
+  <h2 id="drift">Мониторинг дрейфа и качества в проде</h2>
+  <p>LLM-фича деградирует без ошибок. Пользователи начинают спрашивать о новом (запустили продукт, сменился сезон), меняется доля языков, в чат вставляют длинные документы, провайдер обновляет модель за алиасом, кто-то переиндексировал базу RAG. SLO доступности при этом зелёный. <b>Дрейф</b> (drift) — сдвиг распределения входов или выходов относительно эталонного периода; сам по себе это не инцидент, а сигнал проверить, работает ли система на новом трафике так же хорошо.</p>
+  <table>
+    <tr><th>Что</th><th>Сигнал</th><th>Как считать</th></tr>
+    <tr><td>Входы: темы</td><td>Доли тематических кластеров. Центроиды — k-means по эмбеддингам запросов эталонного месяца; новый запрос относится к ближайшему, а далёкий от всех попадает в корзину «новое»</td><td>PSI или JS-дивергенция по долям кластеров, доля «нового»</td></tr>
+    <tr><td>Входы: язык, длина, канал</td><td>Доли языков, бакеты длины в токенах, источник (веб, мобильный клиент, API)</td><td>PSI по корзинам</td></tr>
+    <tr><td>Выходы</td><td>Длина ответа, доля отказов и «в базе нет ответа», доля эскалаций на оператора, <code>finish_reason = max_tokens</code>, число вызовов инструментов на задачу</td><td>Сравнение с эталоном по дням, PSI по бакетам</td></tr>
+    <tr><td>Качество</td><td>Онлайн-judge на выборке, дизлайки, повторный вопрос сразу после ответа (переформулировка — признак неудачи)</td><td>SLI качества из урока выше, в разрезе кластеров</td></tr>
+    <tr><td>Модель</td><td><code>gen_ai.response.model</code> сменился, изменились токены и латентность на тех же запросах</td><td>Алерт на новое значение; ежедневный прогон golden set</td></tr>
+  </table>
+  <p><b>PSI</b> (population stability index) сравнивает доли по корзинам: <code>PSI = Σ (qᵢ − pᵢ) · ln(qᵢ / pᵢ)</code>, где <code>p</code> — эталон, <code>q</code> — текущее окно. Распространённое эмпирическое правило из кредитного скоринга: меньше 0.1 — стабильно, 0.1–0.25 — заметный сдвиг, больше 0.25 — сильный. Это ориентир, а не закон. Посчитайте PSI между двумя спокойными соседними неделями: это ваш шумовой фон. <b>JS-дивергенция</b> (Йенсена–Шеннона) симметрична, ограничена отрезком [0, 1] при логарифме по основанию 2 и не ломается на пустых корзинах, поэтому её удобнее показывать на дашборде.</p>
+  <pre><code class="lang-go">package drift
+
+import "math"
+
+// PSI — population stability index между эталонным распределением (например, прошлый месяц)
+// и текущим (последние сутки) по категориям: темы, языки, бакеты длины.
+// Эмпирика из кредитного скоринга: &lt; 0.1 — стабильно, 0.1–0.25 — заметный сдвиг, &gt; 0.25 — сильный.
+func PSI(ref, cur map[string]float64) float64 {
+	const eps = 1e-4 // пустая корзина дала бы ln(0) = −∞
+	p, q := shares(ref, cur)
+	var psi float64
+	for k := range p {
+		a, b := max(p[k], eps), max(q[k], eps)
+		psi += (b - a) * math.Log(b/a)
+	}
+	return psi
+}
+
+// JS — дивергенция Йенсена–Шеннона по основанию 2: симметрична, ограничена [0, 1],
+// пустые корзины не ломают формулу.
+func JS(ref, cur map[string]float64) float64 {
+	p, q := shares(ref, cur)
+	kl := func(a, m float64) float64 {
+		if a == 0 {
+			return 0
+		}
+		return a * math.Log2(a/m)
+	}
+	var js float64
+	for k := range p {
+		m := (p[k] + q[k]) / 2
+		js += kl(p[k], m)/2 + kl(q[k], m)/2
+	}
+	return js
+}
+
+// shares переводит счётчики в доли по объединению ключей: новая тема в текущем окне —
+// тоже сигнал дрейфа, её нельзя потерять.
+func shares(a, b map[string]float64) (map[string]float64, map[string]float64) {
+	p, q := map[string]float64{}, map[string]float64{}
+	var sa, sb float64
+	for _, v := range a {
+		sa += v
+	}
+	for _, v := range b {
+		sb += v
+	}
+	for k := range a {
+		p[k], q[k] = a[k]/sa, b[k]/sb
+	}
+	for k := range b {
+		p[k], q[k] = a[k]/sa, b[k]/sb
+	}
+	return p, q
+}
+
+// LengthBucket — корзина длины запроса в токенах: длина — самый дешёвый признак дрейфа.
+func LengthBucket(tokens int) string {
+	switch {
+	case tokens &lt; 50:
+		return "&lt;50"
+	case tokens &lt; 200:
+		return "50-199"
+	case tokens &lt; 1000:
+		return "200-999"
+	default:
+		return "1000+"
+	}
+}
+</code></pre>
+  <ul>
+    <li><b>Сравнивайте сопоставимое.</b> Понедельник с понедельником, рабочие часы с рабочими часами; окно не меньше нескольких сотен событий, иначе PSI шумит. Эталон обновляйте осознанно (после того как убедились, что новое распределение обслуживается хорошо), а не скользящим окном, которое «привыкает» к деградации.</li>
+    <li><b>Онлайн-judge на выборке.</b> Асинхронно, стратифицированно по кластерам (иначе редкие новые темы почти не попадут в выборку), тем же откалиброванным судьёй, что в CI. Порядок цены: 2% от 1M запросов в месяц — 20 000 оценок на Haiku 4.5 по ~3K токенов на вход и ~100 на выход, примерно $70 в месяц.</li>
+    <li><b>Смена модели провайдером.</b> Используйте датированные идентификаторы модели, где они есть, а не алиасы; пишите <code>gen_ai.response.model</code> в каждый спан; раз в сутки прогоняйте golden set против продакшн-конфигурации (тот же eval, что гейт в CI, модуль 8) и алертите на падение за пределы доверительного интервала.</li>
+    <li><b>Алерты.</b> Дрейф — это тикет, а не page: он означает «проверьте», а не «горит». Будит дежурного только burn rate SLI качества. Новые кластеры из корзины «новое» — кандидаты в golden set и разметку (data flywheel, <a href="m11.html">модуль 11</a>).</li>
+  </ul>
+
+  <h2 id="flags">Фича-флаги для промптов и моделей</h2>
+  <p>Смена промпта или модели меняет поведение продукта сильнее многих релизов кода, но часто выкатывается правкой строки сразу на 100% трафика. Фича-флаг разделяет <b>деплой</b> (новый вариант лежит в проде) и <b>релиз</b> (кто его получает). Флаг для LLM переключает не булево значение, а <b>вариант</b>: промпт с версией, модель и параметры вместе. Промпт, отлаженный под Opus 5, на Sonnet 5 ведёт себя иначе, поэтому раздельные флаги «промпт» и «модель» порождают непроверенные комбинации.</p>
+  <ul>
+    <li><b>Процент трафика</b> с детерминированным бакетингом: <code>hash(ключ флага + unit) mod 10000</code>. Один пользователь всегда получает один вариант, а при росте процента 1 → 5 → 25 → 100 уже попавшие в эксперимент из него не выпадают. Ключ флага в хэше нужен, чтобы разные флаги резали трафик независимо.</li>
+    <li><b>Unit бакетинга.</b> Пользователь или диалог — чтобы вариант не сменился посреди разговора. Тенант — в B2B, где клиент должен видеть одно поведение. Отдельный запрос — только для stateless-задач вроде классификации: так больше статистической мощности, но пользователь видит разное поведение.</li>
+    <li><b>Таргетинг.</b> Сначала внутренние пользователи, затем бета-тенанты; регулируемых клиентов можно исключить до конца эксперимента.</li>
+    <li><b>Kill switch.</b> Вернуть всех на проверенный вариант за секунды и без деплоя. Учения с kill switch проводят заранее, а не во время инцидента.</li>
+    <li><b>Exposure в трейсе.</b> Имя варианта пишется в спан (<code>app.flag.variant</code>) и в события онлайн-evals: без этого метрики не разложить по вариантам.</li>
+    <li><b>Кэши.</b> Вариант входит в scope семантического кэша, а префикс prompt caching у варианта свой, поэтому во время эксперимента hit rate падает, а стоимость растёт. Закладывайте это в бюджет.</li>
+  </ul>
+  <p><b>Жизненный цикл изменения промпта:</b> офлайн-eval на golden set как гейт в CI (модуль 8, <a href="m08.html#ci">quality gate</a>) → canary на внутренних пользователях → 5% → 25% → 50% с guardrail-метриками на каждой ступени (burn rate SLI, качество по judge, доля отказов и эскалаций, стоимость на запрос) → 100% → удаление флага и старого промпта. Флаг, переживший эксперимент на полгода, — это технический долг: два пути в коде, которые оба надо тестировать.</p>
+  <pre><code class="lang-go">package llmmw
+
+import (
+	"encoding/json"
+	"fmt"
+	"hash/fnv"
+	"sync/atomic"
+)
+
+// Variant — что переключает флаг: промпт, модель и параметры вместе. Промпт, отлаженный
+// под одну модель, на другой ведёт себя иначе, поэтому раздельные флаги дают непроверенные комбинации.
+type Variant struct {
+	Name      string `json:"name"`   // пишется в трейс (app.flag.variant) и в онлайн-evals
+	Prompt    string `json:"prompt"` // "answer@v13"
+	Model     string `json:"model"`
+	MaxTokens int64  `json:"max_tokens"`
+}
+
+type Flag struct {
+	Key       string          `json:"key"`
+	Killed    bool            `json:"killed"` // kill switch: всем Control, без деплоя
+	Control   Variant         `json:"control"`
+	Treatment Variant         `json:"treatment"`
+	Percent   float64         `json:"percent"` // доля трафика на Treatment, 0–100
+	Tenants   map[string]bool `json:"tenants"` // таргетинг: true — всегда Treatment, false — никогда
+}
+
+// Evaluate детерминирован: один unit (пользователь или тенант) всегда получает один вариант,
+// а при росте Percent 1 → 5 → 25 → 100 попавшие в Treatment из него не выпадают.
+func (f *Flag) Evaluate(tenant, unit string) Variant {
+	if f.Killed {
+		return f.Control
+	}
+	if on, ok := f.Tenants[tenant]; ok {
+		if on {
+			return f.Treatment
+		}
+		return f.Control
+	}
+	h := fnv.New32a()
+	h.Write([]byte(f.Key + "/" + unit)) // ключ флага в хэше: разные флаги режут трафик независимо
+	if float64(h.Sum32()%10000) &lt; f.Percent*100 {
+		return f.Treatment
+	}
+	return f.Control
+}
+
+// Registry хранит флаги и перечитывает их на лету (файл, etcd, сервис флагов).
+type Registry struct {
+	flags atomic.Pointer[map[string]Flag]
+}
+
+// Load заменяет конфиг целиком. Битый конфиг отклоняется, и работает предыдущий:
+// опечатка в JSON не должна переключить весь прод на непроверенный промпт.
+func (r *Registry) Load(data []byte) error {
+	var list []Flag
+	if err := json.Unmarshal(data, &amp;list); err != nil {
+		return fmt.Errorf("flags: %w", err)
+	}
+	m := make(map[string]Flag, len(list))
+	for _, f := range list {
+		if f.Percent &lt; 0 || f.Percent &gt; 100 || f.Control.Model == "" || f.Treatment.Model == "" {
+			return fmt.Errorf("flags: %q: percent 0–100 and both models required", f.Key)
+		}
+		m[f.Key] = f
+	}
+	r.flags.Store(&amp;m)
+	return nil
+}
+
+// Variant — вариант для запроса; если флага нет, возвращается def (поведение «как до флагов»).
+func (r *Registry) Variant(key, tenant, unit string, def Variant) Variant {
+	m := r.flags.Load()
+	if m == nil {
+		return def
+	}
+	f, ok := (*m)[key]
+	if !ok {
+		return def
+	}
+	return f.Evaluate(tenant, unit)
+}
+</code></pre>
+  <p>Тест проверяет то, что ломается на практике: доля Treatment на 20 000 пользователях около 10%, пользователи из 10% остаются в Treatment при росте до 30%, таргетинг и kill switch возвращают всех на Control, битый конфиг (процент 250) отклоняется, и работает предыдущий.</p>
+  <p>В проде флаги обычно живут в сервисе флагов (flagd, Unleash, LaunchDarkly, GO Feature Flag и др.), а код читает их через вендор-нейтральный <b>OpenFeature</b> SDK: процент, таргетинг и kill switch настраиваются в сервисе, а вызов в коде не зависит от провайдера. Сверено с <code>github.com/open-feature/go-sdk</code> v1.19:</p>
+  <pre><code class="lang-go">package llmmw
+
+import (
+	"context"
+	"encoding/json"
+
+	"github.com/open-feature/go-sdk/openfeature"
+)
+
+// VariantOF — тот же выбор варианта через OpenFeature: процент, таргетинг и kill switch
+// живут в сервисе флагов (flagd, Unleash, LaunchDarkly и др.), код от вендора не зависит.
+func VariantOF(ctx context.Context, c *openfeature.Client, key, tenant, user string, def Variant) Variant {
+	v, err := c.ObjectValue(ctx, key, def, openfeature.NewEvaluationContext(user, map[string]any{"tenant": tenant}))
+	if err != nil {
+		return def // сервис флагов недоступен — работаем на проверенном варианте
+	}
+	var out Variant // провайдеры отдают объект как map[string]any из JSON
+	if b, err := json.Marshal(v); err != nil || json.Unmarshal(b, &amp;out) != nil || out.Model == "" {
+		return def
+	}
+	return out
+}
+</code></pre>
+  <div class="callout warn"><span class="title">Режим отказа: сервис флагов недоступен</span>
+    <p>Флаг читается на каждом LLM-запросе, поэтому сервис флагов не должен стать точкой отказа: SDK сервисов флагов обычно держат локальную копию конфигурации, а при ошибке должен возвращаться default — проверенный вариант, а не «последний экспериментальный». В <code>Registry</code> выше то же правило: битый конфиг не применяется.</p>
+  </div>
+
   <h2 id="guardrails">Guardrails и модерация</h2>
-  <p>Guardrails — проверки вокруг вызова модели, которые не зависят от её доброй воли. Системный промпт «не обсуждай конкурентов» считается пожеланием, а не гарантией.</p>
+  <p>Guardrails — проверки вокруг вызова модели, которые не зависят от её доброй воли. Системный промпт «не обсуждай конкурентов» считается пожеланием, а не гарантией. Здесь — как guardrails встают в продакшн-цепочку: латентность, fail-open или fail-closed, метрики. Модель угроз, OWASP Top 10 для LLM-приложений и red-teaming — в модуле 7 (<a href="m07.html#owasp">OWASP</a>, <a href="m07.html#redteam">red-teaming</a>).</p>
   <div class="grid">
     <div class="card"><h4>На входе</h4><ul><li>Лимиты размера и частоты</li><li>Детектор prompt injection / jailbreak: классификатор или маленькая модель</li><li>Тематический фильтр («вопрос по нашему продукту?»)</li><li>Редакция PII, если провайдеру её отдавать нельзя</li><li>Модерация токсичного и незаконного контента</li></ul></div>
     <div class="card"><h4>На выходе</h4><ul><li>Валидация структуры: structured outputs / <code>strict</code> tools плюс проверка бизнес-правил (сумма ≥ 0, id существует)</li><li>Утечка PII и секретов, system prompt в ответе</li><li>Groundedness для RAG: есть ли утверждения, которых нет в источниках</li><li>Политика: юридические или медицинские советы, обещания от имени компании</li></ul></div>
@@ -391,103 +1035,20 @@ func GuardedComplete(ctx context.Context, llm LLM, req Request,
 	return resp, nil
 }</code></pre>
 
-  <h2 id="selfhosted">Self-hosted инференс</h2>
-  <p>Свой инференс поднимают по четырём причинам: <b>приватность</b> (данные не должны покидать периметр), <b>стоимость</b> на большом стабильном объёме, <b>контроль</b> (своя fine-tuned модель, фиксированная версия, предсказуемая латентность) и <b>офлайн или edge</b>. Платите вы за это GPU, людьми и дежурствами.</p>
-
-  <h3>Движки</h3>
-  <table>
-    <tr><th>Движок</th><th>Для чего</th><th>Ключевое</th></tr>
-    <tr><td><b>vLLM</b></td><td>Продакшн-сервинг, высокая конкурентность</td><td>PagedAttention, continuous batching, prefix caching, tensor parallelism, OpenAI-совместимый сервер, LoRA-адаптеры на лету</td></tr>
-    <tr><td><b>SGLang</b></td><td>То же, сильный в структурированной генерации и prefix sharing</td><td>RadixAttention (дерево префиксов), быстрый constrained decoding</td></tr>
-    <tr><td><b>TGI</b> (Hugging Face)</td><td>Сервинг моделей из экосистемы HF</td><td>Continuous batching, интеграция с HF Inference Endpoints. Проверьте текущий статус развития проекта перед выбором</td></tr>
-    <tr><td><b>Ollama</b></td><td>Локальная разработка, ноутбук, edge</td><td>Поверх llama.cpp, квантизованные GGUF, одна команда, OpenAI-совместимый API на <code>:11434/v1</code>. Для высоконагруженного прода не предназначен</td></tr>
-  </table>
-
-  <h3>Почему vLLM быстрый</h3>
+  <h2 id="selfhosted">Self-hosted инференс: коротко</h2>
+  <p>Свой инференс поднимают по четырём причинам: <b>приватность</b> (данные не покидают периметр), <b>стоимость</b> на большом и ровном объёме, <b>контроль</b> (своя fine-tuned модель, фиксированная версия, предсказуемая латентность) и <b>офлайн или edge</b>. Для этого модуля важно одно: self-hosted модель — ещё одно звено цепочки. Её подключают через тот же <code>OpenAICompat</code>-адаптер (vLLM, SGLang и Ollama отдают OpenAI-совместимый API), закрывают breaker'ом и прогоняют по тем же evals.</p>
   <ul>
-    <li><b>PagedAttention.</b> KV-cache (модуль 1) хранится не одним непрерывным куском на максимальную длину последовательности, а блоками по 16 токенов, как страницы виртуальной памяти в ОС. Блоки выделяются по мере роста последовательности, почти без фрагментации, и могут разделяться между запросами с общим префиксом (copy-on-write). В одну и ту же память GPU помещается в разы больше одновременных последовательностей, а по пейперу пропускная способность выросла в 2–4 раза относительно предыдущих систем.</li>
-    <li><b>Continuous batching</b> (iteration-level scheduling). Статический батч ждёт, пока закончится самая длинная последовательность. В continuous batching на каждом шаге декодирования завершённые запросы уходят, а новые встают на их место. GPU загружен постоянно, и короткие запросы не ждут длинные.</li>
-    <li><b>Prefix caching.</b> Общий system prompt считается один раз. Это аналог prompt caching у провайдера, только бесплатный.</li>
+    <li><b>Сравнивайте $ за 1M токенов при реальной утилизации</b>, а не цену GPU-часа: <code>$/1M = GPU $/ч ÷ (tok/s × утилизация × 3600) × 10⁶</code>. GPU, простаивающий ночью, стоит как днём; API ночью не стоит ничего.</li>
+    <li><b>Ограничивает конкурентность KV-cache, а не веса.</b> 8B в bf16 занимает 16 ГБ, а одна последовательность на 32K токенов у Llama-3-8B — ещё около 4 ГБ KV-cache.</li>
+    <li><b>Скрытые расходы</b>: пиковая нагрузка вдвое-втрое выше средней, минимум две реплики ради HA, дежурства и обновления. Один инженер на полставки легко стоит больше $8000 в месяц.</li>
+    <li><b>Типичный рабочий вариант — гибрид</b>: self-hosted модель 8–70B на массовую простую нагрузку, API на сложное и как fallback.</li>
   </ul>
-  <div class="callout tip"><span class="title">Цифры: память</span>
-    <p>Веса: число параметров × байты. 8B в bf16 занимает 16 ГБ, 70B в bf16 — 140 ГБ (минимум 2×H100 80 ГБ, на практике 4 ради KV-cache), 70B в FP8 — ~70 ГБ. KV-cache на токен равен <code>2 × layers × kv_heads × head_dim × bytes</code>. Для Llama-3-8B (32 слоя, 8 KV-голов, head_dim 128, bf16) это 128 КБ на токен, так что одна последовательность на 32K токенов занимает 4 ГБ. Именно KV-cache, а не веса, ограничивает конкурентность.</p>
-  </div>
-
-  <h3>GPU-экономика</h3>
-  <p>Сравнивать надо не «цену GPU-часа», а <b>стоимость миллиона токенов при вашей реальной утилизации</b>: <code>$/1M = GPU $/ч ÷ (tok/s × утилизация × 3600) × 10⁶</code>. GPU, который ночью простаивает, стоит столько же, сколько днём, а API ночью не стоит ничего. Отсюда правило: self-hosted выгоден при <b>большом и ровном</b> объёме, когда модели поменьше хватает по качеству.</p>
-
-  <div class="viz" id="viz-gpu">
-    <p class="viz-title">Калькулятор: self-hosted против API</p>
-    <p class="viz-sub">Оси логарифмические. Линия API растёт линейно с объёмом. Self-hosted — ступеньки: GPU покупается целиком, плюс фиксированные расходы на людей. Пропускная способность — суммарная (с батчингом) на один GPU для вашей модели; её надо измерять, дефолты взяты для порядка величин. Цены на момент написания, проверьте актуальный прайс.</p>
-    <div class="controls">
-      <label>токенов в день <input type="range" id="g-vol" min="6" max="10" step="0.05" value="8.3"> <output></output></label>
-      <label>цена API, $/1M (смешанная) <input type="range" id="g-api" min="0.1" max="20" step="0.1" value="2"> <output></output></label>
-      <label>GPU, $/час <input type="range" id="g-gpu" min="0.5" max="10" step="0.1" value="3"> <output></output></label>
-      <label>tok/s на GPU <input type="range" id="g-tps" min="200" max="10000" step="100" value="2500"> <output></output></label>
-      <label>утилизация <input type="range" id="g-util" min="0.1" max="0.9" step="0.05" value="0.4"> <output></output></label>
-      <label>люди и ops, $/мес <input type="range" id="g-ops" min="0" max="30000" step="1000" value="8000"> <output></output></label>
-      <label><input type="checkbox" id="g-ha" checked> минимум 2 реплики (HA)</label>
-    </div>
-    <svg id="gpu-svg" viewBox="0 0 640 300" role="img" aria-label="График стоимости в месяц от объёма токенов для API и self-hosted"></svg>
-    <div class="legend"><span><i style="background:var(--accent)"></i>API</span><span><i style="background:var(--violet)"></i>self-hosted</span><span><i style="background:var(--ok)"></i>точка безубыточности</span></div>
-    <div class="readout" id="gpu-read"></div>
-  </div>
-
-  <div class="callout warn"><span class="title">Что забывают в расчёте</span>
-    <ul>
-      <li>Пиковая нагрузка вдвое-втрое выше средней, а GPU закладываются под пик (или autoscaling, но GPU поднимаются минутами, и их может не оказаться в регионе).</li>
-      <li>Сравнение нечестное, если self-hosted модель слабее: вы экономите на токенах и теряете в качестве. Прогоните evals.</li>
-      <li>Инженерное время: обновление моделей и драйверов, дежурства, нагрузочное тестирование. Один инженер на полставки легко стоит больше $8000 в месяц.</li>
-      <li>API дешевеет каждые полгода, а купленный или зарезервированный на год GPU — нет.</li>
-    </ul>
-  </div>
-
-  <div class="tabs">
-    <div class="tab-panel" data-tab="vLLM (bash + Python)"><pre><code class="lang-python"># 1) Запуск OpenAI-совместимого сервера (GPU с 24+ ГБ для 8B в bf16):
-#    pip install vllm
-#    vllm serve Qwen/Qwen3-8B \
-#      --max-model-len 32768 \          # верхняя граница контекста: определяет бюджет KV-cache
-#      --gpu-memory-utilization 0.90 \  # доля VRAM под веса + KV-cache
-#      --max-num-seqs 128 \             # максимум одновременных последовательностей в батче
-#      --enable-prefix-caching \        # в свежих версиях включено по умолчанию
-#      --api-key "$VLLM_API_KEY"
-#
-# 2) Клиент — обычный OpenAI SDK. В vLLM temperature/top_p работают (в отличие от новых Claude).
-import asyncio, os, time
-from openai import AsyncOpenAI
-
-client = AsyncOpenAI(base_url="http://localhost:8000/v1", api_key=os.environ["VLLM_API_KEY"])
-
-async def one(i: int) -&gt; tuple[float, float, int]:
-    t0 = time.perf_counter(); ttft = None; n = 0
-    stream = await client.chat.completions.create(
-        model="Qwen/Qwen3-8B",
-        messages=[{"role": "user", "content": f"Кратко: что такое continuous batching? #{i}"}],
-        max_tokens=300, temperature=0.2, stream=True,
-    )
-    async for chunk in stream:
-        if chunk.choices and chunk.choices[0].delta.content:
-            ttft = ttft or time.perf_counter() - t0
-            n += 1  # чанк ≈ токен; для точности берите usage
-    return ttft or 0.0, time.perf_counter() - t0, n
-
-async def main(concurrency: int = 64) -&gt; None:
-    t0 = time.perf_counter()
-    res = await asyncio.gather(*(one(i) for i in range(concurrency)))
-    wall = time.perf_counter() - t0
-    ttfts = sorted(r[0] for r in res)
-    print(f"p50 TTFT {ttfts[len(ttfts)//2]:.2f}s  p99 {ttfts[int(len(ttfts)*.99)]:.2f}s")
-    print(f"суммарно {sum(r[2] for r in res)/wall:.0f} tok/s при {concurrency} параллельных")
-
-asyncio.run(main())
-# Локально без GPU: `ollama pull qwen3:8b` и base_url="http://localhost:11434/v1" — тот же код.</code></pre></div>
-  </div>
-  <p>Такой нагрузочный скрипт нужен, чтобы получить реальные tok/s для калькулятора выше. Поднимайте <code>concurrency</code>, пока суммарная пропускная способность растёт, а p99 TTFT укладывается в SLO. Эта точка и есть ёмкость одной реплики.</p>
+  <p>Подробно — движки (vLLM, SGLang, TGI, Ollama), PagedAttention и continuous batching, расчёт VRAM, калькулятор «self-hosted против API» и нагрузочный тест — в <a href="m10.html#selfhosted">модуле 10</a>.</p>
 
   <h2 id="code">Сборка: middleware LLM-клиента на Go</h2>
   <p>Собираем всё в одну обёртку. Интерфейс один, реализаций-декораторов несколько, и порядок оборачивания задаёт семантику:</p>
-  <pre><code>Traced → SemCache → Metered(квоты, $) → Fallback[ для каждого звена: Breaker → Retry → Limiter → клиент провайдера ]</code></pre>
-  <p>Трейс снаружи видит всё, включая попадания в кэш. Кэш стоит до квот, потому что попадание квоту не тратит. Ретраи и лимитер живут внутри звена: у каждого провайдера свои лимиты, и ретраить A, когда есть B, долго не нужно.</p>
+  <pre><code>Traced → SemCache → Metered(квоты, $) → [Router] → Fallback[ для каждого звена: Breaker → Retry → Limiter → клиент провайдера ]</code></pre>
+  <p>Трейс снаружи видит всё, включая попадания в кэш. Кэш стоит до квот, потому что попадание квоту не тратит. Роутер по сложности (<a href="#routing">урок про шлюз</a>) — необязательный слой между квотами и fallback, у каждой его ветви своя цепочка. Ретраи и лимитер живут внутри звена: у каждого провайдера свои лимиты, и ретраить A, когда есть B, долго не нужно. Всё ниже, вместе с роутером, адаптером, флагами, SLO и PSI, собирается и проходит <code>go vet</code> и <code>go test -race</code> в <code>examples/m09-prod</code> репозитория курса.</p>
 
   <div class="tabs">
     <div class="tab-panel" data-tab="1. Контракт + ретраи"><pre><code class="lang-go">package llmmw
@@ -513,8 +1074,8 @@ type Request struct {
 }
 
 type Response struct {
-	Text, Model, StopReason, Route string
-	InputTokens, OutputTokens      int64
+	Text, Model, StopReason, Route    string
+	InputTokens, OutputTokens         int64
 	CacheReadTokens, CacheWriteTokens int64
 }
 
@@ -524,17 +1085,29 @@ type LLM interface {
 
 // Retryable: повтор может закончиться иначе. Второе значение — retry-after от сервера.
 func Retryable(err error) (bool, time.Duration) {
-	var apierr *anthropic.Error
-	if errors.As(err, &amp;apierr) {
-		switch s := apierr.StatusCode; {
+	if s, ra, ok := httpStatus(err); ok {
+		switch {
 		case s == 408, s == 409, s == 429, s &gt;= 500: // 529 overloaded входит сюда
-			return true, retryAfter(apierr.Response)
+			return true, ra
 		default: // 400/401/403/404/413: повтор даст то же самое
 			return false, 0
 		}
 	}
 	var ne net.Error
 	return errors.As(err, &amp;ne) || errors.Is(err, context.DeadlineExceeded), 0 // таймаут попытки
+}
+
+// httpStatus достаёт HTTP-статус из ошибки любого провайдера: Anthropic SDK или своего адаптера.
+func httpStatus(err error) (status int, ra time.Duration, ok bool) {
+	var apierr *anthropic.Error
+	if errors.As(err, &amp;apierr) {
+		return apierr.StatusCode, retryAfter(apierr.Response), true
+	}
+	var herr *HTTPError
+	if errors.As(err, &amp;herr) {
+		return herr.StatusCode, herr.RetryAfter, true
+	}
+	return 0, 0, false
 }
 
 func retryAfter(r *http.Response) time.Duration {
@@ -643,7 +1216,7 @@ func (b *Breaker) Report(failed bool) {
 
 type Route struct {
 	Name, Model string
-	LLM         LLM                   // уже обёрнут в Retry и Limiter
+	LLM         LLM // уже обёрнут в Retry и Limiter
 	Breaker     *Breaker
 	Fits        func(Request) bool    // влезет ли контекст, есть ли нужные фичи
 	Adapt       func(Request) Request // свой промпт и параметры под модель
@@ -759,10 +1332,9 @@ func (m *Metered) Complete(ctx context.Context, req Request) (*Response, error) 
 
 import (
 	"context"
-	"errors"
 	"strconv"
+	"time"
 
-	"github.com/anthropics/anthropic-sdk-go"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -771,8 +1343,13 @@ import (
 )
 
 var (
-	tracer        = otel.Tracer("llmmw")
-	tokenUsage, _ = otel.Meter("llmmw").Int64Histogram("gen_ai.client.token.usage", metric.WithUnit("{token}"))
+	tracer = otel.Tracer("llmmw")
+	meter  = otel.Meter("llmmw")
+	// Границы бакетов — рекомендованные конвенцией: токены растут степенями 4, секунды — удвоением.
+	tokenUsage, _ = meter.Int64Histogram("gen_ai.client.token.usage", metric.WithUnit("{token}"),
+		metric.WithExplicitBucketBoundaries(1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216, 67108864))
+	opDuration, _ = meter.Float64Histogram("gen_ai.client.operation.duration", metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24, 20.48, 40.96, 81.92))
 )
 
 type Traced struct {
@@ -781,6 +1358,7 @@ type Traced struct {
 }
 
 func (t *Traced) Complete(ctx context.Context, req Request) (*Response, error) {
+	start := time.Now()
 	ctx, span := tracer.Start(ctx, "chat "+req.Model,
 		trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(
@@ -792,11 +1370,18 @@ func (t *Traced) Complete(ctx context.Context, req Request) (*Response, error) {
 		))
 	defer span.End()
 
+	common := []attribute.KeyValue{
+		attribute.String("gen_ai.operation.name", "chat"),
+		attribute.String("gen_ai.provider.name", t.Provider),
+		attribute.String("gen_ai.request.model", req.Model),
+	}
 	resp, err := t.Next.Complete(ctx, req)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "llm call failed")
 		span.SetAttributes(attribute.String("error.type", errorType(err)))
+		opDuration.Record(ctx, time.Since(start).Seconds(),
+			metric.WithAttributes(append(common, attribute.String("error.type", errorType(err)))...))
 		return nil, err
 	}
 	span.SetAttributes(
@@ -804,14 +1389,13 @@ func (t *Traced) Complete(ctx context.Context, req Request) (*Response, error) {
 		attribute.StringSlice("gen_ai.response.finish_reasons", []string{resp.StopReason}),
 		attribute.Int64("gen_ai.usage.input_tokens", resp.InputTokens),
 		attribute.Int64("gen_ai.usage.output_tokens", resp.OutputTokens),
-		attribute.Int64("app.llm.cache_read_tokens", resp.CacheReadTokens),
+		attribute.Int64("gen_ai.usage.cache_read.input_tokens", resp.CacheReadTokens),
+		attribute.Int64("gen_ai.usage.cache_creation.input_tokens", resp.CacheWriteTokens),
 		attribute.String("app.llm.route", resp.Route),
 		attribute.Float64("app.llm.cost_usd", CostUSD(resp)),
 	)
-	common := []attribute.KeyValue{
-		attribute.String("gen_ai.provider.name", t.Provider),
-		attribute.String("gen_ai.request.model", req.Model),
-	}
+	common = append(common, attribute.String("gen_ai.response.model", resp.Model))
+	opDuration.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(common...))
 	tokenUsage.Record(ctx, resp.InputTokens, metric.WithAttributes(append(common, attribute.String("gen_ai.token.type", "input"))...))
 	tokenUsage.Record(ctx, resp.OutputTokens, metric.WithAttributes(append(common, attribute.String("gen_ai.token.type", "output"))...))
 	// Текст промпта и ответа в атрибуты НЕ пишем: только opt-in, с маскированием и сэмплированием.
@@ -819,9 +1403,8 @@ func (t *Traced) Complete(ctx context.Context, req Request) (*Response, error) {
 }
 
 func errorType(err error) string {
-	var apierr *anthropic.Error
-	if errors.As(err, &amp;apierr) {
-		return strconv.Itoa(apierr.StatusCode)
+	if s, _, ok := httpStatus(err); ok {
+		return strconv.Itoa(s)
 	}
 	return "_OTHER" // значение по конвенции OTel для неклассифицированных ошибок
 }</code></pre></div>
@@ -857,7 +1440,7 @@ type SemCache struct {
 	Next      LLM
 	DB        *pgxpool.Pool
 	Embed     func(ctx context.Context, text string) ([]float32, error)
-	Threshold float64       // cosine similarity; калибруется на размеченных парах
+	Threshold float64 // cosine similarity; калибруется на размеченных парах
 	TTL       time.Duration
 }
 
@@ -906,7 +1489,7 @@ func scopeKey(r Request) string {
 
 import (
 	"context"
-	"errors"
+	"strings"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -946,11 +1529,30 @@ func Anthropic() LLM {
 }
 
 func isRateLimit(err error) bool {
-	var apierr *anthropic.Error
-	return errors.As(err, &amp;apierr) &amp;&amp; apierr.StatusCode == 429
+	s, _, ok := httpStatus(err)
+	return ok &amp;&amp; s == 429
 }
 
-func lastUserText(r Request) string { /* текст последнего user-сообщения */ return "" }
+// lastUserText — текст последнего user-сообщения.
+func lastUserText(r Request) string {
+	for i := len(r.Messages) - 1; i &gt;= 0; i-- {
+		if r.Messages[i].Role == anthropic.MessageParamRoleUser {
+			return textOf(r.Messages[i])
+		}
+	}
+	return ""
+}
+
+// textOf склеивает текстовые блоки сообщения.
+func textOf(m anthropic.MessageParam) string {
+	var sb strings.Builder
+	for _, b := range m.Content {
+		if b.OfText != nil {
+			sb.WriteString(b.OfText.Text)
+		}
+	}
+	return sb.String()
+}
 
 func New(selfHosted LLM, cache *SemCache, meter *Metered) LLM {
 	api := Anthropic()
@@ -997,9 +1599,25 @@ func New(selfHosted LLM, cache *SemCache, meter *Metered) LLM {
     <label class="check"><input type="checkbox" data-save="m09-t3"> Сделал</label>
   </div>
   <div class="task">
-    <h3>Задание 4 (по желанию). vLLM против API</h3>
-    <p>Арендуйте один GPU на час и поднимите vLLM с 7–8B моделью. Запустите нагрузочный скрипт при concurrency 1, 8, 32, 128 и запишите суммарные tok/s и p99 TTFT. Подставьте свои цифры в калькулятор и найдите точку безубыточности против Haiku 4.5 по вашей цене.</p>
+    <h3>Задание 4. SLO, burn-rate алерты и дрейф для проекта D</h3>
+    <p>Для <code>/ask</code> из проекта A, который вы продакшнизируете в проекте D, определите 4 SLI: доступность (ответ fallback-звена считается хорошим), доля запросов с TTFT быстрее порога, полнота стрима и валидность вывода, качество по онлайн-judge на 2–5% выборки. Задайте SLO с обоснованием от UX и истории метрик. Сделайте recording rules и multiwindow-алерты (руками или генератором вроде Sloth или Pyrra) и дашборд остатка бюджета. Добавьте еженедельный PSI по тематическим кластерам, языкам и бакетам длины и ежедневный прогон golden set против продакшн-конфигурации.</p>
+    <ul>
+      <li>Fault injection через fake-провайдера из задания 1: 30% ошибок в течение 10 минут вызывают page не позже чем через 5 минут, а после восстановления алерт гаснет в пределах короткого окна.</li>
+      <li>Одна плохая оценка judge в 5-минутном окне не будит дежурного (минимум событий или только длинные окна для выборочного SLI).</li>
+      <li>Подмена модели во внутреннем конфиге (например, Opus 5 → Haiku 4.5) обнаруживается ежедневным eval-прогоном или алертом на <code>gen_ai.response.model</code> до первых жалоб.</li>
+      <li>Политика error budget в пяти строках: что замораживается, когда бюджет кончился (модуль 13).</li>
+    </ul>
     <label class="check"><input type="checkbox" data-save="m09-t4"> Сделал</label>
+  </div>
+  <div class="task">
+    <h3>Задание 5. Роутинг по сложности за фича-флагом</h3>
+    <p>Вынесите промпт, модель и параметры ответа в флаг (<code>Registry</code> или OpenFeature-провайдер) и выкатите новую версию промпта ступенями 1% → 10% → 50% с exposure в трейсах. Затем разметьте 200+ запросов из логов: «ответ Haiku 4.5 проходит judge» или нет. Подберите эвристику или классификатор и порог <code>Router</code> по кривой «доля дешёвой модели против качества». Порог тоже держите во флаге.</p>
+    <ul>
+      <li>Тест на стабильность бакетинга и kill switch; учение: откат варианта на 100% пользователей меньше чем за минуту без деплоя.</li>
+      <li>Отчёт по вариантам промпта: качество по judge с доверительным интервалом (модуль 8), стоимость и p95 на запрос.</li>
+      <li>Роутер: доля трафика на Haiku и экономия в $ на 1000 запросов при потере качества не больше 1 п.п. на отложенной выборке; метрика доли эскалаций на дашборде.</li>
+    </ul>
+    <label class="check"><input type="checkbox" data-save="m09-t5"> Сделал</label>
   </div>
 
   <h2 id="selfcheck">Самопроверка</h2>
@@ -1010,8 +1628,14 @@ func New(selfHosted LLM, cache *SemCache, meter *Metered) LLM {
   <details class="q"><summary>Как prompt caching влияет на rate limits у Anthropic?</summary><div class="a"><p>Для большинства актуальных моделей <code>cache_read_input_tokens</code> не учитываются в ITPM. При длинном стабильном префиксе эффективная пропускная способность по input растёт кратно, и одновременно input дешевеет до 0.1×. Проверять по документации конкретной модели.</p></div></details>
   <details class="q"><summary>Назовите три причины ложных попаданий в семантический кэш и три меры защиты.</summary><div class="a"><p>Причины: embedding плохо различает отрицание («отменить» и «не отменять»), числа, даты и сущности («Pro» и «Team»); общий scope для разных тенантов или прав доступа; слишком низкий порог. Меры: калибровка порога на размеченных парах, scope с тенантом, версией промпта и правами, верификация попадания дешёвой моделью, исключение персонализированных и временных запросов, TTL и инвалидация по документам.</p></div></details>
   <details class="q"><summary>Какой рычаг латентности обычно самый сильный и почему?</summary><div class="a"><p>Сокращение числа выходных токенов, потому что генерация идёт последовательно (десятки или сотни tok/s), и 1000 токенов вывода стоят больше, чем prefill 20K токенов input. Для воспринимаемой латентности — стриминг. Следом идут модель поменьше или низкий effort и кэши.</p></div></details>
-  <details class="q"><summary>Что такое PagedAttention и continuous batching простыми словами?</summary><div class="a"><p>PagedAttention хранит KV-cache страницами фиксированного размера, выделяемыми по требованию, как виртуальная память. Не нужно резервировать память под максимальную длину, фрагментация почти нулевая, а общие префиксы можно разделять, поэтому в GPU помещается больше одновременных запросов. Continuous batching собирает батч заново на каждом шаге декодирования: завершившиеся запросы уходят, новые встают на их место, и GPU не простаивает в ожидании самой длинной последовательности.</p></div></details>
   <details class="q"><summary>Когда self-hosted экономически проигрывает, даже при большом объёме?</summary><div class="a"><p>При неровной нагрузке (пики днём, простой ночью), когда утилизация ниже 20–30%; когда нужна модель уровня frontier, которую сами не поднять; когда учтены инженерное время и HA-реплики; когда API-цены падают быстрее, чем окупается резерв GPU. И если self-hosted модель хуже по evals, экономия фиктивная.</p></div></details>
+
+  <details class="q"><summary>Что такое burn rate и чем multiwindow-алерт лучше правила «ошибок больше 1% за 5 минут»?</summary><div class="a"><p>Burn rate — доля плохих событий в окне, делённая на <code>1 − SLO</code>: во сколько раз быстрее допустимого тратится error budget. Правило на одном коротком окне будит на каждый всплеск, на одном длинном — срабатывает поздно и горит ещё долго после восстановления. Пара окон даёт и то и другое: длинное подтверждает, что расход бюджета значимый, короткое — что проблема ещё идёт. Несколько правил с разным burn rate (14.4, 6, 1) отделяют аварию, которую надо чинить ночью, от медленного тления, которому хватит тикета.</p></div></details>
+  <details class="q"><summary>Почему SLI качества по judge на 2% выборки нельзя ставить на быстрый page?</summary><div class="a"><p>В коротком окне слишком мало оценок: при 100 запросах в минуту за 5 минут их около 10, и одна плохая оценка — это уже «10% плохих». Долю плохих в доли процента по десяткам событий не измерить, и быстрое правило срабатывает от случайного скопления нескольких плохих оценок. Добавьте задержку асинхронного судьи и его собственные ошибки (TNR меньше 100% даёт фоновый процент «плохих»). Выборочный SLI годится для длинных пар окон и тикетов, а быстрые page строят на SLI, которые считаются на каждом запросе: доступность, TTFT, полнота стрима, валидность.</p></div></details>
+  <details class="q"><summary>PSI по тематическим кластерам за неделю — 0.3. Это инцидент?</summary><div class="a"><p>Нет, это сигнал проверить. Сильный сдвиг распределения запросов означает, что golden set и промпт настраивались на другой трафик. Дальше: какие кластеры выросли (новый продукт, сезон, сбой в клиенте, бот), как на них ведут себя SLI качества, доля отказов и эскалаций, есть ли новые темы в корзине «новое». Если качество на новых кластерах в норме — обновить эталон; если нет — добавить их в golden set и чинить. Будить дежурного стоит только из-за burn rate SLI.</p></div></details>
+  <details class="q"><summary>Почему флаг должен переключать промпт, модель и параметры одним вариантом и почему в хэше бакетинга есть ключ флага?</summary><div class="a"><p>Промпт отлаживается под конкретную модель и параметры. Раздельные флаги дают комбинации, которые никто не прогонял на evals, например новый промпт со старой моделью у части трафика. Ключ флага в хэше нужен, чтобы разные эксперименты резали трафик независимо: с <code>hash(user)</code> одни и те же 10% пользователей попадали бы во все эксперименты сразу, и эффекты смешивались бы.</p></div></details>
+  <details class="q"><summary>Что должен делать адаптер второго провайдера, кроме HTTP-вызова?</summary><div class="a"><p>Нормализовать ошибки и ответ. Ошибки — к той же классификации статусов, что у основного провайдера: иначе 503 чужого API не ретраится, не открывает breaker и попадает в метрики как <code>_OTHER</code>. <code>finish_reason</code> — к общему словарю <code>stop_reason</code>: иначе кэш закэширует обрезанный ответ, а метрика доли <code>max_tokens</code> врёт. Плюс usage для учёта стоимости и свой промпт под модель (<code>Adapt</code> в маршруте).</p></div></details>
+  <details class="q"><summary>Роутер отправляет 60% трафика на Haiku. Какие метрики покажут, что он начал ошибаться?</summary><div class="a"><p>Рост доли эскалаций (дешёвая модель всё чаще проваливает проверку), падение качества по онлайн-judge именно на дешёвом маршруте, рост дизлайков и повторных вопросов на нём, сдвиг распределения скоров классификатора или PSI входов (трафик стал сложнее). Реакция — поднять порог флагом, затем переобучить классификатор на свежей разметке.</p></div></details>
 
   <h2 id="interview">Вопросы с собеседований</h2>
   <details class="q interview"><summary>Провайдер LLM лёг на 20 минут. Что происходит с вашим сервисом и что вы спроектировали заранее?</summary><div class="a">
@@ -1045,15 +1669,36 @@ func New(selfHosted LLM, cache *SemCache, meter *Metered) LLM {
     <p>Слои: вход (размер, injection или jailbreak-классификатор, тематический фильтр, PII), выход (structured outputs плюс проверка бизнес-правил, утечки, groundedness для RAG), инструменты (allowlist, валидация аргументов, human-in-the-loop на необратимое). Сначала дешёвые проверки (правила), дорогие LLM-судьи только по сигналу. Input guardrail запускается параллельно с основным вызовом с отменой через ctx.</p>
     <p>«Работают» — это измеряемо: у каждого guardrail есть размеченный набор и precision и recall, а в проде отслеживаются доля срабатываний и выборочная ручная проверка. False positive считается продуктовой ошибкой, over-refusal убивает конверсию. Для каждого guardrail явно выбран fail-open или fail-closed при недоступности. И я говорю, что system prompt — не guardrail: гарантии дают только проверки вне модели.</p>
   </div></details>
-  <details class="q interview"><summary>Когда вы бы предложили self-hosted модель вместо API? Посчитайте на примере.</summary><div class="a">
-    <p>Критерии: требования к данным (данные не могут уходить третьей стороне, резидентность), большой и ровный объём, достаточность модели 8–70B по evals (извлечение, классификация, суммаризация, а не сложный reasoning), потребность в своей fine-tuned модели, контроль латентности.</p>
-    <p>Расчёт: 2 млрд токенов в день; API по смешанной цене $2 за 1M обходится в ~$120K в месяц. GPU за $3 в час с 2500 tok/s при утилизации 40% даёт ~86M токенов в день на GPU, то есть нужно 24 GPU, или ~$52K в месяц, плюс люди ~$10–20K. Выигрыш есть, но он чувствителен к утилизации: при 20% GPU нужно вдвое больше, и преимущество почти исчезает. Реальные tok/s надо измерить нагрузочным тестом на своей длине запросов.</p>
-    <p>Упомяну скрытые затраты (пики, HA, дежурства, обновления) и гибрид: self-hosted для массовой простой нагрузки, API для сложного и как fallback.</p>
-  </div></details>
   <details class="q interview"><summary>Агент в проде иногда тратит $40 на одну задачу. Что делать?</summary><div class="a">
     <p>Немедленно: жёсткие лимиты на задачу по итерациям, токенам и долларам с остановкой и частичным результатом, плюс алерт на выбросы.</p>
     <p>Диагностика по трейсам: где растёт контекст (tool results на десятки тысяч токенов, которые можно усечь или суммаризировать), есть ли зацикливание (одинаковые tool calls подряд, детектится по хэшу аргументов), работает ли prompt caching (cache_read около нуля означает, что префикс меняется на каждой итерации).</p>
     <p>Лечение: компактизация истории, усечение результатов инструментов, кэширование стабильного префикса, маленькая модель для подшагов и роутинг, более явные критерии остановки в промпте. После исправлений — eval на наборе «дорогих» задач, чтобы убедиться, что качество не упало.</p>
+  </div></details>
+
+  <details class="q interview"><summary>Как определить SLO для LLM-фичи, если ответы недетерминированы?</summary><div class="a">
+    <p>Недетерминированность не мешает SLO: SLO задаётся на долю хороших событий, а «хорошее» определяем явно. Беру несколько SLI: доступность (fallback-ответ считается хорошим, деградированный — нет), доля запросов с TTFT быстрее порога из UX, полнота стрима и валидность структурированного вывода — всё это на 100% трафика. Отдельно качество: онлайн-judge на 1–5% выборки, откалиброванный по людям, плюс дизлайки.</p>
+    <p>Цели ставлю от истории метрик и UX, окно 30 дней, error budget = <code>1 − SLO</code>. Алерты — multiwindow multi-burn-rate по SRE Workbook: 14.4 на 1 ч и 5 мин и 6 на 6 ч и 30 мин — page, 1 на 3 дня и 6 ч — тикет. Быстрые page — только по SLI, которые считаются на каждом запросе. Выборочный SLI качества шумит и запаздывает, поэтому для него только длинные окна и минимум событий, а измеренную долю плохих корректирую на TPR/TNR судьи. Политика бюджета: если он кончился, замораживаются выкатки промптов и моделей.</p>
+    <p><b>На что смотрит интервьюер:</b> отличаете ли вы доступность от качества; понимаете ли, почему латентность задают долей запросов, а не перцентилем; знаете ли burn rate и многооконные алерты; видите ли проблему шума и смещения у SLI по judge.</p>
+  </div></details>
+  <details class="q interview"><summary>Жалобы на качество растут, ошибок нет, деплоев не было. Как бы вы заметили это раньше пользователей?</summary><div class="a">
+    <p>Первая гипотеза — изменилось то, что не деплоится: модель за алиасом у провайдера, распределение запросов, данные RAG. Что должно было стоять заранее: <code>gen_ai.response.model</code> в каждом спане и алерт на новое значение; датированные идентификаторы модели вместо алиасов; ежедневный прогон golden set против продакшн-конфигурации с алертом на выход за доверительный интервал; онлайн-judge на выборке, стратифицированный по тематическим кластерам; дрейф входов (PSI по кластерам эмбеддингов, языкам, длине) и выходов (длина ответа, доля отказов, «нет ответа», эскалаций).</p>
+    <p>Разбор: сравнить метрики по кластерам до и после, найти, где упало качество; если это новые темы — их нет в golden set и промпте, расширяем набор; если модель — откат на пиннинг версии или fallback-звено флагом, затем eval новой версии и адаптация промпта.</p>
+    <p><b>На что смотрит интервьюер:</b> держите ли вы в голове «тихие» источники изменений; есть ли мониторинг качества, а не только ошибок; умеете ли отличить дрейф (сигнал) от инцидента; закрываете ли цикл через golden set.</p>
+  </div></details>
+  <details class="q interview"><summary>Как выкатить новую версию промпта на 10 млн пользователей без риска?</summary><div class="a">
+    <p>Промпт — это релиз. Сначала офлайн: eval на golden set как гейт в CI, сравнение с текущей версией с доверительными интервалами. Затем флаг, где вариант — промпт с версией, модель и параметры вместе; детерминированный бакетинг по пользователю или диалогу, чтобы вариант не менялся посреди разговора. Ступени: внутренние пользователи → 1% → 5% → 25% → 50% → 100%. На каждой ступени guardrail-метрики против контроля: burn rate SLI, качество по онлайн-judge, доля отказов и эскалаций, стоимость и латентность на запрос, плюс exposure варианта в трейсах.</p>
+    <p>Kill switch отрабатываем заранее; при недоступности сервиса флагов работает проверенный default. Учитываю, что у нового варианта свой префикс prompt caching и scope семантического кэша, поэтому на время эксперимента стоимость выше. После 100% удаляю флаг и старый промпт.</p>
+    <p><b>На что смотрит интервьюер:</b> разделяете ли деплой и релиз; почему вариант — это промпт вместе с моделью; детерминированный и «липкий» бакетинг; guardrail-метрики и критерии остановки; понимание влияния на кэши.</p>
+  </div></details>
+  <details class="q interview"><summary>Сэкономьте 40% на LLM-счёте без потери качества.</summary><div class="a">
+    <p>Сначала разложить расходы по фичам, моделям и тенантам из трейсов: часто половина счёта — одна фича или зациклившийся агент. Дальше по эффекту и риску: prompt caching стабильного префикса (до 0.1× на input, риск нулевой); сокращение вывода и <code>max_tokens</code>; Batch API для фоновых задач (−50%); роутинг по сложности — Haiku 4.5 в 5 раз дешевле Opus 5, и если 60% трафика простые, счёт падает почти вдвое.</p>
+    <p>Роутинг делаю измеримо: разметка запросов «ответ маленькой модели проходит judge», классификатор (эвристика, затем обученный на логах), выбор порога по кривой «доля дешёвой модели против качества» на отложенной выборке, эскалация при провале валидации. Порог — во флаге, метрики — доля эскалаций и качество по маршрутам. Семантический кэш — только при доказанной повторяемости запросов. Каждое изменение проверяется evals, иначе это деградация, а не экономия.</p>
+    <p><b>На что смотрит интервьюер:</b> начинаете ли вы с измерения; порядок рычагов по риску; количественная оценка эффекта; как гарантируете «без потери качества» — разметка, кривая, eval, откат флагом.</p>
+  </div></details>
+  <details class="q interview"><summary>Свой LLM-шлюз или готовый (LiteLLM, Kong, Agent Router)?</summary><div class="a">
+    <p>Сначала требования: сколько команд и языков, нужны ли централизованные ключи, квоты в $ на команду, аудит и политика данных, бюджет на overhead, нужны ли нативные функции провайдеров (явные breakpoint'ы prompt caching, thinking, citations). Для одного-двух сервисов на Go достаточно библиотеки middleware. Для многих команд — сервис.</p>
+    <p>Готовые решения (LiteLLM Proxy, Agent Router на Envoy, Kong AI Gateway, Bifrost, облачные шлюзы) дают ключи, бюджеты, fallback и кэш за дни. Своё пишу, если нужны особые политики данных, аудит и резидентность, минимальный overhead или прозрачное проксирование нативных API. Часто разумен гибрид: open-source шлюз плюс свои плагины. В любом случае держу шлюз за своим интерфейсом в коде: в 2026 году один из популярных шлюзов купили, другой заархивировали, третий ушёл в режим поддержки, и миграция должна быть конфигом.</p>
+    <p><b>На что смотрит интервьюер:</b> выводите ли решение из требований, а не из вкуса; знаете ли актуальный ландшафт и что теряется при унификации API; думаете ли о шлюзе как о точке отказа и о риске вендора.</p>
   </div></details>
 
   <h2 id="links">Источники</h2>
@@ -1062,13 +1707,14 @@ func New(selfHosted LLM, cache *SemCache, meter *Metered) LLM {
     <li><a href="https://sre.google/sre-book/handling-overload/" target="_blank" rel="noopener">Google SRE Book: Handling Overload</a> и <a href="https://sre.google/sre-book/addressing-cascading-failures/" target="_blank" rel="noopener">Addressing Cascading Failures</a> (retry budget, load shedding)</li>
     <li><a href="https://docs.claude.com/en/api/errors" target="_blank" rel="noopener">Anthropic: Errors</a>, <a href="https://docs.claude.com/en/api/rate-limits" target="_blank" rel="noopener">Rate limits</a>, <a href="https://docs.claude.com/en/docs/build-with-claude/prompt-caching" target="_blank" rel="noopener">Prompt caching</a></li>
     <li><a href="https://github.com/anthropics/anthropic-sdk-go" target="_blank" rel="noopener">anthropic-sdk-go</a></li>
-    <li><a href="https://opentelemetry.io/docs/specs/semconv/gen-ai/" target="_blank" rel="noopener">OpenTelemetry: Semantic conventions for generative AI</a></li>
+    <li>OpenTelemetry GenAI semantic conventions v1.41.1: <a href="https://github.com/open-telemetry/semantic-conventions/blob/v1.41.1/docs/gen-ai/gen-ai-spans.md" target="_blank" rel="noopener">спаны</a>, <a href="https://github.com/open-telemetry/semantic-conventions/blob/v1.41.1/docs/gen-ai/gen-ai-agent-spans.md" target="_blank" rel="noopener">спаны агентов</a>, <a href="https://github.com/open-telemetry/semantic-conventions/blob/v1.41.1/docs/gen-ai/gen-ai-metrics.md" target="_blank" rel="noopener">метрики</a>; новый репозиторий <a href="https://github.com/open-telemetry/semantic-conventions-genai" target="_blank" rel="noopener">semantic-conventions-genai</a></li>
+    <li><a href="https://sre.google/workbook/alerting-on-slos/" target="_blank" rel="noopener">Google SRE Workbook: Alerting on SLOs</a> (burn rate, multiwindow multi-burn-rate алерты); генераторы правил <a href="https://github.com/slok/sloth" target="_blank" rel="noopener">Sloth</a> и <a href="https://github.com/pyrra-dev/pyrra" target="_blank" rel="noopener">Pyrra</a></li>
+    <li><a href="https://openfeature.dev/docs/reference/sdks/server/go/" target="_blank" rel="noopener">OpenFeature Go SDK</a> и <a href="https://pkg.go.dev/github.com/open-feature/go-sdk/openfeature" target="_blank" rel="noopener">справочник API</a></li>
+    <li>Шлюзы: <a href="https://docs.litellm.ai/docs/simple_proxy" target="_blank" rel="noopener">LiteLLM Proxy</a>, <a href="https://github.com/theagentrouter/agent-router" target="_blank" rel="noopener">Agent Router (бывший Envoy AI Gateway)</a>, <a href="https://developer.konghq.com/ai-gateway/" target="_blank" rel="noopener">Kong AI Gateway</a>, <a href="https://github.com/maximhq/bifrost" target="_blank" rel="noopener">Bifrost</a>, <a href="https://apisix.apache.org/docs/apisix/plugins/ai-proxy-multi/" target="_blank" rel="noopener">APISIX ai-proxy-multi</a>, <a href="https://github.com/Portkey-AI/gateway" target="_blank" rel="noopener">Portkey Gateway</a>, <a href="https://developers.cloudflare.com/ai-gateway/" target="_blank" rel="noopener">Cloudflare AI Gateway</a>, <a href="https://openrouter.ai/docs/guides/routing/model-fallbacks" target="_blank" rel="noopener">OpenRouter: fallback-модели</a></li>
+    <li>Prompt caching у других провайдеров: <a href="https://developers.openai.com/api/docs/guides/prompt-caching" target="_blank" rel="noopener">OpenAI</a>, <a href="https://ai.google.dev/gemini-api/docs/caching" target="_blank" rel="noopener">Gemini API</a></li>
     <li><a href="https://pkg.go.dev/golang.org/x/time/rate" target="_blank" rel="noopener">golang.org/x/time/rate</a>, <a href="https://github.com/sony/gobreaker" target="_blank" rel="noopener">sony/gobreaker</a></li>
     <li><a href="https://github.com/pgvector/pgvector" target="_blank" rel="noopener">pgvector</a> и <a href="https://github.com/pgvector/pgvector-go" target="_blank" rel="noopener">pgvector-go</a></li>
     <li><a href="https://langfuse.com/docs" target="_blank" rel="noopener">Langfuse docs</a>, <a href="https://docs.smith.langchain.com/" target="_blank" rel="noopener">LangSmith docs</a></li>
-    <li><a href="https://arxiv.org/abs/2309.06180" target="_blank" rel="noopener">Kwon et al., 2023. Efficient Memory Management for LLM Serving with PagedAttention</a></li>
-    <li><a href="https://www.usenix.org/conference/osdi22/presentation/yu" target="_blank" rel="noopener">Yu et al., OSDI 2022. Orca: continuous batching (iteration-level scheduling)</a></li>
-    <li><a href="https://docs.vllm.ai/" target="_blank" rel="noopener">vLLM docs</a>, <a href="https://huggingface.co/docs/text-generation-inference" target="_blank" rel="noopener">TGI docs</a>, <a href="https://github.com/ollama/ollama" target="_blank" rel="noopener">Ollama</a></li>
     <li><a href="https://genai.owasp.org/llm-top-10/" target="_blank" rel="noopener">OWASP Top 10 for LLM Applications</a></li>
     <li><a href="https://arxiv.org/abs/2312.06674" target="_blank" rel="noopener">Inan et al., 2023. Llama Guard</a>, <a href="https://microsoft.github.io/presidio/" target="_blank" rel="noopener">Microsoft Presidio</a> (PII)</li>
   </ul>
@@ -1473,62 +2119,186 @@ func New(selfHosted LLM, cache *SemCache, meter *Metered) LLM {
   Course.bindRange(document.getElementById('sc-th'), v => v.toFixed(3), draw);
 })();
 
-/* ---------- 5. Self-hosted vs API ---------- */
+/* ---------- 5. Роутинг по сложности ---------- */
 (function () {
-  const svg = document.getElementById('gpu-svg');
-  const out = document.getElementById('gpu-read');
+  const S = (tag, a, p) => { if (tag === 'text' && a.fill) a.style = 'fill:' + a.fill; return Course.svg(tag, a, p); };
   const $ = id => document.getElementById(id);
-  const S = Course.svg;
-  const ids = ['g-vol', 'g-api', 'g-gpu', 'g-tps', 'g-util', 'g-ops'];
-  const money = v => v >= 1e6 ? '$' + (v / 1e6).toFixed(2) + 'M' : v >= 1e3 ? '$' + (v / 1e3).toFixed(1) + 'K' : '$' + v.toFixed(0);
-  const toks = v => v >= 1e9 ? (v / 1e9).toFixed(2) + ' млрд' : (v / 1e6).toFixed(0) + ' млн';
+  const svg = $('rt-svg'), stats = $('rt-stats');
+  function rng(seed) { return function () { seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+  const rnd = rng(5);
+  const gauss = () => { let u = 0; while (!u) u = rnd(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rnd()); };
+  const N = 4000;
+  const reqs = Array.from({ length: N }, () => ({ d: Math.pow(rnd(), 2.2), z: gauss() })); // большинство простые
+  const pCheap = d => 0.985 - 0.85 * Math.pow(d, 2.6); // Haiku 4.5: доля хороших ответов
+  const pStrong = d => 0.99 - 0.12 * Math.pow(d, 2);   // Opus 5: решает всё, что решает Haiku, и часть сверх того
+  const CHEAP = 5, STRONG = 25; // $ на 1000 запросов: 3000 токенов вход + 400 выход
+  const CLS = { heur: { sigma: 0.3, cost: 0 }, llm: { sigma: 0.15, cost: 0.43 }, trained: { sigma: 0.08, cost: 0 } };
+  const DETECT = 0.6; // доля провалов дешёвой модели, которые ловит проверка ответа
 
-  function p() { return { vol: Math.pow(10, +$('g-vol').value), api: +$('g-api').value, gpu: +$('g-gpu').value, tps: +$('g-tps').value, util: +$('g-util').value, ops: +$('g-ops').value, ha: $('g-ha').checked }; }
-  const apiCost = (v, o) => v * 30 / 1e6 * o.api;
-  const gpus = (v, o) => Math.max(o.ha ? 2 : 1, Math.ceil(v / (o.tps * o.util * 86400)));
-  const selfCost = (v, o) => gpus(v, o) * o.gpu * 24 * 30 + o.ops;
+  function at(th, sigma, clsCost, esc) {
+    let q = 0, cost = 0, cheap = 0, escN = 0;
+    for (const r of reqs) {
+      const strong = th <= 0 || (th < 1 && r.d + sigma * r.z >= th);
+      if (strong) { q += pStrong(r.d); cost += STRONG; continue; }
+      cheap++;
+      const f = 1 - pCheap(r.d);
+      if (esc) { q += pCheap(r.d) + DETECT * Math.max(0, pStrong(r.d) - pCheap(r.d)); cost += CHEAP + f * DETECT * STRONG; escN += f * DETECT; }
+      else { q += pCheap(r.d); cost += CHEAP; }
+    }
+    const usesCls = th > 0 && th < 1;
+    return { q: q / N, cost: cost / N + (usesCls ? clsCost : 0), cheap: cheap / N, esc: escN / N };
+  }
+
+  const TH = []; for (let t = 0; t <= 1.0001; t += 0.02) TH.push(+t.toFixed(2));
+  function draw() {
+    const th = +$('rt-th').value, c = CLS[$('rt-cls').value], esc = $('rt-esc').checked;
+    const cur = TH.map(t => at(t, c.sigma, c.cost, esc));
+    const ideal = TH.map(t => at(t, 0, 0, esc));
+    const p = at(th, c.sigma, c.cost, esc), all = at(0, 0, 0, false);
+    svg.innerHTML = '';
+    const W = 640, H = 320, L = 52, R = 16, T = 16, B = 38;
+    const pts = cur.concat(ideal);
+    const qMin = Math.floor(Math.min(...pts.map(v => v.q)) * 100) / 100, qMax = Math.ceil(Math.max(...pts.map(v => v.q)) * 100 + 0.5) / 100;
+    const cMax = Math.ceil(Math.max(...pts.map(v => v.cost)) + 1);
+    const x = v => L + (v - 4) / (cMax - 4) * (W - L - R), y = v => H - B - (v - qMin) / (qMax - qMin) * (H - B - T);
+    for (let v = 5; v <= cMax; v += 5) {
+      S('line', { x1: x(v), x2: x(v), y1: T, y2: H - B, stroke: 'var(--border)' }, svg);
+      S('text', { x: x(v), y: H - B + 16, 'font-size': 11, 'text-anchor': 'middle' }, svg).textContent = '$' + v;
+    }
+    const step = (qMax - qMin) > 0.06 ? 0.02 : 0.01;
+    for (let v = Math.ceil(qMin / step) * step; v <= qMax + 1e-9; v += step) {
+      S('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: 'var(--border)' }, svg);
+      S('text', { x: L - 6, y: y(v) + 4, 'font-size': 11, 'text-anchor': 'end' }, svg).textContent = (v * 100).toFixed(0) + '%';
+    }
+    S('text', { x: W - R, y: H - 6, 'font-size': 11, 'text-anchor': 'end', fill: 'var(--muted)' }, svg).textContent = '$ на 1000 запросов →';
+    S('text', { x: L + 6, y: T + 12, 'font-size': 11, fill: 'var(--muted)' }, svg).textContent = 'качество ↑';
+    const line = (arr, col, dash) => S('polyline', { points: arr.map(v => `${x(v.cost)},${y(v.q)}`).join(' '), fill: 'none', stroke: `var(--${col})`, 'stroke-width': 2.2, 'stroke-dasharray': dash || '' }, svg);
+    line(ideal, 'muted', '5 4'); line(cur, 'accent');
+    const ends = [[cur[cur.length - 1], 'всё на Haiku', 'start'], [cur[0], 'всё на Opus', 'end']];
+    ends.forEach(([v, lbl, anc]) => {
+      S('circle', { cx: x(v.cost), cy: y(v.q), r: 3.5, fill: 'var(--accent)' }, svg);
+      S('text', { x: x(v.cost) + (anc === 'start' ? 8 : -6), y: y(v.q) - 8, 'font-size': 11, 'text-anchor': anc, fill: 'var(--muted)' }, svg).textContent = lbl;
+    });
+    S('circle', { cx: x(p.cost), cy: y(p.q), r: 6.5, fill: 'var(--warn)', stroke: 'var(--card)', 'stroke-width': 2 }, svg);
+    S('text', { x: x(p.cost), y: y(p.q) - 11, 'font-size': 11.5, 'text-anchor': 'middle', fill: 'var(--warn)', 'font-weight': 600 }, svg).textContent = 'порог ' + th.toFixed(2);
+    const dq = (p.q - all.q) * 100, save = 100 * (1 - p.cost / all.cost);
+    const cells = [
+      [(p.cheap * 100).toFixed(0) + '%', 'трафика на Haiku 4.5'],
+      [(p.q * 100).toFixed(1) + '%', `качество (всё на Opus: ${(all.q * 100).toFixed(1)}%, ${dq >= 0 ? '+' : ''}${dq.toFixed(1)} п.п.)`],
+      ['$' + p.cost.toFixed(2), `на 1000 запросов (${save >= 0 ? '−' : '+'}${Math.abs(save).toFixed(0)}% к «всё на Opus»)`],
+      [(p.esc * 100).toFixed(1) + '%', esc ? 'эскалаций на Opus' : 'эскалации выключены'],
+    ];
+    stats.innerHTML = cells.map(v => `<div class="stat"><b>${v[0]}</b><span>${v[1]}</span></div>`).join('');
+  }
+  Course.bindRange($('rt-th'), v => v.toFixed(2), draw);
+  $('rt-cls').addEventListener('change', draw);
+  $('rt-esc').addEventListener('change', draw);
+})();
+
+/* ---------- 6. Error budget и burn-rate алерты ---------- */
+(function () {
+  const S = (tag, a, p) => { if (tag === 'text' && a.fill) a.style = 'fill:' + a.fill; return Course.svg(tag, a, p); };
+  const $ = id => document.getElementById(id);
+  const svg = $('bn-svg'), out = $('bn-read');
+  function rng(seed) { return function () { seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+  const STEP = 5, PER_DAY = 288, DAYS = 30, NB = DAYS * PER_DAY, RPM = 100, START = 12 * PER_DAY;
+  const DURS = [[5, '5 мин'], [15, '15 мин'], [30, '30 мин'], [60, '1 ч'], [120, '2 ч'], [240, '4 ч'], [480, '8 ч'], [720, '12 ч'], [1440, '1 день'], [2880, '2 дня'], [4320, '3 дня']];
+  const RULES = [
+    { burn: 14.4, long: 12, short: 1, page: true, name: 'page 14.4× · 1 ч / 5 мин' },
+    { burn: 6, long: 72, short: 6, page: true, name: 'page 6× · 6 ч / 30 мин' },
+    { burn: 1, long: 864, short: 72, page: false, name: 'тикет 1× · 3 дня / 6 ч' },
+  ];
+  const SAMPLE = 0.02, TPR = 0.9, TNR = 0.98;
+
+  function simulate(o) {
+    const rnd = rng(3);
+    const durB = Math.max(1, Math.round(o.dur / STEP));
+    const base = 0.2 * (1 - o.slo);
+    const ct = new Float64Array(NB + 1), cb = new Float64Array(NB + 1);
+    for (let i = 0; i < NB; i++) {
+      const inc = i >= START && i < START + durB;
+      const p = inc ? Math.max(o.err, base) : base;
+      let t, b;
+      if (o.judge) { // выборка 2% и ошибки судьи: измеряем не истину, а мнение судьи
+        const pm = p * TPR + (1 - p) * (1 - TNR);
+        t = RPM * STEP * SAMPLE; b = 0;
+        for (let k = 0; k < t; k++) if (rnd() < pm) b++;
+      } else { t = RPM * STEP; b = t * p; }
+      ct[i + 1] = ct[i] + t; cb[i + 1] = cb[i] + b;
+    }
+    const win = (i, w) => { const a = Math.max(0, i + 1 - w); return [ct[i + 1] - ct[a], cb[i + 1] - cb[a]]; };
+    const fire = RULES.map(r => {
+      const f = new Uint8Array(NB);
+      for (let i = 0; i < NB; i++) {
+        const [lt, lb] = win(i, r.long), [st, sb] = win(i, r.short);
+        if (st === 0 || (o.min && st < 50)) continue;
+        if (lb / lt / (1 - o.slo) >= r.burn && sb / st / (1 - o.slo) >= r.burn) f[i] = 1;
+      }
+      return f;
+    });
+    return { ct, cb, fire, durB, budget: ct[NB] * (1 - o.slo) };
+  }
 
   function draw() {
-    const o = p();
+    const o = { slo: +$('bn-slo').value, err: +$('bn-err').value, dur: DURS[+$('bn-dur').value][0], judge: $('bn-sli').value === 'judge', min: $('bn-min').checked };
+    const zoom = $('bn-zoom').value === 'zoom';
+    const r = simulate(o);
     svg.innerHTML = '';
-    const L = 56, R = 14, T = 14, B = 34, W = 640, H = 300;
-    const lx0 = 6, lx1 = 10;
-    const xs = [];
-    for (let e = lx0; e <= lx1 + 1e-9; e += 0.02) xs.push(Math.pow(10, e));
-    const all = xs.flatMap(v => [apiCost(v, o), selfCost(v, o)]);
-    const ly0 = Math.floor(Math.log10(Math.max(10, Math.min(...all)))), ly1 = Math.ceil(Math.log10(Math.max(...all)));
-    const x = v => L + (Math.log10(v) - lx0) / (lx1 - lx0) * (W - L - R);
-    const y = v => H - B - (Math.log10(Math.max(v, 1)) - ly0) / (ly1 - ly0) * (H - B - T);
-    for (let e = ly0; e <= ly1; e++) { S('line', { x1: L, x2: W - R, y1: y(10 ** e), y2: y(10 ** e), stroke: 'var(--border)' }, svg); S('text', { x: L - 6, y: y(10 ** e) + 4, 'font-size': 11, 'text-anchor': 'end' }, svg).textContent = money(10 ** e); }
-    for (let e = lx0; e <= lx1; e++) { S('line', { x1: x(10 ** e), x2: x(10 ** e), y1: T, y2: H - B, stroke: 'var(--border)' }, svg); S('text', { x: x(10 ** e), y: H - B + 16, 'font-size': 11, 'text-anchor': e === lx1 ? 'end' : 'middle' }, svg).textContent = ['1 млн', '10 млн', '100 млн', '1 млрд', '10 млрд'][e - lx0]; }
-    S('text', { x: W - R, y: H - 4, 'font-size': 11, 'text-anchor': 'end', fill: 'var(--muted)' }, svg).textContent = 'токенов в день →';
-    S('text', { x: 4, y: T + 2, 'font-size': 11, fill: 'var(--muted)' }, svg).textContent = '$/мес';
-    S('polyline', { points: xs.map(v => `${x(v)},${y(apiCost(v, o))}`).join(' '), fill: 'none', stroke: 'var(--accent)', 'stroke-width': 2.5 }, svg);
-    S('polyline', { points: xs.map(v => `${x(v)},${y(selfCost(v, o))}`).join(' '), fill: 'none', stroke: 'var(--violet)', 'stroke-width': 2.5 }, svg);
-    let be = null;
-    for (const v of xs) if (selfCost(v, o) < apiCost(v, o)) { be = v; break; }
-    if (be) {
-      S('line', { x1: x(be), x2: x(be), y1: T, y2: H - B, stroke: 'var(--ok)', 'stroke-width': 1.5, 'stroke-dasharray': '5 4' }, svg);
-      S('circle', { cx: x(be), cy: y(apiCost(be, o)), r: 5, fill: 'var(--ok)' }, svg);
+    const W = 640, L = 150, R = 12, T = 12, CH = 170, LANE = 22, H = 300;
+    const i0 = zoom ? START - 144 : 0, i1 = zoom ? START + 432 : NB; // зум: −12 ч … +36 ч от начала инцидента
+    const x = i => L + (Math.min(Math.max(i, i0), i1) - i0) / (i1 - i0) * (W - L - R);
+    const left = i => 1 - r.cb[i] / r.budget;
+    const stepI = zoom ? 1 : 6;
+    let lo = 1, hi = zoom ? -9 : 1;
+    for (let i = i0; i <= i1; i += stepI) { lo = Math.min(lo, left(i)); hi = Math.max(hi, left(i)); }
+    lo = Math.max(-1, zoom ? Math.floor(lo * 20) / 20 : Math.min(0, Math.floor(lo * 4) / 4));
+    hi = zoom ? Math.max(lo + 0.05, Math.ceil(hi * 20) / 20) : 1;
+    const y = v => T + (1 - (Math.min(Math.max(v, lo), hi) - lo) / (hi - lo)) * CH;
+    if (START + r.durB > i0 && START < i1) S('rect', { x: x(START), y: T, width: Math.max(3, x(START + r.durB) - x(START)), height: CH + LANE * 3 + 8, fill: 'var(--bad-soft)' }, svg);
+    const gstep = (hi - lo) > 0.5 ? 0.25 : (hi - lo) > 0.2 ? 0.05 : 0.01;
+    for (let v = Math.ceil(lo / gstep) * gstep; v <= hi + 1e-9; v += gstep) {
+      const zero = Math.abs(v) < 1e-9;
+      S('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: zero ? 'var(--muted)' : 'var(--border)', 'stroke-dasharray': zero ? '4 3' : '' }, svg);
+      S('text', { x: L - 6, y: y(v) + 4, 'font-size': 11, 'text-anchor': 'end' }, svg).textContent = Math.round(v * 100) + '%';
     }
-    S('line', { x1: x(o.vol), x2: x(o.vol), y1: T, y2: H - B, stroke: 'var(--text)', 'stroke-width': 1, opacity: 0.6 }, svg);
-    S('circle', { cx: x(o.vol), cy: y(apiCost(o.vol, o)), r: 4.5, fill: 'var(--accent)' }, svg);
-    S('circle', { cx: x(o.vol), cy: y(selfCost(o.vol, o)), r: 4.5, fill: 'var(--violet)' }, svg);
-    const a = apiCost(o.vol, o), s = selfCost(o.vol, o), n = gpus(o.vol, o);
-    const eff = s / (o.vol * 30 / 1e6);
-    out.textContent =
-      `Объём: ${toks(o.vol)} токенов/день (${toks(o.vol * 30)} в мес)\n` +
-      `API: ${money(a)}/мес    Self-hosted: ${money(s)}/мес (${n} GPU + ops)    эффективно $${eff.toFixed(2)} за 1M\n` +
-      (be ? `Безубыточность ≈ ${toks(be)} токенов/день. ` : 'В этом диапазоне self-hosted не окупается. ') +
-      (s < a ? `Self-hosted дешевле в ${(a / s).toFixed(1)}×, если модель проходит ваши evals.` : `API дешевле в ${(s / a).toFixed(1)}×.`);
+    const pts = [];
+    for (let i = i0; i <= i1; i += stepI) pts.push(`${x(i).toFixed(1)},${y(left(i)).toFixed(1)}`);
+    S('polyline', { points: pts.join(' '), fill: 'none', stroke: 'var(--accent)', 'stroke-width': 2.2 }, svg);
+    S('text', { x: W - R - 4, y: T + 12, 'font-size': 11, 'text-anchor': 'end', fill: 'var(--muted)' }, svg).textContent = 'остаток error budget';
+    const firstFire = [], falseN = [];
+    RULES.forEach((rule, k) => {
+      const ly = T + CH + 10 + k * LANE;
+      S('text', { x: L - 6, y: ly + 12, 'font-size': 10.5, 'text-anchor': 'end', fill: 'var(--muted)' }, svg).textContent = rule.name;
+      let run = -1, first = -1, fp = 0;
+      const f = r.fire[k];
+      for (let i = 0; i <= NB; i++) {
+        const on = i < NB && f[i];
+        if (on && run < 0) { run = i; if (i >= START && first < 0) first = i; if (i < START || i > START + r.durB + rule.long) fp++; }
+        if (!on && run >= 0) {
+          if (i > i0 && run < i1) S('rect', { x: x(run), y: ly + 2, width: Math.max(2, x(i) - x(run)), height: 12, rx: 2, fill: rule.page ? 'var(--bad)' : 'var(--warn)' }, svg);
+          run = -1;
+        }
+      }
+      firstFire.push(first < 0 && f[START] ? -2 : first); falseN.push(fp);
+    });
+    if (zoom) for (let h = -12; h <= 36; h += 6) S('text', { x: x(START + h * 12), y: H - 6, 'font-size': 11, 'text-anchor': h === -12 ? 'start' : h === 36 ? 'end' : 'middle' }, svg).textContent = (h > 0 ? '+' : '') + h + ' ч';
+    else for (let d = 0; d <= DAYS; d += 5) S('text', { x: x(d * PER_DAY), y: H - 6, 'font-size': 11, 'text-anchor': d === 0 ? 'start' : d === DAYS ? 'end' : 'middle' }, svg).textContent = d + ' д';
+    const burn = o.judge ? (o.err * TPR + (1 - o.err) * (1 - TNR)) / (1 - o.slo) : o.err / (1 - o.slo);
+    const consumed = o.err * o.dur / (DAYS * 1440 * (1 - o.slo));
+    const lines = [
+      `Burn rate во время инцидента: ${burn.toFixed(1)}× · инцидент один съедает ${(consumed * 100).toFixed(0)}% месячного бюджета` + (o.judge ? ' (по истинной доле)' : ''),
+      'Первое срабатывание после начала: ' + RULES.map((rule, k) => `${rule.burn}× — ${firstFire[k] === -2 ? 'горело ещё до инцидента' : firstFire[k] < 0 || firstFire[k] > START + r.durB + rule.long ? 'нет' : ((firstFire[k] - START + 1) * STEP) + ' мин'}`).join(' · '),
+      `Срабатываний вне инцидента за 30 дней: ${falseN.reduce((a, b) => a + b, 0)} · остаток бюджета на 30-й день: ${(left(NB) * 100).toFixed(0)}%`,
+    ];
+    if (o.judge) {
+      const basePm = 0.2 * (1 - o.slo) * TPR + (1 - 0.2 * (1 - o.slo)) * (1 - TNR);
+      lines.push(`Без инцидента судья видит ${(basePm * 100).toFixed(1)}% «плохих» — это burn rate ${(basePm / (1 - o.slo)).toFixed(1)}× от одних его ошибок.` + (o.slo > 0.97 ? ' SLO для такого SLI должен быть соизмерим с точностью судьи.' : ''));
+    }
+    out.textContent = lines.join('\n');
   }
-  Course.bindRange($('g-vol'), v => toks(Math.pow(10, v)), draw);
-  Course.bindRange($('g-api'), v => '$' + v.toFixed(1), draw);
-  Course.bindRange($('g-gpu'), v => '$' + v.toFixed(1), draw);
-  Course.bindRange($('g-tps'), v => String(v), draw);
-  Course.bindRange($('g-util'), v => Math.round(v * 100) + '%', draw);
-  Course.bindRange($('g-ops'), v => money(v), draw);
-  $('g-ha').addEventListener('change', draw);
+  Course.bindRange($('bn-err'), v => (v * 100).toFixed(1) + '%', draw);
+  Course.bindRange($('bn-dur'), v => DURS[v][1], draw);
+  ['bn-slo', 'bn-sli', 'bn-min', 'bn-zoom'].forEach(id => $(id).addEventListener('change', draw));
 })();
 </script>
 </body>

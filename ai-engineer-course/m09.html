@@ -1034,6 +1034,7 @@ func GuardedComplete(ctx context.Context, llm LLM, req Request,
 	}
 	return resp, nil
 }</code></pre>
+  <p class="muted">Полная цепочка guards с fail-closed по умолчанию, allowlist инструментов со scopes и red-team как gate — <a href="m07.html#middleware">модуль 7</a>.</p>
 
   <h2 id="selfhosted">Self-hosted инференс: коротко</h2>
   <p>Свой инференс поднимают по четырём причинам: <b>приватность</b> (данные не покидают периметр), <b>стоимость</b> на большом и ровном объёме, <b>контроль</b> (своя fine-tuned модель, фиксированная версия, предсказуемая латентность) и <b>офлайн или edge</b>. Для этого модуля важно одно: self-hosted модель — ещё одно звено цепочки. Её подключают через тот же <code>OpenAICompat</code>-адаптер (vLLM, SGLang и Ollama отдают OpenAI-совместимый API), закрывают breaker'ом и прогоняют по тем же evals.</p>

@@ -978,6 +978,7 @@ func RunSessions(ctx context.Context, a *Agent, task string, check Check, maxSes
     <li>Least privilege: для Postgres — отдельная роль только с <code>SELECT</code> на нужные схемы, а не «read-only по честному слову» в промпте.</li>
     <li>Локальный HTTP-сервер слушает <code>127.0.0.1</code>, проверяет <code>Origin</code> (защита от DNS rebinding) и всё равно требует токен.</li>
     <li>Опасные действия — подтверждение человеком на стороне host; сервер не должен полагаться на то, что host спросит.</li>
+    <li>Токен пользователя вместо сервисного суперключа, token exchange и step-up для необратимых действий — <a href="m07.html#agency">модуль 7</a>.</li>
   </ul>
 
   <h2 id="mcp-go">Свой MCP-сервер на Go</h2>

@@ -198,3 +198,10 @@ details.q.interview > summary::after { content: "собес"; font-size: 11px; f
 .module-list a.card.done .num::after { content: " · пройден ✓"; color: var(--ok); }
 
 @media print { .topbar, .sidebar, .module-footer, .done-toggle { display: none; } .layout { display: block; } details.q > .a { display: block; } }
+/* Выбор стека Go / Java */
+.stack-switch { display: inline-flex; }
+.stack-switch .btn { border-radius: 0; }
+.stack-switch .btn:first-child { border-radius: 8px 0 0 8px; }
+.stack-switch .btn:last-child { border-radius: 0 8px 8px 0; margin-left: -1px; }
+.stack-switch .btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+html:not([data-stack=java]) [data-only=java], html[data-stack=java] [data-only=go] { display: none !important; }

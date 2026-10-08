@@ -2,14 +2,14 @@
 // Страница модуля: <body data-module="m01"> + <main class="content">…</main> + этот скрипт.
 (function () {
   const MODULES = [
-    { id: "m00", title: "Что Go-разработчик уже умеет", desc: "Конкурентность, надёжность, observability, БД и тесты — как это переносится в AI engineering." },
+    { id: "m00", title: { go: "Что Go-разработчик уже умеет", java: "Что Java-разработчик уже умеет" }, desc: "Конкурентность, надёжность, observability, БД и тесты — как это переносится в AI engineering." },
     { id: "m01", title: "Как работают LLM", desc: "Токены, BPE, attention, сэмплинг, эмбеддинги, обучение, KV-cache, квантизация, reasoning." },
     { id: "m02", title: "LLM API", desc: "Messages, стриминг SSE, structured output, tool use, prompt caching, batch, мультимодальность." },
     { id: "m03", title: "Prompt engineering как инженерия", desc: "Инструкции, few-shot, XML, CoT, длинный контекст, версионирование, регрессия, prompt injection." },
-    { id: "m04", title: "Инструменты", desc: "Python для Go-разработчика, FastAPI, pandas, SDK, LangChain/LlamaIndex/LangGraph, Jupyter, coding agents." },
+    { id: "m04", title: "Инструменты", desc: { go: "Python для Go-разработчика, FastAPI, pandas, SDK, LangChain/LlamaIndex/LangGraph, Jupyter, coding agents.", java: "Python для Java-разработчика, FastAPI, pandas, SDK, LangChain4j/Spring AI и LangChain/LangGraph, Jupyter, coding agents." } },
     { id: "m05", title: "RAG", desc: "Чанкинг, эмбеддинги, векторные БД, HNSW, гибридный поиск, reranking, метрики, agentic RAG, GraphRAG, отладка." },
-    { id: "m06", title: "Агенты и MCP", desc: "Агентный цикл, паттерны Anthropic, context engineering, long-horizon задачи, MCP-сервер на Go, мультиагентность." },
-    { id: "m07", title: "Безопасность и guardrails", desc: "Модель угроз, OWASP Top 10 for LLM 2026, непрямые инъекции, excessive agency, guardrails на Go, red-teaming." },
+    { id: "m06", title: "Агенты и MCP", desc: { go: "Агентный цикл, паттерны Anthropic, context engineering, long-horizon задачи, MCP-сервер на Go, мультиагентность.", java: "Агентный цикл, паттерны Anthropic, context engineering, long-horizon задачи, MCP-сервер на Java, мультиагентность." } },
+    { id: "m07", title: "Безопасность и guardrails", desc: { go: "Модель угроз, OWASP Top 10 for LLM 2026, непрямые инъекции, excessive agency, guardrails на Go, red-teaming.", java: "Модель угроз, OWASP Top 10 for LLM 2026, непрямые инъекции, excessive agency, guardrails на Java, red-teaming." } },
     { id: "m08", title: "Evals", desc: "Error analysis, golden dataset, LLM-as-a-judge и κ, bootstrap, A/B, траектории агентов, quality gate в CI." },
     { id: "m09", title: "Продакшн", desc: "LLM-шлюз, ретраи, fallback, бюджеты, кэши, OpenTelemetry GenAI, SLO, дрейф, фича-флаги." },
     { id: "m10", title: "Свои модели: инференс и адаптация", desc: "vLLM и serving, батчинг, квантизация, VRAM, экономика self-host; LoRA, DPO, дистилляция, метрики ML." },
@@ -19,8 +19,12 @@
     { id: "m14", title: "Подготовка к собеседованию", desc: "Этапы, 63 вопроса с эталонами (вкл. безопасность, свои модели, governance, senior), дизайн-кейсы, рассказ о проектах, take-home, чек-лист." },
     { id: "m15", title: "Капстоун", desc: "Итоговый продакшн-агент: RAG, MCP, guardrails, evals в CI, трейсинг, стоимость и защита design doc." },
     { id: "m16", title: "Мультимодальность и голос", desc: "Факультатив: vision и документы, STT → LLM → TTS против speech-to-speech, бюджет латентности, barge-in." },
-    { id: "projects", title: "Сквозные проекты", desc: "План по неделям: RAG на Go + pgvector, eval-набор, агент с MCP, red-team, трейсинг, кэш, дашборд." },
+    { id: "projects", title: "Сквозные проекты", desc: { go: "План по неделям: RAG на Go + pgvector, eval-набор, агент с MCP, red-team, трейсинг, кэш, дашборд.", java: "План по неделям: RAG на Java + pgvector, eval-набор, агент с MCP, red-team, трейсинг, кэш, дашборд." } },
   ];
+  // Стек читателя: элементы с data-only="go|java" остаются только для выбранного стека.
+  const STACK = (() => { try { return JSON.parse(localStorage.getItem("aiec:stack")) === "java" ? "java" : "go"; } catch { return "go"; } })();
+  document.documentElement.dataset.stack = STACK;
+  const tx = v => typeof v === "object" ? v[STACK] : v;
   const KEY = "aiec:done";
   const store = {
     get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
@@ -44,10 +48,23 @@
     document.dispatchEvent(new CustomEvent("themechange"));
   }
 
+  function stackSwitch() {
+    const w = el("span", { className: "stack-switch", role: "group", ariaLabel: "Стек" });
+    for (const s of ["go", "java"]) {
+      const b = el("button", { type: "button", className: "btn" + (s === STACK ? " active" : ""), textContent: s === "go" ? "Go" : "Java" });
+      b.setAttribute("aria-pressed", s === STACK);
+      b.onclick = () => { if (s !== STACK) { store.set("aiec:stack", s); location.reload(); } };
+      w.append(b);
+    }
+    return w;
+  }
+  function filterStack() { document.querySelectorAll("[data-only]").forEach(e => { if (e.dataset.only !== STACK) e.remove(); }); }
+
   // ---- Подсветка кода (минимальная, без зависимостей) ----
   const KW = {
     go: "break case chan const continue default defer else fallthrough for func go goto if import interface map package range return select struct switch type var nil true false err error string int int64 float64 float32 bool byte any context",
     python: "and as assert async await break class continue def del elif else except False finally for from global if import in is lambda None nonlocal not or pass raise return True try while with yield self",
+    java: "abstract assert boolean break byte case catch char class const continue default do double else enum extends final finally float for if implements import instanceof int interface long native new package private protected public return short static strictfp super switch synchronized this throw throws transient try void volatile while var record sealed permits yield null true false String List Map Set Optional",
     sql: "select from where join left inner on group by order limit insert into values update set delete create table index using as and or not null primary key references with",
   };
   function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
@@ -78,6 +95,7 @@
       <span class="progress-mini" title="Прогресс курса"><i></i></span>
       <button class="btn" data-theme-btn></button>`);
     document.body.prepend(top);
+    top.querySelector(".spacer").after(stackSwitch());
     top.querySelector(".menu-btn").onclick = () => document.body.classList.toggle("nav-open");
     top.querySelector("[data-theme-btn]").onclick = toggleTheme;
     top.querySelector("[data-theme-btn]").textContent = isDark() ? "☀︎ Светлая" : "☾ Тёмная";
@@ -89,7 +107,7 @@
     const d = done();
     let html = `<h4>Модули</h4>`;
     for (const m of MODULES) {
-      html += `<a href="${href(m)}" class="${m.id === currentId ? "current" : ""} ${d.has(m.id) ? "done" : ""}"><span class="n">${num(m)}</span><span>${m.title}</span></a>`;
+      html += `<a href="${href(m)}" class="${m.id === currentId ? "current" : ""} ${d.has(m.id) ? "done" : ""}"><span class="n">${num(m)}</span><span>${tx(m.title)}</span></a>`;
       if (m.id === currentId) {
         const hs = [...main.querySelectorAll("h2")];
         hs.forEach((h, i) => { if (!h.id) h.id = "s" + (i + 1); });
@@ -109,8 +127,8 @@
       paint(); toggle.append(b); main.append(toggle);
       const prev = MODULES[idx - 1], next = MODULES[idx + 1];
       main.append(el("div", { className: "module-footer" },
-        `<span>${prev ? `<a class="btn" href="${href(prev)}">← ${num(prev)}. ${prev.title}</a>` : `<a class="btn" href="index.html">← Оглавление</a>`}</span>
-         <span>${next ? `<a class="btn primary" href="${href(next)}">${num(next)}. ${next.title} →</a>` : `<a class="btn primary" href="index.html">К оглавлению →</a>`}</span>`));
+        `<span>${prev ? `<a class="btn" href="${href(prev)}">← ${num(prev)}. ${tx(prev.title)}</a>` : `<a class="btn" href="index.html">← Оглавление</a>`}</span>
+         <span>${next ? `<a class="btn primary" href="${href(next)}">${num(next)}. ${tx(next.title)} →</a>` : `<a class="btn primary" href="index.html">К оглавлению →</a>`}</span>`));
     }
   }
 
@@ -155,7 +173,7 @@
     const list = document.getElementById("module-list");
     if (!list) return;
     const d = done();
-    list.innerHTML = MODULES.map(m => `<a class="card ${d.has(m.id) ? "done" : ""}" href="${href(m)}"><div class="num">${m.id === "projects" ? "Практика" : "Модуль " + num(m)}</div><h3>${m.title}</h3><p>${m.desc}</p></a>`).join("");
+    list.innerHTML = MODULES.map(m => `<a class="card ${d.has(m.id) ? "done" : ""}" href="${href(m)}"><div class="num">${m.id === "projects" ? "Практика" : "Модуль " + num(m)}</div><h3>${tx(m.title)}</h3><p>${tx(m.desc)}</p></a>`).join("");
     const bar = document.querySelector(".progress-big > i"); if (bar) bar.style.width = pct() + "%";
     const t = document.getElementById("progress-text");
     if (t) t.textContent = `Пройдено ${MODULES.filter(m => d.has(m.id)).length} из ${MODULES.length} (${pct()}%)`;
@@ -165,7 +183,7 @@
 
   // Утилиты для визуализаций в модулях.
   window.Course = {
-    MODULES, isDark,
+    MODULES, isDark, STACK,
     css: name => getComputedStyle(root).getPropertyValue(name).trim(),
     svg(tag, attrs, parent) { const e = document.createElementNS("http://www.w3.org/2000/svg", tag); for (const k in attrs || {}) e.setAttribute(k, attrs[k]); if (parent) parent.append(e); return e; },
     // Привязка ползунка к <output> рядом: bindRange(input, fmt, onChange)
@@ -173,9 +191,11 @@
   };
 
   function init() {
+    filterStack();
     const id = document.body.dataset.module;
     if (id) buildChrome(id);
     else {
+      document.querySelector(".topbar .spacer")?.after(stackSwitch());
       const b = document.querySelector("[data-theme-btn]");
       if (b) { b.textContent = isDark() ? "☀︎ Светлая" : "☾ Тёмная"; b.onclick = toggleTheme; }
       buildIndex();

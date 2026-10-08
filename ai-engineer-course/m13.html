@@ -30,10 +30,10 @@
     <div class="eyebrow">Модуль 13</div>
     <h1>Senior-практики: архитектура, решения, лидерство</h1>
     <p class="lead">Сеньора отличают решения, которые переживают смену модели, и команда, которая их исполняет без него. Как записывать и защищать архитектурные решения (ADR, design review), выбирать модель и вендора по TCO, держать надёжность недетерминированной системы через SLO и error budget, разбирать AI-инциденты без поиска виноватых, говорить с бизнесом на языке денег и риска и задавать стандарты команды, включая работу с coding agents.</p>
-    <div class="meta-row"><span class="chip">≈ 8 часов</span><span class="chip">Go</span><span class="chip">3 визуализации</span><span class="chip">на момент написания: октябрь 2026</span></div>
+    <div class="meta-row"><span class="chip">≈ 8 часов</span><span class="chip"><span data-only="go">Go</span><span data-only="java">Java</span></span><span class="chip">3 визуализации</span><span class="chip">на момент написания: октябрь 2026</span></div>
   </div>
 
-  <p>System design (модуль 12) отвечает на вопрос «как устроить систему». Здесь — что начинается после доски: как решение записать, провести через ревью, пересмотреть, эксплуатировать и объяснить людям, которые не читают трейсы. Код — калькулятор TCO, error budget и линтер ADR на Go — и шаблоны документов лежат в <code>examples/m13-senior</code>.</p>
+  <p>System design (модуль 12) отвечает на вопрос «как устроить систему». Здесь — что начинается после доски: как решение записать, провести через ревью, пересмотреть, эксплуатировать и объяснить людям, которые не читают трейсы. Код — калькулятор TCO, error budget и линтер ADR на <span data-only="go">Go</span><span data-only="java">Java</span> — лежит в <code data-only="go">examples/m13-senior</code><code data-only="java">examples/java/m13-senior</code>, шаблоны документов — в <code>examples/m13-senior/templates</code>.</p>
 
   <h2 id="adr">Архитектурные решения: ADR для AI-систем</h2>
   <p><b>ADR</b> (Architecture Decision Record, запись об архитектурном решении) — короткий документ об одном решении. Формат предложил Майкл Найгард в 2011 году: заголовок, <b>контекст</b> (какие силы конфликтуют), <b>решение</b> («мы будем…»), <b>статус</b> (предложено, принято, заменено) и <b>последствия</b> — хорошие, плохие и нейтральные. ADR лежат в репозитории рядом с кодом (обычно <code>docs/adr/0007-….md</code>), нумеруются и не переписываются: если решение поменялось, пишут новый ADR со ссылкой «заменяет ADR-0007», а старый получает статус «заменено». Через год история решений читается как changelog архитектуры.</p>
@@ -126,7 +126,7 @@ $ за запрос и в месяц сейчас и при ×10; токены, 
   </div>
   <p>В примере решение принято ради латентности, а экономия ≈ $900 в месяц названа побочным эффектом: это снимает на ревью спор «ради $900 усложнили систему». И роутер честно хуже Sonnet по точности: минус с доверительным интервалом убеждает лучше таблицы, где выбранный вариант выигрывает во всех столбцах.</p>
   <div class="callout warn"><span class="title">Типичные дефекты ADR</span>Альтернативы-чучела (ревьюер это видит и перестаёт доверять документу); цифры без даты и допущений; eval «с 88 до 91%» на 80 примерах — шум (<a href="m08.html#stats">модуль 8</a>); ADR задним числом; откат без механизма и владельца.</div>
-  <p>Срок пересмотра работает, только если его проверяют. Дешевле всего — линтер обязательных разделов в CI и ночная джоба, открывающая задачу на каждый ADR с прошедшей датой: функции <code>MissingSections</code> и <code>ReviewBy</code> в <code>examples/m13-senior/adr.go</code>, тест прогоняет их по шаблону выше.</p>
+  <p>Срок пересмотра работает, только если его проверяют. Дешевле всего — линтер обязательных разделов в CI и ночная джоба, открывающая задачу на каждый ADR с прошедшей датой: функции <span data-only="go"><code>MissingSections</code> и <code>ReviewBy</code> в <code>examples/m13-senior/adr.go</code></span><span data-only="java"><code>missingSections</code> и <code>reviewBy</code> в <code>examples/java/m13-senior/…/Adr.java</code></span>, тест прогоняет их по шаблону выше.</p>
 
   <h2 id="review">Design review: какие вопросы задавать AI-системе</h2>
   <p><b>Design doc</b> описывает систему целиком и ссылается на ADR по ключевым решениям. Структура — как в эссе Мальте Убля «Design Docs at Google»: контекст и масштаб, цели и не-цели, решение, альтернативы, сквозные вопросы (безопасность, приватность, наблюдаемость). Для AI-системы добавляются <b>метрика успеха и критерии запуска</b>, <b>evals</b> и <b>стоимость</b>. Шаблон из <code>examples/m13-senior/templates/design-doc.md</code>:</p>
@@ -201,7 +201,8 @@ $ за запрос и в месяц, TCO, рычаги снижения.
     <li><b>Обратимое и необратимое.</b> Идея «дверей в одну и в две стороны» из писем акционерам Amazon: вендор, схема хранения PII, публичный API обсуждаются долго; формулировку промпта или порог роутера меняют конфигом — тут предлагайте эксперимент вместо спора.</li>
     <li><b>Disagree and commit.</b> Решение не в вашу пользу — запишите несогласие и условия пересмотра в ADR и делайте как решили.</li>
   </ul>
-  <div class="callout go"><span class="title">Аналогия из Go</span>Сам Go меняется так же: значимое изменение начинается с proposal, крупное — с design doc в репозитории <code>golang/proposal</code>, обсуждается публично, и группа ревью выносит решение: принято, отклонено, отложено. Generics прошли через несколько черновиков дизайна, прежде чем попали в Go 1.18. Ваши решения проще, но цикл тот же: предложение, обсуждение, записанное решение.</div>
+  <div class="callout go" data-only="java"><span class="title">Аналогия из Java</span>Сама Java меняется так же: значимое изменение начинается с JEP (JDK Enhancement Proposal), обсуждается публично в рассылках OpenJDK, проходит стадии preview и incubator, и только потом становится постоянной частью языка. Records и pattern matching прошли через несколько preview-релизов, прежде чем стать финальными; <code>StructuredTaskScope</code> в Java 21 всё ещё preview. Ваши решения проще, но цикл тот же: предложение, обсуждение, записанное решение.</div>
+  <div class="callout go" data-only="go"><span class="title">Аналогия из Go</span>Сам Go меняется так же: значимое изменение начинается с proposal, крупное — с design doc в репозитории <code>golang/proposal</code>, обсуждается публично, и группа ревью выносит решение: принято, отклонено, отложено. Generics прошли через несколько черновиков дизайна, прежде чем попали в Go 1.18. Ваши решения проще, но цикл тот же: предложение, обсуждение, записанное решение.</div>
 
   <h2 id="vendor">Build-vs-buy и выбор модели или вендора</h2>
   <p>На senior-уровне вопрос не «какую модель взять», а какой <b>вариант реализации</b> даёт нужное качество при приемлемых стоимости, латентности и рисках на горизонте года, с учётом людей на эксплуатацию. В книге Chip Huyen «AI Engineering» это раздел «Model Build Versus Buy» (глава 4); ниже — рабочая версия для команды.</p>
@@ -252,8 +253,54 @@ $ за запрос и в месяц, TCO, рычаги снижения.
     <div class="readout" id="vm-readout"></div>
   </div>
   <p>На пресете «Банк» включите ограничение по периметру: API-варианты исчезают. Добавьте «качество ≥ 8» — не останется ничего, и это честный ответ: требования противоречат друг другу. Если лидер меняется при сдвиге одного веса на единицу, решение хрупкое, и в ADR стоит записать, на какие веса оно опирается.</p>
-  <p>Тот же расчёт на Go (цена вызова API — <code>APICost</code> в том же файле, формула из <a href="m12.html#cost">модуля 12</a>):</p>
-  <pre><code class="lang-go">// Option — вариант реализации фичи. Все цифры — ваши параметры, а не справочник.
+  <p>Тот же расчёт на <span data-only="go">Go (цена вызова API — <code>APICost</code> в том же файле,</span><span data-only="java">Java (цена вызова API — <code>Tco.apiCost</code> в том же классе,</span> формула из <a href="m12.html#cost">модуля 12</a>):</p>
+  <pre data-only="java"><code class="lang-java">// Фрагмент Tco.java
+    /**
+     * Вариант реализации фичи. Все цифры — ваши параметры, а не справочник.
+     *
+     * @param perRequest  $ переменной части: токены API (0 для self-host)
+     * @param unitMonthly $ в месяц за реплику self-host: GPU, хостинг (0 для API)
+     * @param unitCap     запросов в месяц на реплику при целевой утилизации
+     * @param minUnits    минимум реплик ради отказоустойчивости
+     * @param opsFte      доля инженера: эксплуатация, on-call, обновления, evals, разметка
+     * @param successRate доля успешно решённых задач на вашем eval-наборе
+     */
+    public record Option(String name, double perRequest, double unitMonthly, double unitCap, int minUnits,
+                         double opsFte, double successRate) {
+        public static Option api(String name, double perRequest, double opsFte, double successRate) {
+            return new Option(name, perRequest, 0, 0, 0, opsFte, successRate);
+        }
+
+        public static Option selfHost(String name, double unitMonthly, double unitCap, int minUnits,
+                                      double opsFte, double successRate) {
+            return new Option(name, 0, unitMonthly, unitCap, minUnits, opsFte, successRate);
+        }
+    }
+
+    /** Полная стоимость владения в месяц и её структура. */
+    public record Result(double variable, double infra, double people, double total, int units,
+                         double perRequest, double perSuccess) {}
+
+    /**
+     * TCO при объёме requests в месяц; fteMonthly — полная стоимость инженера в месяц.
+     * Упрощение: evals и разметка сидят в opsFte. Выделите их отдельной строкой, если они заметны в бюджете.
+     */
+    public static Result monthly(Option o, double requests, double fteMonthly) {
+        double variable = o.perRequest() * requests, people = o.opsFte() * fteMonthly, infra = 0;
+        int units = 0;
+        if (o.unitCap() &gt; 0) {
+            units = Math.max(o.minUnits(), (int) Math.ceil(requests / o.unitCap()));
+            infra = units * o.unitMonthly();
+        }
+        double total = variable + infra + people, perRequest = 0, perSuccess = 0;
+        if (requests &gt; 0) {
+            perRequest = total / requests;
+            if (o.successRate() &gt; 0) perSuccess = total / (requests * o.successRate());
+        }
+        return new Result(variable, infra, people, total, units, perRequest, perSuccess);
+    }
+}</code></pre>
+  <pre data-only="go"><code class="lang-go">// Option — вариант реализации фичи. Все цифры — ваши параметры, а не справочник.
 type Option struct {
 	Name        string
 	PerRequest  float64 // $ переменной части: токены API (0 для self-host)
@@ -292,13 +339,14 @@ func MonthlyTCO(o Option, requests, fteMonthly float64) TCO {
   <h3>Как не проиграть на смене модели</h3>
   <p>Выбранная сегодня модель через год будет либо выведена из эксплуатации, либо проиграет новой. Выигрывает тот, кто меняет её за дни, а не за квартал.</p>
   <ul>
-    <li><b>Тонкая абстракция на вашей стороне:</b> бизнес-код зовёт <code>Classify(ctx, ticket)</code>, а не SDK; роутинг и fallback — в шлюзе (<a href="m09.html#gateway">модуль 9</a>).</li>
+    <li><b>Тонкая абстракция на вашей стороне:</b> бизнес-код зовёт <code data-only="go">Classify(ctx, ticket)</code><code data-only="java">classifier.classify(ticket)</code>, а не SDK; роутинг и fallback — в шлюзе (<a href="m09.html#gateway">модуль 9</a>).</li>
     <li><b>Промпт привязан к модели:</b> версия — пара «промпт + модель + параметры» (модуль 3), миграция — новая версия промпта.</li>
     <li><b>Eval-гейт, независимый от вендора:</b> новая модель проходит тот же golden set в CI (<a href="m08.html#ci">модуль 8</a>), затем shadow-трафик и canary.</li>
     <li><b>Календарь вывода моделей</b> и дата пересмотра в ADR: 60 дней уведомления хватает, только если гейт и абстракция уже есть.</li>
     <li><b>Записанный план выхода.</b> Для финансовых организаций в ЕС это требование регламента DORA (Regulation (EU) 2022/2554, применяется с 17 января 2025 года): статья 28(8) — стратегии выхода для ИКТ-услуг, поддерживающих критичные или важные функции. Применимость определяет юрист; инженерный вывод — переход к другому поставщику должен быть проверенным сценарием.</li>
   </ul>
-  <div class="callout go"><span class="title">Аналогия из Go</span>Go-идиома «интерфейсы объявляет потребитель» здесь работает буквально. Не оборачивайте весь SDK провайдера в свой «универсальный LLM-клиент» на 40 методов: он повторит API одного вендора и не налезет на другого. Объявите в пакете фичи маленький интерфейс из одного-двух методов (<code>type Classifier interface { Classify(ctx context.Context, t Ticket) (Category, error) }</code>) и сделайте по реализации на вариант. Смена модели — новая реализация, прошедшая тот же eval-тест.</div>
+  <div class="callout go" data-only="java"><span class="title">Аналогия из Java</span>Принцип разделения интерфейсов (ISP) здесь работает буквально. Не оборачивайте весь SDK провайдера в свой «универсальный LLM-клиент» на 40 методов: он повторит API одного вендора и не налезет на другого. Объявите в пакете фичи маленький интерфейс из одного-двух методов (<code>interface Classifier { Category classify(Ticket t); }</code>) и сделайте по реализации на вариант — отдельный Spring-бин, выбираемый конфигом. Смена модели — новая реализация, прошедшая тот же eval-тест.</div>
+  <div class="callout go" data-only="go"><span class="title">Аналогия из Go</span>Go-идиома «интерфейсы объявляет потребитель» здесь работает буквально. Не оборачивайте весь SDK провайдера в свой «универсальный LLM-клиент» на 40 методов: он повторит API одного вендора и не налезет на другого. Объявите в пакете фичи маленький интерфейс из одного-двух методов (<code>type Classifier interface { Classify(ctx context.Context, t Ticket) (Category, error) }</code>) и сделайте по реализации на вариант. Смена модели — новая реализация, прошедшая тот же eval-тест.</div>
 
   <h2 id="slo">SLO, error budget и on-call для недетерминированных систем</h2>
   <p>Термины из книги Google SRE. <b>SLI</b> — доля хороших событий: ответов без ошибки, быстрее порога, признанных судьёй верными. <b>SLO</b> — цель для SLI за скользящее окно, например 98% за 28 дней. <b>Error budget</b> — допустимая доля плохих событий, 1 − SLO. Бюджет превращает спор «релизить или чинить» в арифметику: бюджет есть — команда меняет систему, кончился — чинит надёжность. Техническая сторона (SLI по трейсам, burn-rate алерты в Prometheus) — в модуле 9 (<a href="m09.html#slo">SLO в продакшене</a>), здесь — что из этого следует для команды.</p>
@@ -343,8 +391,62 @@ func MonthlyTCO(o Option, requests, fteMonthly float64) TCO {
     <tr><td>&lt; 0</td><td>Заморозка: только откаты, фиксы надёжности и безопасности, кейсы в golden set</td><td>По политике</td></tr>
     <tr><td>Инцидент &gt; 20% бюджета</td><td>Постмортем с P0-действием, независимо от общего остатка</td><td>По политике</td></tr>
   </table>
-    <p>Политика как код — фрагмент <code>examples/m13-senior/budget.go</code> (там же <code>FromSample</code>: перенос доли плохих по выборке судьи на весь трафик):</p>
-  <pre><code class="lang-go">// Alert — правило multiwindow multi-burn-rate из Google SRE Workbook («Alerting on SLOs»):
+    <p>Политика как код — фрагмент <span data-only="go"><code>examples/m13-senior/budget.go</code> (там же <code>FromSample</code>:</span><span data-only="java"><code>examples/java/m13-senior/…/Budget.java</code> (там же <code>Window.fromSample</code>:</span> перенос доли плохих по выборке судьи на весь трафик):</p>
+  <pre data-only="java"><code class="lang-java">// Фрагмент Budget.java
+/**
+ * Правило multiwindow multi-burn-rate из Google SRE Workbook («Alerting on SLOs»):
+ * за окно long сожжена доля budget бюджета, и сжигание всё ещё идёт на коротком окне shortW.
+ *
+ * @param budget доля бюджета всего окна SLO, например 0.02
+ * @param page   true — будить дежурного, false — тикет в рабочее время
+ */
+public record Alert(String name, Duration longW, Duration shortW, double budget, boolean page) {}
+
+/** Рекомендованные пороги SRE Workbook (таблица 5-8), от срочного к медленному. */
+public static final List&lt;Alert&gt; DEFAULT_ALERTS = List.of(
+        new Alert("page-fast", Duration.ofHours(1), Duration.ofMinutes(5), 0.02, true),
+        new Alert("page-slow", Duration.ofHours(6), Duration.ofMinutes(30), 0.05, true),
+        new Alert("ticket", Duration.ofHours(72), Duration.ofHours(6), 0.10, false));
+
+/** События за последние d — обёртка над вашим Prometheus или ClickHouse. */
+public interface Metrics extends Function&lt;Duration, Window&gt; {}
+
+/**
+ * Что говорит политика error budget прямо сейчас.
+ *
+ * @param budgetLeft доля оставшегося бюджета окна, бывает &amp;lt; 0
+ * @param fired      первый сработавший алерт, null — тихо
+ * @param freeze     бюджет исчерпан: релизы промптов и моделей заморожены, кроме фиксов
+ */
+public record Status(double budgetLeft, Alert fired, boolean freeze) {}
+
+/** Цель по доле хороших событий за скользящее окно, например 0.99 за 28 суток. */
+public record Slo(double target, Duration period) {
+    /** Во сколько раз быстрее нормы сжигается бюджет; 1 — ровно к концу окна. */
+    public double burnRate(Window w) {
+        return w.total() == 0 ? 0 : w.bad() / w.total() / (1 - target);
+    }
+
+    /** Доля бюджета → порог burn rate: 2% за 1 ч при окне 30 суток → 14.4. */
+    public double threshold(Alert a) {
+        return a.budget() * period.toNanos() / a.longW().toNanos();
+    }
+
+    /** Применяет алерты и политику заморозки к текущим метрикам. */
+    public Status check(Metrics m, List&lt;Alert&gt; alerts) {
+        double left = 1;
+        Window w = m.apply(period);
+        if (w.total() &gt; 0) left = 1 - w.bad() / ((1 - target) * w.total());
+        for (Alert a : alerts) {
+            double th = threshold(a);
+            if (burnRate(m.apply(a.longW())) &gt;= th &amp;&amp; burnRate(m.apply(a.shortW())) &gt;= th) {
+                return new Status(left, a, left &lt;= 0);
+            }
+        }
+        return new Status(left, null, left &lt;= 0);
+    }
+}</code></pre>
+  <pre data-only="go"><code class="lang-go">// Alert — правило multiwindow multi-burn-rate из Google SRE Workbook («Alerting on SLOs»):
 // за окно Long сожжена доля Budget бюджета, и сжигание всё ещё идёт на коротком окне Short.
 type Alert struct {
 	Name        string
@@ -527,13 +629,14 @@ func (s SLO) Check(m Metrics, alerts []Alert) Status {
   <p>Сеньор масштабируется через других: стандарты, которые не нужно помнить, ревью, которое учит, и людей, которые через год пишут ADR без него. В AI-команде к обычным стандартам добавляются промпты, eval-наборы и данные — артефакты, которые по привычке живут вне процессов.</p>
   <table>
     <tr><th>Стандарт</th><th>Минимум</th><th>Чем обеспечивается</th></tr>
-    <tr><td><b>Промпты в репозитории</b></td><td><code>prompts/*.tmpl</code> через <code>embed</code>, владелец и changelog (<a href="m03.html#versioning">модуль 3</a>)</td><td>CODEOWNERS на <code>prompts/</code></td></tr>
+    <tr><td><b>Промпты в репозитории</b></td><td><span data-only="go"><code>prompts/*.tmpl</code> через <code>embed</code></span><span data-only="java"><code>prompts/*.txt</code> в ресурсах classpath (<code>src/main/resources</code>)</span>, владелец и changelog (<a href="m03.html#versioning">модуль 3</a>)</td><td>CODEOWNERS на <code>prompts/</code></td></tr>
     <tr><td><b>Версии в трейсах</b></td><td>Имя, версия и хэш промпта, модель и параметры в каждом трейсе и рядом с результатом</td><td>Алерт на вызовы без <code>prompt.version</code></td></tr>
     <tr><td><b>Evals в CI</b></td><td>Smoke на каждый PR в промптах, eval-наборах, конфиге моделей; полный набор ночью</td><td>Обязательная проверка (<a href="m08.html#ci">модуль 8</a>)</td></tr>
     <tr><td><b>Политика данных</b></td><td>Какие данные каким провайдерам, маскирование PII, сроки логов</td><td>Проверка в шлюзе (модуль 11)</td></tr>
     <tr><td><b>ADR и владение</b></td><td>ADR для смены модели, вендора, хранения данных; у каждой фичи владелец, SLO, runbook</td><td>Линтер ADR в CI; без runbook фича не выходит из беты</td></tr>
   </table>
-  <div class="callout go"><span class="title">Аналогия из Go</span><code>gofmt</code> победил потому, что не обсуждается: инструмент один, настроек нет, CI красный. Стандарты AI-команды стоит строить так же: правило «промпт только с evals», которое проверяют глазами, нарушат в пятницу вечером, а обязательную проверку в CI на изменения в <code>prompts/</code> — нет.</div>
+  <div class="callout go" data-only="java"><span class="title">Аналогия из Java</span>Форматтеры вроде Spotless с google-java-format побеждают потому, что не обсуждаются: <code>spotless:check</code> в сборке, CI красный. Стандарты AI-команды стоит строить так же: правило «промпт только с evals», которое проверяют глазами, нарушат в пятницу вечером, а обязательную проверку в CI на изменения в <code>prompts/</code> — нет.</div>
+  <div class="callout go" data-only="go"><span class="title">Аналогия из Go</span><code>gofmt</code> победил потому, что не обсуждается: инструмент один, настроек нет, CI красный. Стандарты AI-команды стоит строить так же: правило «промпт только с evals», которое проверяют глазами, нарушат в пятницу вечером, а обязательную проверку в CI на изменения в <code>prompts/</code> — нет.</div>
 
   <h3>Ревью PR с изменением промпта</h3>
   <ul>
@@ -582,7 +685,7 @@ func (s SLO) Check(m Metrics, alerts []Alert) Status {
       <tr><td>Регуляторика</td><td>Банковская тайна (в РФ — ст. 26 закона «О банках и банковской деятельности»), 152-ФЗ или GDPR, раскрытие ИИ (EU AI Act, ст. 50 — <a href="m11.html#eu-ai-act">модуль 11</a>), в ЕС — DORA. Применимость определяет юрист; от вас — инженерные последствия и вопросы к нему</td></tr>
       <tr><td>Вне скоупа</td><td>Решения о кредитах (в EU AI Act оценка кредитоспособности — высокорисковая система, Annex III), обещания ставок и компенсаций</td></tr>
     </table>
-    <p><b>Что сдать:</b> design doc по шаблону (до 8 страниц); три ADR, проходящих линтер из <code>examples/m13-senior</code> (модель или вендор с матрицей; где живут и как маскируются PII; эскалация и подтверждение действий); стоимость и TCO; SLO и политику error budget; модель угроз (модуль 7). Защита: 15 минут рассказа и 30 минут вопросов. Ревьюер — коллега или LLM, которой дали эту рубрику и попросили спрашивать, а не помогать.</p>
+    <p><b>Что сдать:</b> design doc по шаблону (до 8 страниц); три ADR, проходящих линтер из <code data-only="go">examples/m13-senior</code><code data-only="java">examples/java/m13-senior</code> (модель или вендор с матрицей; где живут и как маскируются PII; эскалация и подтверждение действий); стоимость и TCO; SLO и политику error budget; модель угроз (модуль 7). Защита: 15 минут рассказа и 30 минут вопросов. Ревьюер — коллега или LLM, которой дали эту рубрику и попросили спрашивать, а не помогать.</p>
     <table>
       <tr><th>Критерий</th><th>0 — не принято</th><th>1 — принято</th><th>2 — сильно</th></tr>
       <tr><td><b>1. Требования и метрика</b></td><td>Нет цифр или метрики</td><td>Цифры, метрика, baseline</td><td>Плюс guardrail-метрики и kill-критерий</td></tr>
@@ -613,7 +716,7 @@ func (s SLO) Check(m Metrics, alerts []Alert) Status {
     <p>Оформите репозиторий сквозных проектов так, будто завтра в него придут три инженера и coding agent.</p>
     <ul>
       <li>Файл инструкций для агентов (модуль 4), шаблон PR для промптов с чек-листом урока, CODEOWNERS на <code>prompts/</code> и <code>evals/</code>.</li>
-      <li>CI не мержит изменения в <code>prompts/</code> без evals (проект B) и проверяет ADR линтером из <code>examples/m13-senior</code>.</li>
+      <li>CI не мержит изменения в <code>prompts/</code> без evals (проект B) и проверяет ADR линтером из <code data-only="go">examples/m13-senior</code><code data-only="java">examples/java/m13-senior</code>.</li>
       <li>Политика данных и политика error budget — по странице, с SLO для главной фичи.</li>
     </ul>
     <label class="check"><input type="checkbox" data-save="m13-t3"> Стандарт оформлен, CI его проверяет</label>

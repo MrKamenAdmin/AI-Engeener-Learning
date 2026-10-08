@@ -8,4 +8,17 @@
     <version>1.0.0</version>
   </parent>
   <artifactId>m07-security</artifactId>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+    <!-- CspFilter: в Spring Boot сервлет-API уже есть, здесь нужен только для компиляции. -->
+    <dependency>
+      <groupId>jakarta.servlet</groupId>
+      <artifactId>jakarta.servlet-api</artifactId>
+      <scope>provided</scope>
+    </dependency>
+  </dependencies>
 </project>

@@ -8,4 +8,11 @@
     <version>1.0.0</version>
   </parent>
   <artifactId>m16-voice</artifactId>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.anthropic</groupId>
+      <artifactId>anthropic-java</artifactId>
+    </dependency>
+  </dependencies>
 </project>

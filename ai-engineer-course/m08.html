@@ -30,7 +30,7 @@
     <div class="eyebrow">Модуль 8</div>
     <h1>Evals</h1>
     <p class="lead">Evals — это тесты для недетерминированной системы. Без них любое изменение промпта, модели или retrieval — гадание по трём примерам в чате. Разберём, как начать с error analysis и собрать golden dataset, когда хватает regex, как откалибровать LLM-as-a-judge и поправить его pass rate, как bootstrap отвечает на вопрос «82% или 85%?», как оценивать агентов по траекториям, как устроить A/B-тест LLM-фичи и как встроить всё это в CI и мониторинг прода.</p>
-    <div class="meta-row"><span class="chip">≈ 13 часов</span><span class="chip">Go + Python</span><span class="chip">6 визуализаций</span><span class="chip">на момент написания: октябрь 2026</span></div>
+    <div class="meta-row"><span class="chip">≈ 13 часов</span><span class="chip"><span data-only="go">Go</span><span data-only="java">Java</span> + Python</span><span class="chip">6 визуализаций</span><span class="chip">на момент написания: октябрь 2026</span></div>
   </div>
 
   <h2 id="why">Зачем evals</h2>
@@ -41,7 +41,8 @@
     <li><b>Модели меняются под вами.</b> Новая версия модели, миграция на другого провайдера, изменение retrieval — eval-набор даёт ответ «можно ли переключаться» за час, а не за неделю жалоб.</li>
   </ul>
   <p>Практический тезис, который стоит произносить на собеседовании: <b>evals — это главный артефакт AI-продукта</b>, важнее промпта. Промпт можно переписать за вечер, модель поменять одной строкой, а хороший eval-набор с откалиброванными проверками копится месяцами и позволяет делать и то, и другое безопасно.</p>
-  <div class="callout go"><span class="title">Аналогия из Go</span>Eval-набор — это table-driven тесты, где <code>want</code> иногда заменён функцией-предикатом, а итоговый вердикт — не «все зелёные», а «pass rate ≥ порога и нет регрессии относительно main». Прогон на реальной модели — это интеграционный тест: дорогой, медленный, под build tag или <code>t.Skip</code> без ключа.</div>
+  <div class="callout go" data-only="go"><span class="title">Аналогия из Go</span>Eval-набор — это table-driven тесты, где <code>want</code> иногда заменён функцией-предикатом, а итоговый вердикт — не «все зелёные», а «pass rate ≥ порога и нет регрессии относительно main». Прогон на реальной модели — это интеграционный тест: дорогой, медленный, под build tag или <code>t.Skip</code> без ключа.</div>
+  <div class="callout go" data-only="java"><span class="title">Аналогия из Java</span>Eval-набор — это <code>@ParameterizedTest</code> с <code>@MethodSource</code>, где ожидаемое значение иногда заменено предикатом, а итоговый вердикт — не «все зелёные», а «pass rate ≥ порога и нет регрессии относительно main». Прогон на реальной модели — это интеграционный тест: дорогой, медленный, под <code>@Tag</code> и отдельным профилем Maven (или в Failsafe), с <code>@EnabledIfEnvironmentVariable</code> без ключа.</div>
 
   <h2 id="types">Виды evals</h2>
   <table>
@@ -156,7 +157,7 @@
   <p>Judge ошибается в обе стороны, поэтому доля PASS в его отчёте смещена. Если θ — истинная доля хороших ответов, то judge покажет p<sub>obs</sub> = TPR·θ + (1 − TNR)·(1 − θ). Отсюда оценка, известная в эпидемиологии как поправка Rogan–Gladen (1978, оценка распространённости по неточному тесту):</p>
   <p style="text-align:center"><b>θ = (p<sub>obs</sub> + TNR − 1) / (TPR + TNR − 1)</b></p>
   <p>Пример: истинно хороших 70%, «лояльный» judge с TPR = 0,95 и TNR = 0,60 покажет 0,95·0,7 + 0,4·0,3 = 78,5%. Поправка возвращает 70%. Ограничения: формула работает, только если TPR и TNR, измеренные на калибровочном наборе, переносятся на прогон (тот же продукт, похожее распределение); при TPR + TNR ≤ 1 judge не лучше монетки и поправка не определена; результат обрезается до [0; 1]. Главное — TPR/TNR на 100–200 кейсах сами шумят, и этот шум надо внести в интервал: bootstrap ресемплирует и вердикты прогона, и калибровочные пары. Так же устроена Python-библиотека <code>judgy</code> Shreya Shankar.</p>
-  <pre><code class="lang-go">// Confusion — сверка вердиктов judge с человеческой разметкой.
+  <pre data-only="go"><code class="lang-go">// Confusion — сверка вердиктов judge с человеческой разметкой.
 // Положительный класс — PASS (как в схеме калибровки модуля).
 type Confusion struct{ TP, FN, FP, TN int }
 
@@ -241,7 +242,91 @@ func CorrectedPassRateCI(verdicts, human, judge []bool, b int, seed uint64) (Int
 	q := func(p float64) float64 { return stats[int(p*float64(len(stats)-1))] }
 	return Interval{Est: est, Lo: q(0.025), Hi: q(0.975)}, nil
 }</code></pre>
-  <p>Полная версия с тестами — <code>examples/m08-evals/judge.go</code> (тип <code>Interval</code> и <code>passRate</code> — там же). В тесте judge с TPR 0,9 и TNR 0,8, откалиброванный на 100 кейсах, на прогоне из 500 ответов даёт оценку 70% с интервалом примерно [58%; 81%], хотя у самих 500 вердиктов полуширина около 4 п.п.: неопределённость калибровки доминирует. Хотите уже интервал — размечайте больше, особенно FAIL. В Python κ считает <code>sklearn.metrics.cohen_kappa_score</code>, но TPR/TNR и поправку всё равно придётся написать — это десять строк.</p>
+  <pre data-only="java"><code class="lang-java">// Confusion — сверка вердиктов judge с человеческой разметкой.
+// Положительный класс — PASS (как в схеме калибровки модуля).
+public record Confusion(int tp, int fn, int fp, int tn) {
+    public static Confusion of(boolean[] human, boolean[] judge) {
+        int tp = 0, fn = 0, fp = 0, tn = 0;
+        for (int i = 0; i &lt; human.length; i++) {
+            boolean h = human[i], j = judge[i];
+            if (h &amp;&amp; j) tp++;
+            else if (h) fn++; // хороший ответ, judge забраковал: ложная тревога
+            else if (j) fp++; // плохой ответ, judge пропустил: дефект уйдёт в прод
+            else tn++;
+        }
+        return new Confusion(tp, fn, fp, tn);
+    }
+
+    // tpr — доля хороших (по людям) ответов, которые judge признал PASS.
+    public double tpr() { return (double) tp / (tp + fn); }
+
+    // tnr — доля плохих ответов, которые judge поймал. Для CI-гейта это главная цифра.
+    public double tnr() { return (double) tn / (tn + fp); }
+
+    // kappa — Cohen's κ = (po − pe) / (1 − pe): согласие сверх случайного.
+    public double kappa() {
+        double n = tp + fn + fp + tn;
+        double po = (tp + tn) / n;
+        double humanPass = (tp + fn) / n, judgePass = (tp + fp) / n;
+        double pe = humanPass * judgePass + (1 - humanPass) * (1 - judgePass);
+        if (pe == 1) {
+            return Double.NaN; // оба ставят одну метку всем кейсам: κ не определена
+        }
+        return (po - pe) / (1 - pe);
+    }
+}
+
+public static final class UselessJudgeException extends Exception {
+    UselessJudgeException() { super("judge is no better than chance (TPR+TNR &lt;= 1)"); }
+}
+
+// correctedPassRate — поправка Rogan–Gladen (1978): истинная доля PASS по доле PASS,
+// которую показал judge, и его TPR/TNR на размеченном тестовом наборе.
+// observed = TPR·θ + (1−TNR)·(1−θ)  ⇒  θ = (observed + TNR − 1) / (TPR + TNR − 1).
+public static double correctedPassRate(double observed, double tpr, double tnr) throws UselessJudgeException {
+    double den = tpr + tnr - 1;
+    if (!(den &gt; 0)) { // ловит и NaN, когда в выборке нет одного из классов
+        throw new UselessJudgeException();
+    }
+    return Math.clamp((observed + tnr - 1) / den, 0.0, 1.0);
+}
+
+// correctedPassRateCi — интервал для скорректированной доли. Ресемплируются и
+// вердикты judge на прогоне, и калибровочные пары: TPR/TNR, измеренные на 100–200
+// кейсах, сами шумят, и этот шум часто больше шума прогона.
+public static Interval correctedPassRateCi(boolean[] verdicts, boolean[] human, boolean[] judge, int b, long seed)
+        throws UselessJudgeException {
+    var c = Confusion.of(human, judge);
+    double est = correctedPassRate(passRate(verdicts), c.tpr(), c.tnr());
+    var r = new SplittableRandom(seed);
+    boolean[] v = new boolean[verdicts.length], h = new boolean[human.length], j = new boolean[human.length];
+    double[] stats = new double[b];
+    int n = 0;
+    for (int it = 0; it &lt; b; it++) {
+        for (int i = 0; i &lt; v.length; i++) {
+            v[i] = verdicts[r.nextInt(verdicts.length)];
+        }
+        for (int i = 0; i &lt; h.length; i++) {
+            int k = r.nextInt(human.length);
+            h[i] = human[k];
+            j[i] = judge[k];
+        }
+        var cb = Confusion.of(h, j);
+        try {
+            stats[n] = correctedPassRate(passRate(v), cb.tpr(), cb.tnr());
+            n++;
+        } catch (UselessJudgeException e) {
+            // ресемпл без одного из классов: пропускаем
+        }
+    }
+    if (n == 0) {
+        throw new UselessJudgeException();
+    }
+    stats = Arrays.copyOf(stats, n);
+    Arrays.sort(stats);
+    return new Interval(est, quantile(stats, 0.025), quantile(stats, 0.975));
+}</code></pre>
+  <p>Полная версия с тестами — <code><span data-only="go">examples/m08-evals/judge.go</span><span data-only="java">examples/java/m08-evals/…/Judge.java</span></code> (<span data-only="go">тип <code>Interval</code> и <code>passRate</code> — там же</span><span data-only="java"><code>passRate</code> — там же, record <code>Interval</code> и <code>quantile</code> — в <code>Stats.java</code></span>). В тесте judge с TPR 0,9 и TNR 0,8, откалиброванный на 100 кейсах, на прогоне из 500 ответов даёт оценку 70% с интервалом примерно [58%; 81%], хотя у самих 500 вердиктов полуширина около 4 п.п.: неопределённость калибровки доминирует. Хотите уже интервал — размечайте больше, особенно FAIL. В Python κ считает <code>sklearn.metrics.cohen_kappa_score</code>, но TPR/TNR и поправку всё равно придётся написать — это десять строк.</p>
 
   <h3>Смещения judge</h3>
   <ul>
@@ -351,7 +436,7 @@ func CorrectedPassRateCI(verdicts, human, judge []bool, b int, seed uint64) (Int
     <tr><td>Версии на разных кейсах или разных пользователях (A/B)</td><td>Непарно: Ньюкомб (Уилсон для разности) или bootstrap по каждой группе</td><td>Пар нет, вычитать нечего</td></tr>
   </table>
   <p><b>Размер выборки в парном дизайне</b> зависит не от pass rate, а от доли кейсов p<sub>d</sub>, на которых версии расходятся: n ≈ (1,96 + 0,84)² · (p<sub>d</sub> − Δ²) / Δ². Чтобы поймать Δ = 5 п.п. при p<sub>d</sub> = 10%, нужно ≈ 310 кейсов против ≈ 900 на вариант непарно. Отсюда правило: сравнивайте версии на одном наборе и не меняйте набор между прогонами baseline и PR.</p>
-  <pre><code class="lang-go">// Interval — точечная оценка и 95%-й интервал.
+  <pre data-only="go"><code class="lang-go">// Interval — точечная оценка и 95%-й интервал.
 type Interval struct{ Est, Lo, Hi float64 }
 
 // Bootstrap — перцентильный bootstrap-интервал среднего по кейсам.
@@ -389,7 +474,48 @@ func PairedBootstrap(base, cand []float64, b int, seed uint64) Interval {
 	}
 	return Bootstrap(d, b, seed)
 }</code></pre>
-  <p>Парный bootstrap разности — это обычный bootstrap среднего по поэлементным разностям, отдельный алгоритм не нужен. Тест в <code>examples/m08-evals/stats_test.go</code> показывает главное: версии 80/100 и 85/100, где новая починила 5 кейсов и ничего не сломала, непарно неразличимы (интервалы пересекаются), а парный интервал разности не содержит нуля.</p>
+  <pre data-only="java"><code class="lang-java">// Interval — точечная оценка и 95%-й интервал.
+public record Interval(double est, double lo, double hi) {}
+
+// bootstrap — перцентильный bootstrap-интервал среднего по кейсам.
+// scores[i] — результат кейса i: 0/1 или доля успешных повторов. Во втором случае
+// это кластерный bootstrap: повторы одного кейса ресемплируются вместе.
+public static Interval bootstrap(double[] scores, int b, long seed) {
+    int n = scores.length;
+    if (n == 0 || b &lt;= 0) {
+        return new Interval(Double.NaN, Double.NaN, Double.NaN);
+    }
+    var r = new SplittableRandom(seed);
+    double[] stats = new double[b];
+    for (int k = 0; k &lt; b; k++) {
+        double s = 0;
+        for (int i = 0; i &lt; n; i++) {
+            s += scores[r.nextInt(n)];
+        }
+        stats[k] = s / n;
+    }
+    Arrays.sort(stats);
+    return new Interval(mean(scores), quantile(stats, 0.025), quantile(stats, 0.975));
+}
+
+// pairedBootstrap — интервал разности cand − base на одних и тех же кейсах.
+// Ресемплируются кейсы целиком (обе версии вместе), поэтому разброс сложности
+// кейсов вычитается и интервал уже, чем у двух независимых bootstrap.
+public static Interval pairedBootstrap(double[] base, double[] cand, int b, long seed) {
+    if (base.length != cand.length) {
+        throw new IllegalArgumentException("base and cand must be aligned by case");
+    }
+    double[] d = new double[base.length];
+    for (int i = 0; i &lt; d.length; i++) {
+        d[i] = cand[i] - base[i];
+    }
+    return bootstrap(d, b, seed);
+}
+
+static double quantile(double[] sorted, double p) {
+    return sorted[(int) (p * (sorted.length - 1))];
+}</code></pre>
+  <p>Парный bootstrap разности — это обычный bootstrap среднего по поэлементным разностям, отдельный алгоритм не нужен. Тест в <code><span data-only="go">examples/m08-evals/stats_test.go</span><span data-only="java">examples/java/m08-evals/…/StatsTest.java</span></code> показывает главное: версии 80/100 и 85/100, где новая починила 5 кейсов и ничего не сломала, непарно неразличимы (интервалы пересекаются), а парный интервал разности не содержит нуля.</p>
 
   <div class="viz" id="viz-boot">
     <p class="viz-title">Bootstrap vs Уилсон: интервал разности двух версий</p>
@@ -518,10 +644,12 @@ if __name__ == "__main__":
   </ul>
   <h3>Симулятор пользователя</h3>
   <p>Диалоговому агенту нужен собеседник. Вторая LLM играет пользователя: персона, скрытая цель («вернуть деньги за товар из заказа 42, но не за доставку»), сведения, которые она выдаёт только по запросу, и условие окончания. Так устроен τ-bench, его продолжение τ²-bench добавляет среду с двойным управлением, где и пользователь меняет её состояние своими инструментами (по состоянию на октябрь 2026 проект развивается как τ³-bench в том же репозитории). Режимы отказа симулятора: выдаёт цель целиком в первом сообщении, становится слишком покладистым, уходит от сценария. Лечение — фиксированная модель и промпт симулятора, проверка выборки диалогов глазами, отдельная метрика «симулятор нарушил сценарий» (такие попытки — невалидные, а не проваленные).</p>
-  <h3>Проверка по спецификации на Go</h3>
-  <p>Спецификация задачи — это целевое состояние плюс ограничения. Траектория — шаги прогона и снимок среды после него. Траекторию пишет <code>Result.Steps</code> из <a href="m06.html#go-loop">агентного цикла модуля 6</a>: поля <code>Tool</code>, <code>Input</code>, <code>IsError</code> совпадают, а <code>CtxTokens</code> оттуда пригодится для метрики размера контекста по шагам. Пример применения — задание 4 модуля 6 (агент на 50+ шагов с компакцией).</p>
+  <h3 data-only="go">Проверка по спецификации на Go</h3>
+  <h3 data-only="java">Проверка по спецификации на Java</h3>
+  <p data-only="go">Спецификация задачи — это целевое состояние плюс ограничения. Траектория — шаги прогона и снимок среды после него. Траекторию пишет <code>Result.Steps</code> из <a href="m06.html#go-loop">агентного цикла модуля 6</a>: поля <code>Tool</code>, <code>Input</code>, <code>IsError</code> совпадают, а <code>CtxTokens</code> оттуда пригодится для метрики размера контекста по шагам. Пример применения — задание 4 модуля 6 (агент на 50+ шагов с компакцией).</p>
+  <p data-only="java">Спецификация задачи — это целевое состояние плюс ограничения. Траектория — шаги прогона и снимок среды после него. Траекторию пишет <code>result.steps()</code> из <a href="m06.html#go-loop">агентного цикла модуля 6</a>: поля <code>tool</code>, <code>input</code>, <code>isError</code> совпадают, а <code>ctxTokens</code> оттуда пригодится для метрики размера контекста по шагам. Пример применения — задание 4 модуля 6 (агент на 50+ шагов с компакцией).</p>
   <div class="tabs">
-    <div class="tab-panel" data-tab="Проверка прогона"><pre><code class="lang-go">// Step — один вызов инструмента (поля как в agent.Step из модуля 6).
+    <div class="tab-panel" data-tab="Проверка прогона" data-only="go"><pre><code class="lang-go">// Step — один вызов инструмента (поля как в agent.Step из модуля 6).
 type Step struct {
 	Tool    string `json:"tool"`
 	Input   string `json:"input"`
@@ -616,7 +744,91 @@ func Check(s Spec, t Trajectory) Verdict {
 	v.Recall = ratio(called, len(s.Required))
 	return v
 }</code></pre></div>
-    <div class="tab-panel" data-tab="Агрегат по набору"><pre><code class="lang-go">// Summary — агрегат по набору задач, на каждой не меньше k прогонов.
+    <div class="tab-panel" data-tab="Проверка прогона" data-only="java"><pre><code class="lang-java">// Step — один вызов инструмента (поля как в Step из модуля 6).
+public record Step(String tool, String input, boolean isError) {}
+
+// Trajectory — запись одного прогона (trial) агента на задаче. state — снимок среды после прогона.
+public record Trajectory(String taskId, List&lt;Step&gt; steps, Map&lt;String, String&gt; state, double costUsd) {}
+
+// Order — {first, then}: первый вызов first раньше первого вызова then. В JSON — пара ["a", "b"].
+@JsonFormat(shape = JsonFormat.Shape.ARRAY)
+public record Order(String first, String then) {}
+
+// Spec — правильное поведение на задаче. Эталонная траектория не нужна:
+// проверяем итог и ограничения на путь.
+public record Spec(
+        Map&lt;String, String&gt; wantState, // главный критерий: состояние среды
+        List&lt;String&gt; required,         // должны быть вызваны
+        List&lt;String&gt; allowed,          // полезны, но не обязательны
+        List&lt;String&gt; forbidden,        // ни одного вызова
+        List&lt;Order&gt; before,
+        int maxSteps,
+        double maxCostUsd) {}
+
+// Verdict — результат проверки одного прогона.
+public record Verdict(
+        boolean success,       // итог верный и ни одно жёсткое ограничение не нарушено
+        List&lt;String&gt; failures, // "вид: детали" — сырьё для error analysis
+        double precision,      // доля вызовов из required ∪ allowed
+        double recall,         // доля required, которые были вызваны
+        int redundant) {}      // повтор успешного вызова с теми же аргументами
+
+public static Verdict check(Spec s, Trajectory t) {
+    List&lt;String&gt; failures = new ArrayList&lt;&gt;();
+    new TreeMap&lt;&gt;(s.wantState()).forEach((k, want) -&gt; {
+        String got = t.state().getOrDefault(k, "");
+        if (!got.equals(want)) {
+            failures.add("state: %s = \"%s\", want \"%s\"".formatted(k, got, want));
+        }
+    });
+    Map&lt;String, Integer&gt; first = new HashMap&lt;&gt;(); // индекс первого вызова инструмента
+    Set&lt;String&gt; done = new HashSet&lt;&gt;();           // успешные вызовы tool+input
+    int useful = 0, redundant = 0;
+    for (int i = 0; i &lt; t.steps().size(); i++) {
+        Step st = t.steps().get(i);
+        first.putIfAbsent(st.tool(), i);
+        String key = st.tool() + "\0" + st.input();
+        if (done.contains(key)) {
+            redundant++; // повтор после ошибки — это восстановление, а не лишний шаг
+        }
+        if (!st.isError()) {
+            done.add(key);
+        }
+        if (s.required().contains(st.tool()) || s.allowed().contains(st.tool())) {
+            useful++;
+        }
+        if (s.forbidden().contains(st.tool())) {
+            failures.add("forbidden: %s at step %d".formatted(st.tool(), i + 1));
+        }
+    }
+    int called = 0;
+    for (String r : s.required()) {
+        if (first.containsKey(r)) {
+            called++;
+        } else {
+            failures.add("required: " + r + " not called");
+        }
+    }
+    for (Order o : s.before()) {
+        Integer b = first.get(o.then());
+        if (b == null) {
+            continue;
+        }
+        Integer a = first.get(o.first());
+        if (a == null || a &gt; b) {
+            failures.add("order: " + o.first() + " must precede " + o.then());
+        }
+    }
+    if (s.maxSteps() &gt; 0 &amp;&amp; t.steps().size() &gt; s.maxSteps()) {
+        failures.add("steps: %d &gt; limit %d".formatted(t.steps().size(), s.maxSteps()));
+    }
+    if (s.maxCostUsd() &gt; 0 &amp;&amp; t.costUsd() &gt; s.maxCostUsd()) {
+        failures.add(String.format(Locale.ROOT, "cost: $%.3f &gt; limit $%.3f", t.costUsd(), s.maxCostUsd()));
+    }
+    return new Verdict(failures.isEmpty(), List.copyOf(failures),
+            ratio(useful, t.steps().size()), ratio(called, s.required().size()), redundant);
+}</code></pre></div>
+    <div class="tab-panel" data-tab="Агрегат по набору" data-only="go"><pre><code class="lang-go">// Summary — агрегат по набору задач, на каждой не меньше k прогонов.
 type Summary struct {
 	Tasks, Runs   int
 	SuccessRate   float64        // доля успешных прогонов
@@ -696,6 +908,71 @@ func ratio(a, b int) float64 {
 	}
 	return float64(a) / float64(b)
 }</code></pre></div>
+    <div class="tab-panel" data-tab="Агрегат по набору" data-only="java"><pre><code class="lang-java">// Summary — агрегат по набору задач, на каждой не меньше k прогонов.
+public record Summary(
+        int tasks, int runs,
+        double successRate,              // доля успешных прогонов
+        double passHatK,                 // pass^k: все k попыток задачи успешны
+        double meanSteps,                // по всем прогонам
+        double meanCostUsd,              // по всем прогонам
+        double meanPrecision,            // tool-call precision
+        double meanRecall,               // tool-call recall
+        int redundant,                   // лишних повторных вызовов всего
+        Map&lt;String, Integer&gt; failureKinds) {} // state/forbidden/order/... → число прогонов
+
+public static Summary aggregate(Map&lt;String, Spec&gt; specs, List&lt;Trajectory&gt; runs, int k) {
+    Map&lt;String, List&lt;Boolean&gt;&gt; byTask = new TreeMap&lt;&gt;();
+    Map&lt;String, Integer&gt; kinds = new TreeMap&lt;&gt;();
+    double steps = 0, cost = 0, precision = 0, recall = 0;
+    int redundant = 0;
+    for (Trajectory t : runs) {
+        Spec spec = specs.get(t.taskId());
+        if (spec == null) {
+            throw new IllegalArgumentException("no spec for task \"" + t.taskId() + "\"");
+        }
+        Verdict v = check(spec, t);
+        byTask.computeIfAbsent(t.taskId(), x -&gt; new ArrayList&lt;&gt;()).add(v.success());
+        steps += t.steps().size();
+        cost += t.costUsd();
+        precision += v.precision();
+        recall += v.recall();
+        redundant += v.redundant();
+        v.failures().stream()
+                .map(f -&gt; f.substring(0, f.indexOf(':')))
+                .distinct()
+                .forEach(kind -&gt; kinds.merge(kind, 1, Integer::sum));
+    }
+    int n = runs.size();
+    if (n == 0) {
+        return new Summary(0, 0, 0, 0, 0, 0, 0, 0, 0, kinds);
+    }
+    int success = 0;
+    double passHatK = 0;
+    for (var e : byTask.entrySet()) {
+        List&lt;Boolean&gt; res = e.getValue();
+        if (res.size() &lt; k) {
+            throw new IllegalArgumentException("task \"%s\": %d runs &lt; k=%d".formatted(e.getKey(), res.size(), k));
+        }
+        int c = (int) res.stream().filter(ok -&gt; ok).count();
+        success += c;
+        passHatK += passHatK(res.size(), c, k);
+    }
+    return new Summary(byTask.size(), n, (double) success / n, passHatK / byTask.size(),
+            steps / n, cost / n, precision / n, recall / n, redundant, kinds);
+}
+
+// passHatK — несмещённая оценка pass^k по n прогонам с c успехами: C(c,k)/C(n,k).
+static double passHatK(int n, int c, int k) {
+    double p = 1;
+    for (int i = 0; i &lt; k; i++) {
+        p *= (double) (c - i) / (n - i);
+    }
+    return Math.max(0, p);
+}
+
+static double ratio(int a, int b) {
+    return b == 0 ? 1 : (double) a / b;
+}</code></pre></div>
     <div class="tab-panel" data-tab="Спецификация задачи"><pre><code class="lang-json">{"task_id": "refund-42",
  "user_goal": "Вернуть деньги за товар из заказа 42, доставку не возвращать",
  "spec": {
@@ -707,7 +984,8 @@ func ratio(a, b int) float64 {
    "max_steps":  8,
    "max_cost_usd": 0.10}}</code></pre></div>
   </div>
-  <p>Полная версия и табличный тест на семь типовых траекторий — <code>examples/m08-evals/trajectory.go</code>. <code>FailureKinds</code> в агрегате — готовая таблица для error analysis: «в 30% провалов нарушен порядок» говорит, что чинить, лучше, чем «success rate 70%».</p>
+  <p data-only="go">Полная версия и табличный тест на семь типовых траекторий — <code>examples/m08-evals/trajectory.go</code>. <code>FailureKinds</code> в агрегате — готовая таблица для error analysis: «в 30% провалов нарушен порядок» говорит, что чинить, лучше, чем «success rate 70%».</p>
+  <p data-only="java">Полная версия и параметризованный тест на семь типовых траекторий — <code>examples/java/m08-evals/…/Trajectories.java</code>. <code>failureKinds</code> в агрегате — готовая таблица для error analysis: «в 30% провалов нарушен порядок» говорит, что чинить, лучше, чем «success rate 70%».</p>
 
   <div class="viz" id="viz-traj">
     <p class="viz-title">Траектория агента: проверка по спецификации</p>
@@ -740,8 +1018,9 @@ func ratio(a, b int) float64 {
     <li><b>Инфраструктурные ошибки</b> (429, таймауты) — отдельный статус, не провал качества. Если их больше ~5–10% — прогон невалиден.</li>
     <li><b>Набор атак</b> — такой же gate: доля успешных атак (ASR) не выше порога, новые успешные атаки блокируют мерж (<a href="m07.html#redteam">модуль 7</a>).</li>
   </ul>
-  <p>Go-вариант: eval-набор как обычный <code>go test</code>, который пропускается без ключа и в <code>-short</code>, гоняет кейсы параллельно с ограничением и падает при pass rate ниже порога.</p>
-  <pre><code class="lang-go">package support_test
+  <p data-only="go">Go-вариант: eval-набор как обычный <code>go test</code>, который пропускается без ключа и в <code>-short</code>, гоняет кейсы параллельно с ограничением и падает при pass rate ниже порога.</p>
+  <p data-only="java">Java-вариант: eval-набор как обычный тест JUnit 5. Без ключа он пропускается (<code>@EnabledIfEnvironmentVariable</code>), из обычного <code>mvn test</code> исключён тегом <code>evals</code>, гоняет кейсы параллельно на виртуальных потоках с ограничением через <code>Semaphore</code> и падает при pass rate ниже порога.</p>
+  <pre data-only="go"><code class="lang-go">package support_test
 
 import (
 	"bufio"
@@ -861,12 +1140,124 @@ func loadCases(t *testing.T, path string) []evalCase {
 	}
 	return cases
 }</code></pre>
-  <p>Запуск: <code>go test ./support -run Evals -v -timeout 15m</code>. Альтернатива errgroup — подтесты с <code>t.Parallel()</code> и флаг <code>-parallel 8</code>: идиоматично и даёт отчёт по каждому кейсу, но тогда каждый провал кейса роняет тест, и порог pass rate приходится считать в родительском тесте после <code>t.Run</code>-группы, логируя вместо <code>t.Error</code> внутри.</p>
-  <div class="callout go"><span class="title">Аналогия из Go</span>Это как бенчмарки: результат шумный, поэтому сравнивают не один прогон, а распределения (<code>benchstat</code> с <code>-count=10</code>). Для evals тот же подход: несколько повторов baseline, сравнение с учётом разброса.</div>
+  <pre data-only="java"><code class="lang-java">package com.example.app.support;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+import com.anthropic.client.AnthropicClient;
+import com.anthropic.client.okhttp.AnthropicOkHttpClient;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
+import java.util.regex.Pattern;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+
+// Тестируемый код: Support.answer(client, question).
+@Tag("evals") // в обычном mvn test исключён (excludedGroups в surefire), как -short в Go
+@EnabledIfEnvironmentVariable(named = "ANTHROPIC_API_KEY", matches = ".+",
+        disabledReason = "ANTHROPIC_API_KEY not set: paid evals skipped")
+class SupportEvalsTest {
+    // mustMatch — regex, опционально; mustNotContain — запрещённые фразы.
+    record EvalCase(String id, String input, String mustMatch, List&lt;String&gt; mustNotContain) {}
+
+    sealed interface Result {
+        record Pass() implements Result {}
+        record Fail(String why) implements Result {}
+        record Infra(Exception e) implements Result {} // 429/таймаут — не провал качества
+    }
+
+    static final double MIN_PASS_RATE = 0.90;
+    static final ObjectMapper JSON = new ObjectMapper()
+            .setPropertyNamingStrategy(com.fasterxml.jackson.databind.PropertyNamingStrategies.SNAKE_CASE)
+            .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+
+    @Test
+    @Timeout(value = 10, unit = java.util.concurrent.TimeUnit.MINUTES)
+    void supportEvals() throws Exception {
+        List&lt;EvalCase&gt; cases = loadCases(Path.of("src/test/resources/golden.jsonl"));
+        AnthropicClient client = AnthropicOkHttpClient.fromEnv();
+        var limit = new Semaphore(8); // не больше 8 запросов в полёте: rate limit аккаунта
+
+        List&lt;Future&lt;Result&gt;&gt; futures = new ArrayList&lt;&gt;();
+        try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
+            for (EvalCase c : cases) {
+                futures.add(exec.submit(() -&gt; {
+                    limit.acquire();
+                    try {
+                        String out = Support.answer(client, c.input());
+                        String why = check(c, out);
+                        return why == null ? new Result.Pass() : new Result.Fail(why);
+                    } catch (Exception e) {
+                        return new Result.Infra(e);
+                    } finally {
+                        limit.release();
+                    }
+                }));
+            }
+        } // close() дожидается всех задач
+
+        int pass = 0, infra = 0;
+        for (int i = 0; i &lt; cases.size(); i++) {
+            switch (futures.get(i).get()) {
+                case Result.Infra r -&gt; {
+                    infra++;
+                    System.out.printf("INFRA %s: %s%n", cases.get(i).id(), r.e());
+                }
+                case Result.Pass r -&gt; pass++;
+                case Result.Fail r -&gt; System.out.printf("FAIL  %s: %s%n", cases.get(i).id(), r.why());
+            }
+        }
+        assertTrue(infra * 10 &lt;= cases.size(), "infra errors %d/%d: run is invalid".formatted(infra, cases.size()));
+        double rate = (double) pass / (cases.size() - infra);
+        System.out.printf(Locale.ROOT, "pass rate %.1f%% (%d/%d), infra errors: %d%n",
+                100 * rate, pass, cases.size() - infra, infra);
+        assertTrue(rate &gt;= MIN_PASS_RATE, String.format(Locale.ROOT,
+                "pass rate %.1f%% is below threshold %.0f%%", 100 * rate, 100 * MIN_PASS_RATE));
+    }
+
+    // null — кейс прошёл, иначе причина провала.
+    static String check(EvalCase c, String out) {
+        String lower = out.toLowerCase(Locale.ROOT);
+        for (String bad : c.mustNotContain() == null ? List.&lt;String&gt;of() : c.mustNotContain()) {
+            if (lower.contains(bad.toLowerCase(Locale.ROOT))) {
+                return "contains forbidden phrase " + bad;
+            }
+        }
+        if (c.mustMatch() != null &amp;&amp; !c.mustMatch().isEmpty() &amp;&amp; !Pattern.compile(c.mustMatch()).matcher(out).find()) {
+            return "does not match " + c.mustMatch();
+        }
+        return null;
+    }
+
+    static List&lt;EvalCase&gt; loadCases(Path path) throws IOException {
+        List&lt;EvalCase&gt; cases = new ArrayList&lt;&gt;();
+        for (String line : Files.readAllLines(path)) { // длинные строки JSONL — не проблема
+            if (!line.isBlank()) {
+                cases.add(JSON.readValue(line, EvalCase.class));
+            }
+        }
+        return cases;
+    }
+}</code></pre>
+  <p data-only="go">Запуск: <code>go test ./support -run Evals -v -timeout 15m</code>. Альтернатива errgroup — подтесты с <code>t.Parallel()</code> и флаг <code>-parallel 8</code>: идиоматично и даёт отчёт по каждому кейсу, но тогда каждый провал кейса роняет тест, и порог pass rate приходится считать в родительском тесте после <code>t.Run</code>-группы, логируя вместо <code>t.Error</code> внутри.</p>
+  <p data-only="java">Запуск: <code>mvn test -Pevals -Dtest=SupportEvalsTest</code>, где профиль <code>evals</code> снимает <code>&lt;excludedGroups&gt;evals&lt;/excludedGroups&gt;</code> из конфигурации surefire. Альтернатива ручному пулу — <code>@ParameterizedTest</code> по кейсам с параллельным выполнением JUnit (<code>junit.jupiter.execution.parallel.enabled=true</code>): идиоматично и даёт отчёт по каждому кейсу, но тогда каждый провал кейса роняет свой тест, и порог pass rate приходится считать в <code>@AfterAll</code> по накопленным результатам, логируя вместо <code>assert</code> внутри кейса.</p>
+  <div class="callout go" data-only="go"><span class="title">Аналогия из Go</span>Это как бенчмарки: результат шумный, поэтому сравнивают не один прогон, а распределения (<code>benchstat</code> с <code>-count=10</code>). Для evals тот же подход: несколько повторов baseline, сравнение с учётом разброса.</div>
+  <div class="callout go" data-only="java"><span class="title">Аналогия из Java</span>Это как бенчмарки в JMH: результат шумный, поэтому сравнивают не один прогон, а распределения — несколько форков и итераций, а в отчёте среднее с доверительным интервалом (<code>Score ± Error</code>). Для evals тот же подход: несколько повторов baseline, сравнение с учётом разброса.</div>
 
   <h3>Workflow GitHub Actions целиком</h3>
   <p>Схема, которая работает в проекте B: на каждый пуш в <code>main</code> (и по ночам) прогон сохраняет <code>results.jsonl</code> артефактом — это baseline. В PR, меняющем промпты, smoke-набор прогоняется с повторами, гейт сравнивает результат с последним успешным baseline из <code>main</code> по кейсам, отчёт уходит артефактом и комментарием в PR, а код выхода гейта красит проверку. Версии actions — по состоянию на октябрь 2026.</p>
-  <pre><code class="lang-yaml"># .github/workflows/evals.yml
+  <pre data-only="go"><code class="lang-yaml"># .github/workflows/evals.yml
 name: evals
 
 on:
@@ -948,6 +1339,92 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh pr comment ${{ github.event.pull_request.number }} --body-file out/report.md --edit-last --create-if-none</code></pre>
+  <pre data-only="java"><code class="lang-yaml"># .github/workflows/evals.yml
+name: evals
+
+on:
+  pull_request:
+    paths: ["prompts/**", "evals/**", "src/main/java/**/llm/**"]
+  push:
+    branches: [main]
+    paths: ["prompts/**", "evals/**", "src/main/java/**/llm/**"]
+  schedule:
+    - cron: "0 3 * * *" # ночью: свежий baseline и дрейф модели у провайдера
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write # комментарий с отчётом
+  actions: read        # скачать артефакт baseline из прогона main
+
+concurrency:
+  group: evals-${{ github.ref }}
+  cancel-in-progress: true # новый пуш в PR отменяет устаревший прогон
+
+jobs:
+  evals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven # кэш ~/.m2 по хэшу pom.xml
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: evals/requirements.txt
+
+      - run: pip install -r evals/requirements.txt
+
+      - name: Кэш ответов LLM
+        uses: actions/cache@v6
+        with:
+          path: .evalcache # ключ записи внутри: хэш модели, промпта, параметров, входа и номера повтора
+          key: evalcache-${{ github.run_id }}
+          restore-keys: evalcache-
+
+      - name: Smoke-набор, 3 повтора
+        env:
+          # PR из форка секрет не получит: шаг упадёт, и это честно красная проверка
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          suite=smoke
+          if [ "${{ github.event_name }}" != pull_request ]; then suite=full; fi
+          python evals/run.py --suite "$suite" --reps 3 --cache .evalcache --out out/results.jsonl
+
+      - name: Baseline из последнего успешного прогона на main
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          id=$(gh run list --workflow evals.yml --branch main --status success \
+                 --limit 1 --json databaseId --jq '.[0].databaseId')
+          if [ -n "$id" ]; then gh run download "$id" --name eval-results --dir baseline; fi
+
+      - name: Гейт против baseline
+        run: &gt;-
+          mvn -q -B compile exec:java -Dexec.mainClass=course.m08evals.EvalGate
+          -Dexec.args="-base baseline/results.jsonl -cur out/results.jsonl -out out/report.md -noise-floor 0.03"
+
+      - name: Отчёт в артефакт
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: eval-results
+          path: out/
+          retention-days: 30
+
+      - name: Комментарий в PR
+        if: always() &amp;&amp; github.event_name == 'pull_request' &amp;&amp; hashFiles('out/report.md') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr comment ${{ github.event.pull_request.number }} --body-file out/report.md --edit-last --create-if-none</code></pre>
   <ul>
     <li><b>Секреты и форки.</b> Для <code>pull_request</code> из форка GitHub не передаёт секреты (кроме <code>GITHUB_TOKEN</code>, и тот только на чтение — комментарий тоже не получится). Не «чините» это через <code>pull_request_target</code> с checkout кода из PR: так недоверенный код получает секреты и права на запись (документация GitHub прямо предупреждает, а <code>actions/checkout@v7</code> по умолчанию блокирует checkout форка в <code>pull_request_target</code> и <code>workflow_run</code>). Прогон для внешнего PR запускает мейнтейнер после ревью кода.</li>
     <li><b>Фильтр <code>paths</code> и обязательные проверки.</b> Если workflow пропущен из-за фильтра путей, его проверка висит в Pending и блокирует merge, если она required. Для обязательной проверки уберите <code>paths</code> из триггера и пропускайте дорогие шаги условием (<code>if</code>) — пропущенный по условию job считается успешным.</li>
@@ -956,8 +1433,8 @@ jobs:
     <li><b><code>--edit-last</code></b> правит последний комментарий того же пользователя (<code>github-actions[bot]</code>), чтобы PR не зарастал отчётами. Если бот пишет в PR и из других workflow, ищите свой комментарий по маркеру через <code>actions/github-script</code>.</li>
   </ul>
   <h3>Гейт: сравнение с baseline по кейсам и срезам</h3>
-  <p><code>evalgate</code> читает <code>results.jsonl</code> обоих прогонов (формат мини-фреймворка выше; повторы — несколько строк с одним <code>id</code>), сворачивает повторы в оценку кейса и применяет правила по порядку: прогон валиден (инфраструктурных ошибок не больше 10%), абсолютный порог, критичные срезы — 100%, затем парное сравнение с baseline. Красный гейт — при <i>значимом</i> падении (верх парного bootstrap-интервала ниже нуля) или падении больше noise floor. Срезы дают только предупреждения: при десяти срезах один «значимо упадёт» случайно.</p>
-  <pre><code class="lang-go">func Compare(base, cur []CaseResult, cfg GateConfig) GateReport {
+  <p><code><span data-only="go">evalgate</span><span data-only="java">EvalGate</span></code> читает <code>results.jsonl</code> обоих прогонов (формат мини-фреймворка выше; повторы — несколько строк с одним <code>id</code>), сворачивает повторы в оценку кейса и применяет правила по порядку: прогон валиден (инфраструктурных ошибок не больше 10%), абсолютный порог, критичные срезы — 100%, затем парное сравнение с baseline. Красный гейт — при <i>значимом</i> падении (верх парного bootstrap-интервала ниже нуля) или падении больше noise floor. Срезы дают только предупреждения: при десяти срезах один «значимо упадёт» случайно.</p>
+  <pre data-only="go"><code class="lang-go">func Compare(base, cur []CaseResult, cfg GateConfig) GateReport {
 	var rep GateReport
 	b, bErr := scores(base)
 	c, cErr := scores(cur)
@@ -1026,7 +1503,80 @@ jobs:
 	}
 	return rep
 }</code></pre>
-  <p>Типы <code>CaseResult</code>, <code>GateConfig</code>, <code>GateReport</code>, свёртка повторов <code>scores</code>, Markdown-рендер и CLI <code>cmd/evalgate</code> — в <code>examples/m08-evals/</code>; тесты проверяют зелёный гейт на одинаковых прогонах, красный — на регрессии 8 кейсов, на упавшем safety-кейсе и на 15% инфраструктурных ошибок. Комментарий в PR выглядит так:</p>
+  <pre data-only="java"><code class="lang-java">public static Report compare(List&lt;CaseResult&gt; base, List&lt;CaseResult&gt; cur, Config cfg) {
+    List&lt;String&gt; problems = new ArrayList&lt;&gt;(), warnings = new ArrayList&lt;&gt;();
+    List&lt;String&gt; regressed = new ArrayList&lt;&gt;(), fixed = new ArrayList&lt;&gt;();
+    Scores b = scores(base == null ? List.of() : base), c = scores(cur); // byId — TreeMap по id
+    if (c.errorRate() &gt; cfg.maxErrorRate() || b.errorRate() &gt; cfg.maxErrorRate()) {
+        problems.add(f("прогон невалиден: инфраструктурных ошибок %.0f%% (PR), %.0f%% (baseline)",
+                100 * c.errorRate(), 100 * b.errorRate()));
+    }
+
+    double[] all = c.byId().values().stream().mapToDouble(CaseScore::score).toArray();
+    Interval curIv = bootstrap(all, cfg.resamples(), cfg.seed());
+    if (!(curIv.est() &gt;= cfg.minPassRate())) {
+        problems.add(f("pass rate %.1f%% ниже порога %.0f%%", 100 * curIv.est(), 100 * cfg.minPassRate()));
+    }
+
+    // Пары по id: сравниваем только кейсы, которые есть в обоих прогонах.
+    Map&lt;String, List&lt;double[]&gt;&gt; byTag = new TreeMap&lt;&gt;();
+    List&lt;double[]&gt; pairs = new ArrayList&lt;&gt;(); // {base, cur}
+    for (var e : c.byId().entrySet()) {
+        String id = e.getKey();
+        CaseScore cc = e.getValue();
+        if (cfg.criticalTags().contains(cc.tag()) &amp;&amp; cc.score() &lt; 1) {
+            problems.add(f("критичный кейс %s [%s]: %.0f%% повторов прошло", id, cc.tag(), 100 * cc.score()));
+        }
+        CaseScore bb = b.byId().get(id);
+        if (bb == null) {
+            continue;
+        }
+        double[] pair = {bb.score(), cc.score()};
+        pairs.add(pair);
+        byTag.computeIfAbsent(cc.tag(), t -&gt; new ArrayList&lt;&gt;()).add(pair);
+        if (cc.score() &lt; bb.score()) regressed.add(id);
+        else if (cc.score() &gt; bb.score()) fixed.add(id);
+    }
+    int missing = c.byId().size() - pairs.size();
+    if (missing &gt; 0) {
+        warnings.add(missing + " кейсов нет в baseline: в сравнение не вошли");
+    }
+    if (pairs.isEmpty()) {
+        warnings.add("нет общих кейсов с baseline: проверены только абсолютные пороги");
+        return new Report(curIv, null, List.of(), regressed, fixed, problems, warnings);
+    }
+
+    SliceDiff overall = diff("всё", pairs, cfg);
+    Interval d = overall.diff();
+    if (d.hi() &lt; 0) {
+        problems.add(f("значимое падение: Δ %+.1f п.п., 95%% CI [%+.1f; %+.1f]", 100 * d.est(), 100 * d.lo(), 100 * d.hi()));
+    } else if (d.est() &lt; -cfg.noiseFloor()) {
+        problems.add(f("падение %.1f п.п. больше noise floor %.1f п.п.", -100 * d.est(), 100 * cfg.noiseFloor()));
+    }
+    // Срезы — предупреждения, а не красный гейт: при 10 срезах один «значимо
+    // упадёт» случайно (множественные сравнения). Жёсткие правила — у критичных.
+    List&lt;SliceDiff&gt; slices = new ArrayList&lt;&gt;();
+    byTag.forEach((tag, ps) -&gt; {
+        SliceDiff s = diff(tag, ps, cfg);
+        slices.add(s);
+        if (s.diff().hi() &lt; 0 || s.diff().est() &lt; -cfg.noiseFloor()) {
+            warnings.add(f("срез %s: %.0f%% → %.0f%% (n=%d)", tag, 100 * s.base(), 100 * s.cur(), s.n()));
+        }
+    });
+    return new Report(curIv, overall, slices, regressed, fixed, problems, warnings);
+}
+
+private static SliceDiff diff(String tag, List&lt;double[]&gt; pairs, Config cfg) {
+    double[] x = pairs.stream().mapToDouble(p -&gt; p[0]).toArray();
+    double[] y = pairs.stream().mapToDouble(p -&gt; p[1]).toArray();
+    return new SliceDiff(tag, x.length, mean(x), mean(y), pairedBootstrap(x, y, cfg.resamples(), cfg.seed()));
+}
+
+private static String f(String format, Object... args) {
+    return String.format(Locale.ROOT, format, args); // точка, а не запятая, при любой локали JVM
+}</code></pre>
+  <p data-only="go">Типы <code>CaseResult</code>, <code>GateConfig</code>, <code>GateReport</code>, свёртка повторов <code>scores</code>, Markdown-рендер и CLI <code>cmd/evalgate</code> — в <code>examples/m08-evals/</code>; тесты проверяют зелёный гейт на одинаковых прогонах, красный — на регрессии 8 кейсов, на упавшем safety-кейсе и на 15% инфраструктурных ошибок. Комментарий в PR выглядит так:</p>
+  <p data-only="java">Типы <code>CaseResult</code>, <code>Config</code>, <code>Report</code>, свёртка повторов <code>scores</code>, Markdown-рендер (всё в <code>Gate.java</code>) и CLI <code>EvalGate</code> — в <code>examples/java/m08-evals/</code>; тесты проверяют зелёный гейт на одинаковых прогонах, красный — на регрессии 8 кейсов, на упавшем safety-кейсе и на 15% инфраструктурных ошибок. Комментарий в PR выглядит так:</p>
   <pre><code class="lang-bash">## Evals: ❌ гейт не пройден
 
 PR: **84.7%** (95% CI 78.3–90.6)
@@ -1077,7 +1627,7 @@ PR: **84.7%** (95% CI 78.3–90.6)
     <li><b>Novelty и primacy.</b> Новый стиль ответов сначала вызывает интерес (или раздражение у привыкших), эффект затухает. Смотрите на эффект по дням и по когортам «новые / давние пользователи»; растущий или падающий тренд — повод продлить тест.</li>
     <li><b>Правило решения.</b> Катим, если первичная значимо выросла и ни одна guardrail-метрика не нарушила порог; иначе — нет, даже если judge доволен.</li>
   </ol>
-  <pre><code class="lang-go">// SRM — проверка sample ratio mismatch: χ²-критерий согласия наблюдаемых размеров
+  <pre data-only="go"><code class="lang-go">// SRM — проверка sample ratio mismatch: χ²-критерий согласия наблюдаемых размеров
 // групп A/B(/n) с запланированными долями. Маленькое p (обычно порог 0.001)
 // значит, что рандомизация или логирование сломаны и метрики эксперимента читать нельзя.
 func SRM(observed []int, shares []float64) (chi2, p float64) {
@@ -1108,6 +1658,56 @@ func chi2Survival(x float64, df int) float64 {
 }
 
 // SRM([]int{10000, 10600}, []float64{0.5, 0.5}) → chi2 ≈ 17.5, p ≈ 3e-5: эксперимент сломан</code></pre>
+  <pre data-only="java"><code class="lang-java">public record Result(double chi2, double p) {}
+
+// srm — проверка sample ratio mismatch: χ²-критерий согласия наблюдаемых размеров
+// групп A/B(/n) с запланированными долями. Маленькое p (обычно порог 0.001)
+// значит, что рандомизация или логирование сломаны и метрики эксперимента читать нельзя.
+public static Result srm(int[] observed, double[] shares) {
+    long total = 0;
+    for (int o : observed) total += o;
+    double chi2 = 0;
+    for (int i = 0; i &lt; observed.length; i++) {
+        double e = total * shares[i];
+        double d = observed[i] - e;
+        chi2 += d * d / e;
+    }
+    return new Result(chi2, chi2Survival(chi2, observed.length - 1));
+}
+
+// chi2Survival — P(χ²(df) ≥ x) для целого df ≥ 1 без внешних библиотек:
+// Q(1) = erfc(√(x/2)), Q(2) = e^(−x/2), Q(k+2) = Q(k) + t(k), где t(k) = (x/2)^(k/2)·e^(−x/2)/Γ(k/2+1)
+// и t(k+2) = t(k)·(x/2)/(k/2+1) — гамма-функцию считать не нужно.
+static double chi2Survival(double x, int df) {
+    double q, t;
+    int k;
+    if (df % 2 == 1) {
+        q = erfc(Math.sqrt(x / 2));
+        t = Math.sqrt(x / 2) * Math.exp(-x / 2) / (Math.sqrt(Math.PI) / 2); // Γ(3/2) = √π/2
+        k = 1;
+    } else {
+        q = Math.exp(-x / 2);
+        t = x / 2 * Math.exp(-x / 2); // Γ(2) = 1
+        k = 2;
+    }
+    for (; k &lt; df; k += 2) {
+        q += t;
+        t *= x / 2 / (k / 2.0 + 1);
+    }
+    return q;
+}
+
+// В JDK нет erfc: аппроксимация Чебышёва (Numerical Recipes), относительная ошибка &lt; 1.2e-7.
+// Нужна точнее — Apache Commons Math Erf.erfc.
+static double erfc(double x) {
+    double z = Math.abs(x), t = 1 / (1 + 0.5 * z);
+    double r = t * Math.exp(-z * z - 1.26551223 + t * (1.00002368 + t * (0.37409196 + t * (0.09678418
+            + t * (-0.18628806 + t * (0.27886807 + t * (-1.13520398 + t * (1.48851587
+            + t * (-0.82215223 + t * 0.17087277)))))))));
+    return x &gt;= 0 ? r : 2 - r;
+}
+
+// srm(new int[] {10000, 10600}, new double[] {0.5, 0.5}) → chi2 ≈ 17.5, p ≈ 3e-5: эксперимент сломан</code></pre>
   <h3>Shadow, canary, A/B, interleaving</h3>
   <table>
     <tr><th>Режим</th><th>Как устроен</th><th>На какой вопрос отвечает</th><th>Цена и риски</th></tr>
@@ -1137,7 +1737,7 @@ func chi2Survival(x float64, df int) float64 {
   </div>
   <div class="task">
     <h3>Задание 2: откалиброванный judge с κ и поправкой pass rate</h3>
-    <p>Проект B: judge faithfulness для ответов <code>/ask</code>. Разметите руками 100–150 ответов PASS/FAIL (FAIL добирайте из error analysis задания 1, чтобы их было не меньше 30), разбейте на train/dev/test 15/45/40. Напишите judge с бинарным вердиктом и reasoning, итерируйте рубрику на dev, финальные цифры снимите на test кодом — пакетом из <code>examples/m08-evals</code> или своим портом на Python. Для pairwise-варианта проверьте position bias.</p>
+    <p>Проект B: judge faithfulness для ответов <code>/ask</code>. Разметите руками 100–150 ответов PASS/FAIL (FAIL добирайте из error analysis задания 1, чтобы их было не меньше 30), разбейте на train/dev/test 15/45/40. Напишите judge с бинарным вердиктом и reasoning, итерируйте рубрику на dev, финальные цифры снимите на test кодом — <span data-only="go">пакетом из <code>examples/m08-evals</code></span><span data-only="java">модулем <code>examples/java/m08-evals</code></span> или своим портом на Python. Для pairwise-варианта проверьте position bias.</p>
     <ul>
       <li>Отчёт до/после калибровки: agreement, κ, TPR, TNR на test с интервалами; κ ≥ 0,6 и TNR ≥ 0,8 — или письменное объяснение, почему критерий пока нельзя автоматизировать.</li>
       <li>κ между двумя людьми на 30+ кейсах посчитан — это потолок для judge.</li>
@@ -1160,7 +1760,7 @@ func chi2Survival(x float64, df int) float64 {
   </div>
   <div class="task">
     <h3>Задание 4: eval по траекториям для агента проекта C</h3>
-    <p>Для агентного цикла из проекта C (модуль 6) превратите 15–20 агентных задач в спецификации: целевое состояние среды плюс required / allowed / forbidden инструменты, порядок там, где он важен, лимиты шагов и стоимости. Среда воспроизводима: Postgres с фикстурами в контейнере, внешние вызовы — моки, включая сценарии ошибок. Каждую задачу прогоните 4 раза и посчитайте агрегат функцией <code>Aggregate</code> или аналогом.</p>
+    <p>Для агентного цикла из проекта C (модуль 6) превратите 15–20 агентных задач в спецификации: целевое состояние среды плюс required / allowed / forbidden инструменты, порядок там, где он важен, лимиты шагов и стоимости. Среда воспроизводима: Postgres с фикстурами в контейнере, внешние вызовы — моки, включая сценарии ошибок. Каждую задачу прогоните 4 раза и посчитайте агрегат функцией <code><span data-only="go">Aggregate</span><span data-only="java">Trajectories.aggregate</span></code> или аналогом.</p>
     <ul>
       <li>Отчёт: task success, pass^2 и pass^4, tool-call precision и recall, лишние вызовы, шаги и стоимость (среднее и p95), таблица видов провалов.</li>
       <li>Минимум две задачи, где «только итог» засчитал бы успех, а спецификация ловит нарушение пути, — разобраны в README.</li>
@@ -1220,7 +1820,7 @@ func chi2Survival(x float64, df int) float64 {
     <li><a href="https://eugeneyan.com/writing/llm-evaluators/" target="_blank" rel="noopener">Eugene Yan — Evaluating the Effectiveness of LLM-Evaluators</a></li>
     <li><a href="https://arxiv.org/abs/2107.03374" target="_blank" rel="noopener">Chen et al. — Evaluating Large Language Models Trained on Code</a> (несмещённая оценка pass@k)</li>
     <li><a href="https://www.promptfoo.dev/docs/intro/" target="_blank" rel="noopener">promptfoo</a> · <a href="https://langfuse.com/docs" target="_blank" rel="noopener">Langfuse</a> · <a href="https://www.braintrust.dev/docs" target="_blank" rel="noopener">Braintrust</a> · <a href="https://github.com/openai/evals" target="_blank" rel="noopener">OpenAI Evals</a> · <a href="https://docs.ragas.io/" target="_blank" rel="noopener">RAGAS</a></li>
-    <li><a href="https://github.com/anthropics/anthropic-sdk-python" target="_blank" rel="noopener">anthropic-sdk-python</a>, <a href="https://github.com/anthropics/anthropic-sdk-go" target="_blank" rel="noopener">anthropic-sdk-go</a></li>
+    <li><a href="https://github.com/anthropics/anthropic-sdk-python" target="_blank" rel="noopener">anthropic-sdk-python</a>, <span data-only="go"><a href="https://github.com/anthropics/anthropic-sdk-go" target="_blank" rel="noopener">anthropic-sdk-go</a></span><span data-only="java"><a href="https://github.com/anthropics/anthropic-sdk-java" target="_blank" rel="noopener">anthropic-sdk-java</a></span></li>
     <li><a href="https://www.anthropic.com/research/statistical-approach-to-model-evals" target="_blank" rel="noopener">Anthropic — A statistical approach to model evaluations</a> (краткое изложение «Adding Error Bars to Evals»: кластерные SE, повторы, парные разности)</li>
     <li><a href="https://doi.org/10.1214/aos/1176344552" target="_blank" rel="noopener">Efron — Bootstrap Methods: Another Look at the Jackknife</a> (Annals of Statistics, 1979; исходная статья о bootstrap) и <a href="https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.bootstrap.html" target="_blank" rel="noopener">scipy.stats.bootstrap</a> (BCa, парный режим)</li>
     <li><a href="https://hamel.dev/blog/posts/evals-faq/" target="_blank" rel="noopener">Hamel Husain, Shreya Shankar — AI Evals: Everything You Need to Know (FAQ)</a> (error analysis, насыщение, первый сбой выше по потоку, синтетика по измерениям, сплит для калибровки judge)</li>
@@ -1312,8 +1912,12 @@ func chi2Survival(x float64, df int) float64 {
   const bias = document.getElementById('pb-bias'), gap = document.getElementById('pb-gap');
   const pair = document.getElementById('pb-pair'), verdict = document.getElementById('pb-verdict'), svg = document.getElementById('pb-svg');
   const ANS = {
-    A: 'Используйте <code>errgroup.Group</code> с <code>SetLimit(n)</code> или буферизованный канал как семафор на n слотов.',
-    B: 'Отличный вопрос! Конкурентность — одна из сильных сторон Go. Существует множество подходов: worker pool, семафоры, пакеты из x/sync… Всё зависит от задачи, поэтому важно учитывать контекст, нагрузку и требования.',
+    A: Course.STACK === 'java'
+      ? 'Запускайте задачи в <code>Executors.newVirtualThreadPerTaskExecutor()</code>, а число одновременных ограничьте <code>Semaphore</code> на n разрешений.'
+      : 'Используйте <code>errgroup.Group</code> с <code>SetLimit(n)</code> или буферизованный канал как семафор на n слотов.',
+    B: Course.STACK === 'java'
+      ? 'Отличный вопрос! Конкурентность — одна из сильных сторон Java. Существует множество подходов: пулы потоков, CompletableFuture, виртуальные потоки, реактивные библиотеки… Всё зависит от задачи, поэтому важно учитывать контекст, нагрузку и требования.'
+      : 'Отличный вопрос! Конкурентность — одна из сильных сторон Go. Существует множество подходов: worker pool, семафоры, пакеты из x/sync… Всё зависит от задачи, поэтому важно учитывать контекст, нагрузку и требования.',
   };
   let order = ['A', 'B'], last = null, stats = null;
   let seed = 7;

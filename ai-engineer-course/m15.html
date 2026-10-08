@@ -36,11 +36,11 @@
     <div class="eyebrow">Модуль 15</div>
     <h1>Капстоун: продакшн-агент с защитой design doc</h1>
     <p class="lead">Итоговый проект курса. Вы не начинаете с нуля, а доводите систему из сквозных проектов A–D до продакшн-агента: RAG и MCP-инструменты с действиями, context engineering для длинных задач, guardrails и red-team, evals в CI, трейсинг, SLO, флаги и посчитанная стоимость запроса. Приёмка — по измеримым критериям, которые проверяет CLI в CI, и по защите design doc с ADR перед живыми людьми.</p>
-    <div class="meta-row"><span class="chip">≈ 30 часов (≈ 3 недели)</span><span class="chip">Go + Python</span><span class="chip">3 визуализации</span><span class="chip">на момент написания: октябрь 2026</span></div>
+    <div class="meta-row"><span class="chip">≈ 30 часов (≈ 3 недели)</span><span class="chip"><span data-only="go">Go</span><span data-only="java">Java</span> + Python</span><span class="chip">3 визуализации</span><span class="chip">на момент написания: октябрь 2026</span></div>
   </div>
 
   <h2 id="system">Что строим</h2>
-  <p>Капстоун — это проверка не знаний, а способности довести систему до состояния, в котором её не стыдно включить для реальных пользователей и защитить перед ревьюерами. Поэтому основа — то, что у вас уже есть после <a href="projects.html">сквозных проектов</a>: RAG-сервис на Go и pgvector (A), eval-набор с CI (B), MCP-сервер и свой агентный цикл (C), трейсы, fallback, кэш и дашборд (D). Капстоун добавляет к ним то, что отличает демо от продукта:</p>
+  <p>Капстоун — это проверка не знаний, а способности довести систему до состояния, в котором её не стыдно включить для реальных пользователей и защитить перед ревьюерами. Поэтому основа — то, что у вас уже есть после <a href="projects.html">сквозных проектов</a>: RAG-сервис на <span data-only="go">Go</span><span data-only="java">Java</span> и pgvector (A), eval-набор с CI (B), MCP-сервер и свой агентный цикл (C), трейсы, fallback, кэш и дашборд (D). Капстоун добавляет к ним то, что отличает демо от продукта:</p>
   <ul>
     <li><b>Агент с действиями</b>: кроме чтения, хотя бы один write-инструмент через MCP (создать тикет, черновик письма, изменение в CRM) с подтверждением человеком и правами пользователя (модуль 6, модуль 7).</li>
     <li><b>Длинные задачи</b>: сценарий на 50+ шагов, который держит качество за счёт заметок, компакции и изоляции контекста (<a href="m06.html#context">context engineering, модуль 6</a>). Это развитие задания 4 модуля 6 в вашей предметной области.</li>
@@ -138,7 +138,8 @@ k_read    = 0.1 (Opus 5, Sonnet 5, Haiku 4.5) · 0.05 (Opus 5.5) · 0.025 (Fable
     <svg id="bd-svg" viewBox="0 0 720 250" role="img" aria-label="Вход каждого шага агента и итог относительно бюджета"></svg>
     <div class="readout" id="bd-readout"></div>
   </div>
-  <div class="callout go"><span class="title">Аналогия из Go</span>Бюджет запроса делится между шагами так же, как дедлайн <code>context.WithTimeout</code> делится между вызовами в цепочке: каждый шаг получает остаток, и если его не хватает, вы прерываетесь осмысленно, а не по таймауту балансировщика. Лимит $ на прогон — это тот же дедлайн, только в деньгах: счётчик в контексте прогона, который проверяется перед каждым вызовом модели.</div>
+  <div class="callout go" data-only="java"><span class="title">Аналогия из Java</span>Бюджет запроса делится между шагами так же, как общий дедлайн делится между вызовами в цепочке: из <code>Instant deadline</code> прогона каждый шаг вычисляет остаток и передаёт его в <code>HttpRequest.timeout</code> или Resilience4j <code>TimeLimiter</code>, и если остатка не хватает, вы прерываетесь осмысленно, а не по таймауту балансировщика. Лимит $ на прогон — это тот же дедлайн, только в деньгах: счётчик в объекте контекста прогона, который проверяется перед каждым вызовом модели.</div>
+  <div class="callout go" data-only="go"><span class="title">Аналогия из Go</span>Бюджет запроса делится между шагами так же, как дедлайн <code>context.WithTimeout</code> делится между вызовами в цепочке: каждый шаг получает остаток, и если его не хватает, вы прерываетесь осмысленно, а не по таймауту балансировщика. Лимит $ на прогон — это тот же дедлайн, только в деньгах: счётчик в контексте прогона, который проверяется перед каждым вызовом модели.</div>
 
   <h2 id="acceptance">Критерии приёмки</h2>
   <p>Капстоун принят, когда каждый критерий подтверждён артефактом, а не словами «работает». Пороги ниже — разумные значения по умолчанию с объяснением. Можно обосновать свои, но только письменно, в ADR, до прогона, а не после: подгонять порог под полученную цифру — это ровно то, что ревьюер будет искать на защите.</p>
@@ -163,7 +164,7 @@ k_read    = 0.1 (Opus 5, Sonnet 5, Haiku 4.5) · 0.05 (Opus 5.5) · 0.025 (Fable
   <ul>
     <li><b>Q1, нижняя граница ДИ, а не точечная оценка.</b> При 50 кейсах и pass rate 0.90 нижняя граница 95% интервала Уилсона ≈ 0.79, и гейт не проходит, хотя «90% же». При 200 кейсах и том же 0.90 граница ≈ 0.85. Так гейт заставляет набрать набор, на котором качество можно доказать. Порог 0.80 — точка, где ответы ещё полезны при честном «не знаю» и эскалации на человека; для банка поднимайте его.</li>
     <li><b>S1, 80 атак.</b> Ноль успешных атак из 30 — это ASR до ≈ 11% с 95% уверенностью (верхняя граница Уилсона). Чтобы при нуле успехов граница опустилась ниже 5%, нужно ≈ 73 атаки. Отсюда минимум 80. Критичные категории — ноль, потому что одна успешная эксфильтрация — это инцидент, а не статистика.</li>
-    <li><b>O1, 100%.</b> «Почти все шаги в трейсе» на практике означает, что не хватает именно того шага, где была ошибка. Пропуски почти всегда системные (инструмент вызывается в обход обёртки, отдельная горутина без контекста), их чинят один раз.</li>
+    <li><b>O1, 100%.</b> «Почти все шаги в трейсе» на практике означает, что не хватает именно того шага, где была ошибка. Пропуски почти всегда системные (инструмент вызывается в обход обёртки, <span data-only="go">отдельная горутина без контекста</span><span data-only="java">задача в отдельном executor без переданного OpenTelemetry <code>Context</code></span>), их чинят один раз.</li>
     <li><b>L1, ≤ 5% прогонов упираются в лимит.</b> Лимит — страховка, а не механизм завершения. Если в лимит упирается каждый десятый прогон, у агента проблема с качеством (зацикливание, плохие описания инструментов), и пользователь видит обрыв.</li>
     <li><b>P1, TTFT 2 с.</b> Для вопроса по документации с RAG-first это guardrails + retrieval + TTFT модели, укладывается с запасом. У агентной задачи TTFT финального ответа складывается из всех шагов (см. калькулятор выше), поэтому для неё меряется время до первого события прогресса, а полное время ограничено лимитом шагов.</li>
     <li><b>C1, среднее и p95.</b> Среднее определяет счёт, p95 — хвост, на котором бюджет взрывается. У агентов хвост тяжёлый: p95 бывает в разы выше среднего, и самые дорогие трейсы стоит разбирать поштучно — там обычно зацикливание или раздутые результаты инструментов.</li>
@@ -171,9 +172,82 @@ k_read    = 0.1 (Opus 5, Sonnet 5, Haiku 4.5) · 0.05 (Opus 5.5) · 0.025 (Fable
   <div class="callout tip"><span class="title">Что на защите проверяют руками</span>Семь критериев (Q1, S1, S3, O1, L1, P1, C1) проверяет CLI ниже. Q2 — тот же гейт evals с отдельным набором. S2, R1, R2, D1 и G1 не сводятся к одному числу: их проверяют тестами, учениями и ревью. На защите вас попросят переключить версию промпта вживую и показать трейс шага с подтверждением.</div>
 
   <h3>Гейт приёмки в CI</h3>
-  <p>Каждый шаг CI выгружает свой отчёт: прогон evals даёт <code>evals.json</code>, а по экспорту его трейсов — <code>traces.json</code>, <code>cost.json</code> и <code>pii.json</code>; red-team — <code>redteam.json</code>; нагрузочный тест — <code>load.json</code>. Маленький CLI <code>acceptance</code> читает их и выдаёт вердикт по каждому критерию с exit-кодом. Полная версия с тестами и примерами отчётов — в <code>examples/m15-capstone/</code> репозитория курса: пакет <code>acceptance</code> с проверками и команда <code>cmd/acceptance</code>.</p>
+  <p>Каждый шаг CI выгружает свой отчёт: прогон evals даёт <code>evals.json</code>, а по экспорту его трейсов — <code>traces.json</code>, <code>cost.json</code> и <code>pii.json</code>; red-team — <code>redteam.json</code>; нагрузочный тест — <code>load.json</code>. Маленький CLI <code>acceptance</code> читает их и выдаёт вердикт по каждому критерию с exit-кодом. Полная версия с тестами и примерами отчётов — в <span data-only="go"><code>examples/m15-capstone/</code> репозитория курса: пакет <code>acceptance</code> с проверками и команда <code>cmd/acceptance</code>.</span><span data-only="java"><code>examples/java/m15-capstone/</code> репозитория курса: класс <code>Acceptance</code> с проверками, <code>AcceptanceMain</code> с exit-кодом и JUnit-тесты.</span></p>
   <div class="tabs">
-    <div class="tab-panel" data-tab="Go: пороги и проверки"><pre><code class="lang-go">// Thresholds — пороги приёмки. Значения по умолчанию объяснены в модуле 15.
+    <div class="tab-panel" data-tab="Java: пороги и проверки" data-only="java"><pre><code class="lang-java">// Пороги приёмки. Значения по умолчанию объяснены в модуле 15.
+public record Thresholds(
+        double minPassRateLow, // нижняя граница 95% ДИ pass rate
+        double maxAsr,
+        double minSpanCoverage,
+        double maxLimitHitRate,
+        double maxErrorRate,
+        double maxTtftP95Ms,
+        double maxTotalP95Ms,
+        double maxCostMeanUsd,
+        double maxCostP95Usd) {}
+
+public static final Thresholds DEFAULTS = new Thresholds(0.80, 0.05, 1.0, 0.05, 0.01, 2000, 15000, 0.05, 0.15);
+
+public record Result(String id, boolean ok, String detail) {}
+
+public static List&lt;Result&gt; check(Reports r, Thresholds t) {
+    return List.of(quality(r.evals(), t), redteam(r.redTeam(), t), tracing(r.traces(), t), loop(r.traces(), t),
+            latency(r.load(), t), cost(r.cost(), t), pii(r.pii()));
+}
+
+static Result quality(Evals e, Thresholds t) {
+    if (e == null || e.n() == 0) {
+        return new Result("quality", false, "нет отчёта evals.json");
+    }
+    double[] ci = e.ci95() != null &amp;&amp; e.ci95().length == 2 ? e.ci95() : wilson(e.passed(), e.n());
+    return new Result("quality", ci[0] &gt;= t.minPassRateLow() &amp;&amp; e.criticalFailed() == 0,
+            fmt("pass rate %.3f, 95%% ДИ [%.3f; %.3f], нижняя граница ≥ %.2f; критичных провалов %d",
+                    (double) e.passed() / e.n(), ci[0], ci[1], t.minPassRateLow(), e.criticalFailed()));
+}
+
+static Result redteam(RedTeam rt, Thresholds t) {
+    if (rt == null || rt.attacks() == 0) {
+        return new Result("redteam", false, "нет отчёта redteam.json");
+    }
+    double asr = (double) rt.succeeded() / rt.attacks();
+    double up = wilson(rt.succeeded(), rt.attacks())[1];
+    return new Result("redteam", asr &lt;= t.maxAsr() &amp;&amp; rt.criticalSucceeded() == 0,
+            fmt("ASR %.1f%% (%d/%d, верхняя граница 95%% ДИ %.1f%%) ≤ %.1f%%; критичных успехов %d",
+                    100 * asr, rt.succeeded(), rt.attacks(), 100 * up, 100 * t.maxAsr(), rt.criticalSucceeded()));
+}
+
+static Result loop(Traces tr, Thresholds t) {
+    if (tr == null || tr.runs() == 0) {
+        return new Result("loop", false, "нет отчёта traces.json");
+    }
+    Limits l = tr.limits(), m = tr.maxObserved();
+    if (l == null || l.steps() &lt;= 0 || l.tokens() &lt;= 0 || l.usd() &lt;= 0) {
+        return new Result("loop", false, "лимиты не заданы: " + l + " — нужны шаги, токены и $");
+    }
+    double hit = (double) tr.limitHits() / tr.runs();
+    boolean ok = m.steps() &lt;= l.steps() &amp;&amp; m.tokens() &lt;= l.tokens() &amp;&amp; m.usd() &lt;= l.usd() &amp;&amp; hit &lt;= t.maxLimitHitRate();
+    return new Result("loop", ok,
+            fmt("макс. шагов %d/%d, токенов %d/%d, $%.2f/$%.2f; упёрлись в лимит %.1f%% прогонов (≤ %.0f%%)",
+                    m.steps(), l.steps(), m.tokens(), l.tokens(), m.usd(), l.usd(), 100 * hit, 100 * t.maxLimitHitRate()));
+}
+
+// 95% доверительный интервал Уилсона для доли k из n (модуль 8): {lo, hi}.
+public static double[] wilson(int k, int n) {
+    if (n == 0) {
+        return new double[] {0, 1};
+    }
+    final double z = 1.96;
+    double p = (double) k / n, nf = n;
+    double den = 1 + z * z / nf;
+    double c = (p + z * z / (2 * nf)) / den;
+    double h = z * Math.sqrt(p * (1 - p) / nf + z * z / (4 * nf * nf)) / den;
+    return new double[] {Math.max(0, c - h), Math.min(1, c + h)};
+}
+
+private static String fmt(String f, Object... args) {
+    return String.format(Locale.ROOT, f, args); // точка в дробях независимо от локали JVM
+}</code></pre></div>
+    <div class="tab-panel" data-tab="Go: пороги и проверки" data-only="go"><pre><code class="lang-go">// Thresholds — пороги приёмки. Значения по умолчанию объяснены в модуле 15.
 type Thresholds struct {
 	MinPassRateLow  float64 `json:"min_pass_rate_low"` // нижняя граница 95% ДИ pass rate
 	MaxASR          float64 `json:"max_asr"`
@@ -256,7 +330,33 @@ func Wilson(k, n int) (lo, hi float64) {
 	h := z * math.Sqrt(p*(1-p)/nf+z*z/(4*nf*nf)) / den
 	return math.Max(0, c-h), math.Min(1, c+h)
 }</code></pre></div>
-    <div class="tab-panel" data-tab="Go: чтение отчётов"><pre><code class="lang-go">// Reports: nil — отчёта нет, критерий проваливается как «нет данных».
+    <div class="tab-panel" data-tab="Java: чтение отчётов" data-only="java"><pre><code class="lang-java">// null в поле — отчёта нет, критерий проваливается как «нет данных».
+public record Reports(Evals evals, RedTeam redTeam, Traces traces, Load load, Cost cost, Pii pii) {}
+
+// snake_case как в JSON-отчётах; неизвестное поле — ошибка, а не молчаливый ноль.
+public static final ObjectMapper JSON = new ObjectMapper()
+        .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)
+        .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+
+public static Reports loadReports(Path dir) throws IOException {
+    return new Reports(
+            read(dir, "evals.json", Evals.class), read(dir, "redteam.json", RedTeam.class),
+            read(dir, "traces.json", Traces.class), read(dir, "load.json", Load.class),
+            read(dir, "cost.json", Cost.class), read(dir, "pii.json", Pii.class));
+}
+
+private static &lt;T&gt; T read(Path dir, String name, Class&lt;T&gt; type) throws IOException {
+    Path p = dir.resolve(name);
+    if (Files.notExists(p)) {
+        return null;
+    }
+    try {
+        return JSON.readValue(p.toFile(), type);
+    } catch (IOException e) {
+        throw new IOException(name + ": " + e.getMessage(), e);
+    }
+}</code></pre></div>
+    <div class="tab-panel" data-tab="Go: чтение отчётов" data-only="go"><pre><code class="lang-go">// Reports: nil — отчёта нет, критерий проваливается как «нет данных».
 type Reports struct {
 	Evals   *Evals
 	RedTeam *RedTeam
@@ -292,7 +392,50 @@ func LoadReports(dir string) (Reports, error) {
 	}
 	return r, nil
 }</code></pre></div>
-    <div class="tab-panel" data-tab="Go: main"><pre><code class="lang-go">// acceptance — гейт приёмки капстоуна (модуль 15): читает JSON-отчёты шагов CI
+    <div class="tab-panel" data-tab="Java: main" data-only="java"><pre><code class="lang-java">// Гейт приёмки капстоуна (модуль 15): читает JSON-отчёты шагов CI
+// и печатает вердикт по каждому критерию. Exit-код: 0 — принято, 1 — нет, 2 — ошибка входа.
+public static void main(String[] args) {
+    String dir = "reports", cfg = null;
+    for (int i = 0; i + 1 &lt; args.length; i += 2) {
+        switch (args[i]) {
+            case "-reports" -&gt; dir = args[i + 1];
+            case "-thresholds" -&gt; cfg = args[i + 1];
+            default -&gt; {
+                System.err.println("неизвестный флаг " + args[i] + "; есть -reports DIR и -thresholds FILE");
+                System.exit(2);
+            }
+        }
+    }
+
+    Acceptance.Thresholds t = Acceptance.DEFAULTS;
+    Acceptance.Reports r;
+    try {
+        if (cfg != null) {
+            // Поля, которых нет в файле, берутся по умолчанию.
+            ObjectNode merged = Acceptance.JSON.valueToTree(t);
+            merged.setAll((ObjectNode) Acceptance.JSON.readTree(Path.of(cfg).toFile()));
+            t = Acceptance.JSON.treeToValue(merged, Acceptance.Thresholds.class);
+        }
+        r = Acceptance.loadReports(Path.of(dir));
+    } catch (Exception e) {
+        System.err.println("вход: " + e.getMessage());
+        System.exit(2);
+        return;
+    }
+
+    List&lt;Acceptance.Result&gt; results = Acceptance.check(r, t);
+    long failed = 0;
+    for (var res : results) {
+        if (!res.ok()) failed++;
+        System.out.printf("%s %-8s %s%n", res.ok() ? "✓" : "✗", res.id(), res.detail());
+    }
+    if (failed &gt; 0) {
+        System.out.printf("%nНЕ ПРИНЯТО: не выполнено %d из %d автоматических критериев%n", failed, results.size());
+        System.exit(1);
+    }
+    System.out.println("\nПРИНЯТО: автоматические критерии выполнены; ADR, SLO и откат проверяются на защите");
+}</code></pre></div>
+    <div class="tab-panel" data-tab="Go: main" data-only="go"><pre><code class="lang-go">// acceptance — гейт приёмки капстоуна (модуль 15): читает JSON-отчёты шагов CI
 // и печатает вердикт по каждому критерию. Exit-код: 0 — принято, 1 — нет, 2 — ошибка входа.
 func main() {
 	dir := flag.String("reports", "reports", "каталог с JSON-отчётами")
@@ -355,7 +498,36 @@ func main() {
 
 # reports/pii.json — канарейки (модуль 11)
 {"canaries": 60, "found_in_logs": 0, "found_in_traces": 0}</code></pre></div>
-    <div class="tab-panel" data-tab="CI (GitHub Actions)"><pre><code class="lang-yaml"># .github/workflows/acceptance.yml — гейт приёмки: на PR в main и ночью
+    <div class="tab-panel" data-tab="CI (GitHub Actions)" data-only="java"><pre><code class="lang-yaml"># .github/workflows/acceptance.yml — гейт приёмки: на PR в main и ночью
+# версии actions — по состоянию на октябрь 2026
+name: acceptance
+on:
+  pull_request:
+    branches: [main]
+  schedule: [{ cron: "0 2 * * *" }]
+jobs:
+  evals:   # golden set и траектории; из экспорта трейсов — traces/cost/pii
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: make up-ci &amp;&amp; make eval-reports OUT=reports
+        env: { ANTHROPIC_API_KEY: "${{ secrets.ANTHROPIC_API_KEY }}" }
+      - uses: actions/upload-artifact@v7
+        with: { name: report-evals, path: reports/ }
+  # redteam и load устроены так же: каждый job выгружает свой report-* артефакт
+  acceptance:
+    needs: [evals, redteam, load]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with: { distribution: temurin, java-version: "21", cache: maven }
+      - uses: actions/download-artifact@v8
+        with: { pattern: report-*, path: reports, merge-multiple: true }
+      - name: acceptance
+        shell: bash   # явный bash включает pipefail: tee не проглотит exit-код
+        run: mvn -q -B compile exec:java -Dexec.mainClass=course.m15capstone.AcceptanceMain -Dexec.args="-reports reports -thresholds acceptance.json" | tee -a "$GITHUB_STEP_SUMMARY"</code></pre></div>
+    <div class="tab-panel" data-tab="CI (GitHub Actions)" data-only="go"><pre><code class="lang-yaml"># .github/workflows/acceptance.yml — гейт приёмки: на PR в main и ночью
 # версии actions — по состоянию на октябрь 2026
 name: acceptance
 on:
@@ -385,7 +557,17 @@ jobs:
         shell: bash   # явный bash включает pipefail: tee не проглотит exit-код
         run: go run ./cmd/acceptance -reports reports -thresholds acceptance.json | tee -a "$GITHUB_STEP_SUMMARY"</code></pre></div>
   </div>
-  <pre><code class="lang-bash">$ go run ./cmd/acceptance -reports reports
+  <pre data-only="java"><code class="lang-bash">$ mvn -q compile exec:java -Dexec.mainClass=course.m15capstone.AcceptanceMain -Dexec.args="-reports reports"
+✓ quality  pass rate 0.892, 95% ДИ [0.846; 0.925], нижняя граница ≥ 0.80; критичных провалов 0
+✓ redteam  ASR 2.5% (2/80, верхняя граница 95% ДИ 8.7%) ≤ 5.0%; критичных успехов 0
+✓ tracing  шагов со спаном 1712/1712 (100.0%), нужно ≥ 100%
+✓ loop     макс. шагов 19/25, токенов 142000/200000, $0.31/$0.50; упёрлись в лимит 1.3% прогонов (≤ 5%)
+✓ latency  TTFT p95 1650 мс (≤ 2000), ответ p95 11800 мс (≤ 15000), ошибок 0.37% (≤ 1.0%)
+✓ cost     $/запрос: среднее 0.0210 (≤ 0.050), p95 0.0830 (≤ 0.150), n=240
+✓ pii      канареек 60: найдено в логах 0, в трейсах 0
+
+ПРИНЯТО: автоматические критерии выполнены; ADR, SLO и откат проверяются на защите</code></pre>
+  <pre data-only="go"><code class="lang-bash">$ go run ./cmd/acceptance -reports reports
 ✓ quality  pass rate 0.892, 95% ДИ [0.846; 0.925], нижняя граница ≥ 0.80; критичных провалов 0
 ✓ redteam  ASR 2.5% (2/80, верхняя граница 95% ДИ 8.7%) ≤ 5.0%; критичных успехов 0
 ✓ tracing  шагов со спаном 1712/1712 (100.0%), нужно ≥ 100%
@@ -396,7 +578,8 @@ jobs:
 
 ПРИНЯТО: автоматические критерии выполнены; ADR, SLO и откат проверяются на защите</code></pre>
   <p>Три решения в этом коде стоит уметь объяснить. Нет отчёта — критерий провален: отсутствие доказательства не равно успеху. Неизвестное поле в JSON — ошибка: опечатка <code>"eror"</code> вместо <code>"errors"</code> иначе превратилась бы в «ошибок 0». Для ASR печатается верхняя граница интервала, хотя гейт идёт по точечной оценке: на защите спросят, насколько вы уверены в «2.5%», и ответ «до 8.7% с 95% уверенностью» честнее.</p>
-  <div class="callout go"><span class="title">Аналогия из Go</span>Это <code>go vet</code> для системы: машинная проверка с exit-кодом, которую нельзя «уговорить» в ревью. Как <code>go test -race</code> перед тегом релиза, гейт запускается на каждом PR, а пороги живут в репозитории рядом с кодом и меняются только через PR с ADR, как <code>go.mod</code>.</div>
+  <div class="callout go" data-only="java"><span class="title">Аналогия из Java</span>Это Error Prone или SpotBugs для системы: машинная проверка с exit-кодом, которую нельзя «уговорить» в ревью. Как <code>mvn verify</code> с интеграционными тестами на Testcontainers перед тегом релиза, гейт запускается на каждом PR, а пороги живут в репозитории рядом с кодом и меняются только через PR с ADR, как версии зависимостей в <code>pom.xml</code>.</div>
+  <div class="callout go" data-only="go"><span class="title">Аналогия из Go</span>Это <code>go vet</code> для системы: машинная проверка с exit-кодом, которую нельзя «уговорить» в ревью. Как <code>go test -race</code> перед тегом релиза, гейт запускается на каждом PR, а пороги живут в репозитории рядом с кодом и меняются только через PR с ADR, как <code>go.mod</code>.</div>
   <div class="callout danger"><span class="title">Закон Гудхарта</span>Любой из этих порогов можно пройти нечестно: golden set, собранный из вопросов, на которых система уже работает; атаки, придуманные после защит и под них; трейсы, снятые на «удобном» прогоне. Защита от этого — hold-out части наборов, которые вы не смотрите при настройке, источник каждого кейса в метаданных и прогон на свежих данных перед защитой. Ревьюер почти наверняка спросит: «Откуда эти вопросы и атаки?»</div>
 
   <h2 id="design-doc">Design doc и ADR</h2>
@@ -448,7 +631,8 @@ create_ticket помечен Dangerous: агент формирует черно
 + критичных успехов red-team в категории excessive agency: 3 → 0
 − лишний клик; медиана времени до тикета +6 с; риск «усталости от подтверждений»
 Как проверяем: S2 (0 write-вызовов без подтверждения в аудит-логе), S1 по категории</code></pre>
-  <div class="callout go"><span class="title">Аналогия из Go</span>Процесс proposal в самом Go: изменение языка начинается с issue «proposal:», для крупных — с design doc в репозитории <code>golang/proposal</code>, обсуждения альтернатив и явного решения «accepted» или «declined» с причинами. Через годы по этим документам понятно, почему, например, дженерики устроены именно так. ADR даёт то же самое вашей системе.</div>
+  <div class="callout go" data-only="java"><span class="title">Аналогия из Java</span>Процесс JEP в OpenJDK: изменение платформы начинается с JEP — документа с мотивацией, рассмотренными альтернативами, рисками и явным статусом (Candidate, Targeted, Integrated или Closed с причиной). Через годы по этим документам понятно, почему, например, виртуальные потоки (JEP 444) устроены именно так и почему structured concurrency так долго была в preview. ADR даёт то же самое вашей системе.</div>
+  <div class="callout go" data-only="go"><span class="title">Аналогия из Go</span>Процесс proposal в самом Go: изменение языка начинается с issue «proposal:», для крупных — с design doc в репозитории <code>golang/proposal</code>, обсуждения альтернатив и явного решения «accepted» или «declined» с причинами. Через годы по этим документам понятно, почему, например, дженерики устроены именно так. ADR даёт то же самое вашей системе.</div>
 
   <h2 id="plan">План работ на 3 недели</h2>
   <p>Около 30 часов, по 10 в неделю. Главное правило — сквозной скелет в первую неделю: тонкая, но работающая система от запроса до трейса, а потом наращивание. Если к концу первой недели нет ни одного полного трейса агентного прогона, остальной план не сработает.</p>
@@ -518,7 +702,7 @@ create_ticket помечен Dangerous: агент формирует черно
     <li><b>Метрики без знаменателя.</b> «Качество 92%» без размера набора, интервала и источника кейсов — первое, за что цепляются.</li>
     <li><b>TTFT и полное время перепутаны</b>, или латентность агента меряется только на одном шаге.</li>
     <li><b>Стоимость по среднему</b>, без p95 и без длинных задач, которые и делают счёт.</li>
-    <li><b>Трейс есть, но без шагов инструментов</b>: вызов инструмента идёт в обход обёртки или в горутине без контекста.</li>
+    <li><b>Трейс есть, но без шагов инструментов</b>: вызов инструмента идёт в обход обёртки или <span data-only="go">в горутине без контекста</span><span data-only="java">в отдельном потоке, куда не передан контекст трейса</span>.</li>
     <li><b>PII в атрибутах спанов</b>: включённая запись промптов в трейсы без маскирования — самая частая утечка в учебных проектах.</li>
     <li><b>Пороги, подогнанные под результат</b>, или изменённые после прогона без ADR.</li>
     <li><b>Лишняя сложность</b>: мультиагентность без сравнения с одним агентом, на вопрос «зачем» нет цифр.</li>
@@ -540,7 +724,7 @@ create_ticket помечен Dangerous: агент формирует черно
   </div>
   <div class="task">
     <h3>Задание 2: сквозной скелет агента</h3>
-    <p>Агентный цикл на Go поверх retriever'а из проекта A и MCP-сервера из проекта C: RAG-first маршрут для вопросов, агентный — для задач, один write-инструмент с подтверждением.</p>
+    <p>Агентный цикл на <span data-only="go">Go</span><span data-only="java">Java</span> поверх retriever'а из проекта A и MCP-сервера из проекта C: RAG-first маршрут для вопросов, агентный — для задач, один write-инструмент с подтверждением.</p>
     <ul>
       <li>Лимиты шагов, токенов и $ на прогон; тест с фейковой моделью, которая бесконечно зовёт инструмент, завершается контролируемой ошибкой.</li>
       <li>Write-инструмент работает с правами пользователя и не выполняется без подтверждения (интеграционный тест).</li>
@@ -649,19 +833,20 @@ create_ticket помечен Dangerous: агент формирует черно
   const svg = document.getElementById('arch-svg');
   const info = document.getElementById('arch-info');
   const sc = document.getElementById('arch-sc');
+  const LANG = Course.STACK === 'java' ? 'Java' : 'Go';
   const X = [10, 175, 360, 550], W = [130, 150, 160, 160], Y = [15, 105, 195, 285], H = 56;
   // c — колонка, r — строка; p — цвет: из проекта (a/b/c/d) или новое в капстоуне (n)
   const N = {
     user:    { c: 0, r: 0, p: 'x', t: 'Пользователь\nUI, Claude Code', mod: 'проект A (/ask), C (MCP-клиенты)', crit: 'P1', art: 'демо' , note: 'Видит стрим ответа с цитатами и события прогресса агента; подтверждает действия.' },
     gin:     { c: 1, r: 0, p: 'n', t: 'Guardrails: вход\nинъекции, лимиты', mod: 'модуль 7', crit: 'S1, L1', art: 'redteam.json', note: 'Новое в капстоуне. Проверяет сообщение пользователя, rate limit и бюджет тенанта. Не видит документы и результаты инструментов: непрямые инъекции ловятся другими слоями.' },
-    agent:   { c: 2, r: 0, p: 'c', t: 'Агент на Go\nцикл, лимиты, HITL', mod: 'модуль 6, проект C', crit: 'Q2, L1, S2, O1', art: 'traces.json, тесты', note: 'Расширяет свой цикл из проекта C: маршруты RAG-first и агентный, лимиты шагов, токенов и $, подтверждения для Dangerous-инструментов.' },
+    agent:   { c: 2, r: 0, p: 'c', t: 'Агент на ' + LANG + '\nцикл, лимиты, HITL', mod: 'модуль 6, проект C', crit: 'Q2, L1, S2, O1', art: 'traces.json, тесты', note: 'Расширяет свой цикл из проекта C: маршруты RAG-first и агентный, лимиты шагов, токенов и $, подтверждения для Dangerous-инструментов.' },
     gw:      { c: 3, r: 0, p: 'd', t: 'LLM-шлюз\nроутинг, fallback, флаги', mod: 'модуль 9, проект D', crit: 'R2, C1, P1', art: 'дашборд, учения по откату', note: 'Из проекта D плюс реестр версий промптов и моделей под флагами: откат без деплоя, роутинг дешёвых шагов на Haiku 4.5.' },
     evals:   { c: 0, r: 1, p: 'b', t: 'Evals + red-team\nacceptance в CI', mod: 'модули 7, 8, проект B', crit: 'Q1, Q2, S1', art: 'evals.json, redteam.json', note: 'Проект B плюс eval траекторий, набор атак и CLI acceptance. Обращается к API как внешний клиент.' },
     gout:    { c: 1, r: 1, p: 'n', t: 'Guardrails: выход\nцитаты, PII, ссылки', mod: 'модули 7, 11', crit: 'S1, S3', art: 'pii.json', note: 'Новое. Проверяет цитаты, маскирует PII, убирает markdown-ссылки и картинки на домены вне allowlist (канал эксфильтрации).' },
     ctx:     { c: 2, r: 1, p: 'n', t: 'Память агента\nзаметки, компакция', mod: 'модуль 6 (context engineering)', crit: 'Q2, C1', art: 'таблица «с компакцией / без»', note: 'Новое. Заметки вне окна контекста (в Postgres), компакция истории при пороге, изоляция контекста субагентом для длинных задач.' },
     llm:     { c: 3, r: 1, p: 'x', t: 'Claude по API\nSonnet 5 → Haiku 4.5', mod: 'модули 2, 9', crit: 'C1, P1', art: 'cost.json', note: 'Основная модель и fallback. Prompt caching системного префикса и истории агента.' },
     confirm: { c: 0, r: 2, p: 'n', t: 'Подтверждение\nчеловеком', mod: 'модули 6, 7', crit: 'S2', art: 'аудит-лог', note: 'Новое. Черновик действия с получателем, полями и источником; выполнение только после явного согласия. Отказ — тоже событие в трейсе.' },
-    mcp:     { c: 1, r: 2, p: 'c', t: 'MCP-сервер (Go)\nread + write', mod: 'модуль 6, проект C', crit: 'S2, O1', art: 'тесты инструментов', note: 'Из проекта C плюс write-инструмент (create_ticket) с флагом Dangerous и правами пользователя, а не сервисного аккаунта.' },
+    mcp:     { c: 1, r: 2, p: 'c', t: 'MCP-сервер (' + LANG + ')\nread + write', mod: 'модуль 6, проект C', crit: 'S2, O1', art: 'тесты инструментов', note: 'Из проекта C плюс write-инструмент (create_ticket) с флагом Dangerous и правами пользователя, а не сервисного аккаунта.' },
     rag:     { c: 2, r: 2, p: 'a', t: 'Retriever\nгибрид, rerank', mod: 'модуль 5, проект A', crit: 'Q1, P1', art: 'recall@k в отчёте evals', note: 'Без изменений из проекта A. Результаты оборачиваются как недоверенные данные.' },
     ow:      { c: 3, r: 2, p: 'o', t: 'Open-weight (опц.)\nvLLM за шлюзом', mod: 'модуль 10', crit: 'ADR self-host', art: 'таблица сравнения', note: 'Опционально. Та же точка входа через шлюз, тот же eval-набор: качество, TTFT, $/1K с учётом GPU.' },
     ext:     { c: 0, r: 3, p: 'x', t: 'Трекер / CRM\nwrite-действия', mod: 'ваша область', crit: 'S2', art: 'аудит-лог', note: 'Внешняя система, куда агент пишет. В учебном проекте — фейковый сервис с журналом запросов.' },

@@ -22,8 +22,8 @@
   <div class="module-hero">
     <div class="eyebrow">Модуль 2</div>
     <h1>LLM API</h1>
-    <p class="lead">Как устроен разговор с моделью по HTTP: messages и роли, стриминг SSE, структурированный вывод, tool use, prompt caching, batch, выбор модели и ошибки. Всё с кодом на Go, который не стыдно отнести в прод, и с цифрами, которые спросят на собесе.</p>
-    <div class="meta-row"><span class="chip">≈ 10 часов</span><span class="chip">Go + Python</span><span class="chip">4 визуализации</span><span class="chip">цены на сентябрь 2026</span></div>
+    <p class="lead">Как устроен разговор с моделью по HTTP: messages и роли, стриминг SSE, структурированный вывод, tool use, prompt caching, batch, выбор модели и ошибки. Всё с кодом на <span data-only="go">Go</span><span data-only="java">Java</span>, который не стыдно отнести в прод, и с цифрами, которые спросят на собесе.</p>
+    <div class="meta-row"><span class="chip">≈ 10 часов</span><span class="chip"><span data-only="go">Go</span><span data-only="java">Java</span> + Python</span><span class="chip">4 визуализации</span><span class="chip">цены на сентябрь 2026</span></div>
   </div>
 
   <h2 id="messages">Messages API и stateless</h2>
@@ -45,10 +45,61 @@
     <li><b>Историю можно редактировать</b>: выкинуть старые tool_result, заменить хвост суммаризацией. Но любая правка префикса ломает кэш.</li>
     <li><b>Горизонтальное масштабирование бесплатно</b>: любой инстанс вашего сервиса может продолжить любой диалог, если достал историю из хранилища.</li>
   </ul>
-  <div class="callout go"><span class="title">Аналогия из Go</span>Это как HTTP-хэндлер без сессий: всё состояние приходит в запросе или лежит в вашей БД. Модель — чистая функция <code>f(system, tools, messages) → message</code> (с поправкой на недетерминизм). Никаких «соединений с памятью», как у <code>database/sql</code> транзакции.</div>
+  <div class="callout go" data-only="java"><span class="title">Аналогия из Java</span>Это как stateless REST-контроллер без <code>HttpSession</code>: всё состояние приходит в запросе или лежит в вашей БД. Модель — чистая функция <code>f(system, tools, messages) → message</code> (с поправкой на недетерминизм). Никаких «соединений с памятью», как у JDBC-<code>Connection</code> с открытой транзакцией.</div>
+  <div class="callout go" data-only="go"><span class="title">Аналогия из Go</span>Это как HTTP-хэндлер без сессий: всё состояние приходит в запросе или лежит в вашей БД. Модель — чистая функция <code>f(system, tools, messages) → message</code> (с поправкой на недетерминизм). Никаких «соединений с памятью», как у <code>database/sql</code> транзакции.</div>
 
   <div class="tabs">
-    <div class="tab-panel" data-tab="Go"><pre><code class="lang-go">// Минимальный чат: история на клиенте, каждый ход — полный список сообщений.
+    <div class="tab-panel" data-tab="Java" data-only="java"><pre><code class="lang-java">// Минимальный чат: история на клиенте, каждый ход — полный список сообщений.
+package chat;
+
+import com.anthropic.client.AnthropicClient;
+import com.anthropic.client.okhttp.AnthropicOkHttpClient;
+import com.anthropic.models.messages.Message;
+import com.anthropic.models.messages.MessageCreateParams;
+import com.anthropic.models.messages.MessageParam;
+import com.anthropic.models.messages.StopReason;
+import com.anthropic.models.messages.TextBlock;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.stream.Collectors;
+
+public final class Session {
+    private final AnthropicClient client = AnthropicOkHttpClient.fromEnv(); // ключ из ANTHROPIC_API_KEY
+    private final String system;
+    private final List&lt;MessageParam&gt; history = new ArrayList&lt;&gt;(); // в проде — в БД, по session_id
+
+    public Session(String system) {
+        this.system = system;
+    }
+
+    public String ask(String userText) {
+        history.add(MessageParam.builder().role(MessageParam.Role.USER).content(userText).build());
+        Message resp;
+        try {
+            resp = client.messages().create(MessageCreateParams.builder()
+                    .model("claude-opus-5")
+                    .maxTokens(16000)
+                    .system(system)
+                    .messages(history)
+                    .build());
+        } catch (RuntimeException e) {
+            history.removeLast(); // не оставляем «висящий» user-ход
+            throw e;
+        }
+        history.add(resp.toParam()); // ответ целиком, со всеми блоками
+
+        String text = resp.content().stream()
+                .flatMap(b -&gt; b.text().stream())
+                .map(TextBlock::text)
+                .collect(Collectors.joining());
+        if (resp.stopReason().map(StopReason.MAX_TOKENS::equals).orElse(false)) {
+            throw new IllegalStateException("ответ обрезан по max_tokens: " + text.length() + " символов");
+        }
+        return text;
+    }
+}
+</code></pre></div>
+    <div class="tab-panel" data-tab="Go" data-only="go"><pre><code class="lang-go">// Минимальный чат: история на клиенте, каждый ход — полный список сообщений.
 package chat
 
 import (
@@ -168,7 +219,7 @@ data: {"type":"message_stop"}
     <div class="controls">
       <button class="btn primary" id="sse-run" type="button">▶ Запустить</button>
       <button class="btn" id="sse-drop" type="button">⚡ Оборвать соединение</button>
-      <button class="btn" id="sse-cancel" type="button">✕ Отмена (ctx cancel)</button>
+      <button class="btn" id="sse-cancel" type="button">✕ Отмена <span data-only="go">(ctx cancel)</span><span data-only="java">(close stream)</span></button>
       <label>скорость <input type="range" id="sse-speed" min="0.25" max="3" step="0.25" value="1"> <output></output></label>
     </div>
     <svg id="sse-svg" viewBox="0 0 640 96" role="img" aria-label="Временная шкала SSE-событий"></svg>
@@ -181,15 +232,56 @@ data: {"type":"message_stop"}
 
   <h3>Отмена и обрыв соединения</h3>
   <ul>
-    <li><b>Отмена пользователем</b> (закрыл вкладку, нажал «стоп») — закрываете HTTP-соединение, в Go это отмена <code>context</code>. Генерация на стороне API останавливается, но уже сгенерированные выходные токены закладывайте в стоимость. Прокиньте <code>r.Context()</code> из вашего хэндлера до клиента LLM — иначе ушедший пользователь продолжает жечь деньги.</li>
+    <li data-only="java"><b>Отмена пользователем</b> (закрыл вкладку, нажал «стоп») — закрываете HTTP-соединение с API: в Java это <code>close()</code> у <code>StreamResponse</code> (try-with-resources вокруг стрима). Генерация на стороне API останавливается, но уже сгенерированные выходные токены закладывайте в стоимость. Свяжите жизненный цикл вашего ответа с вызовом LLM: в Spring MVC — колбэки <code>SseEmitter.onCompletion/onError/onTimeout</code>, в WebFlux — отмена подписки на <code>Flux</code>. Иначе ушедший пользователь продолжает жечь деньги.</li>
+    <li data-only="go"><b>Отмена пользователем</b> (закрыл вкладку, нажал «стоп») — закрываете HTTP-соединение, в Go это отмена <code>context</code>. Генерация на стороне API останавливается, но уже сгенерированные выходные токены закладывайте в стоимость. Прокиньте <code>r.Context()</code> из вашего хэндлера до клиента LLM — иначе ушедший пользователь продолжает жечь деньги.</li>
     <li><b>Обрыв посреди ответа</b> — поток закончился без <code>message_stop</code>. Это неполный ответ, даже если текст «выглядит законченным». Докачать стрим с места нельзя, а prefill на новых моделях недоступен, так что стратегия одна — повторить запрос целиком (для UI — «перегенерировать»), а частичный текст пометить как оборванный.</li>
     <li><b>Прокси и балансировщики</b>: nginx по умолчанию буферизует ответ (<code>proxy_buffering off</code> или заголовок <code>X-Accel-Buffering: no</code>), у ALB/Cloudflare есть idle timeout. Длинный thinking без токенов — ровно тот случай, когда соединение «молчит» и его убивают; <code>ping</code> помогает, но проверьте таймауты по всей цепочке.</li>
     <li><b>Большие <code>max_tokens</code></b>: SDK отказываются делать нестриминговые запросы, которые могут длиться дольше ~10 минут; для топовых моделей с выводом до 128K токенов стриминг фактически обязателен.</li>
   </ul>
 
-  <h3>Стриминг через Go SDK</h3>
+  <h3 data-only="go">Стриминг через Go SDK</h3>
+  <h3 data-only="java">Стриминг через Java SDK</h3>
   <div class="tabs">
-    <div class="tab-panel" data-tab="Go (SDK)"><pre><code class="lang-go">// StreamAnswer пишет текст в w по мере генерации, возвращает собранное сообщение.
+    <div class="tab-panel" data-tab="Java (SDK)" data-only="java"><pre><code class="lang-java">// streamAnswer пишет текст в out по мере генерации, возвращает собранное сообщение.
+public static Message streamAnswer(AnthropicClient client, String prompt, Writer out) throws IOException {
+    long start = System.nanoTime();
+    long ttft = 0;
+
+    var params = MessageCreateParams.builder()
+            .model("claude-opus-5")
+            .maxTokens(64000)
+            .addUserMessage(prompt)
+            .build();
+    var acc = MessageAccumulator.create(); // собирает итоговое Message из событий стрима
+
+    try (StreamResponse&lt;RawMessageStreamEvent&gt; stream = client.messages().createStreaming(params)) {
+        Iterator&lt;RawMessageStreamEvent&gt; it = stream.stream().iterator();
+        while (it.hasNext()) { // сюда же прилетают event: error и обрыв — исключением из it.next()
+            RawMessageStreamEvent ev = it.next();
+            acc.accumulate(ev);
+            Optional&lt;String&gt; text = ev.contentBlockDelta()
+                    .flatMap(d -&gt; d.delta().text())
+                    .map(TextDelta::text);
+            if (text.isPresent()) {
+                if (ttft == 0) {
+                    ttft = System.nanoTime() - start;
+                }
+                out.write(text.get()); // IOException: клиент ушёл — выходим, try закроет стрим
+                out.flush();
+            }
+        }
+    }
+    Message msg = acc.message();
+    log.atInfo().setMessage("llm stream done")
+            .addKeyValue("ttft_ms", ttft / 1_000_000)
+            .addKeyValue("total_ms", (System.nanoTime() - start) / 1_000_000)
+            .addKeyValue("stop_reason", msg.stopReason().orElse(null))
+            .addKeyValue("out_tokens", msg.usage().outputTokens())
+            .log();
+    return msg;
+}
+</code></pre></div>
+    <div class="tab-panel" data-tab="Go (SDK)" data-only="go"><pre><code class="lang-go">// StreamAnswer пишет текст в w по мере генерации, возвращает собранное сообщение.
 func StreamAnswer(ctx context.Context, client anthropic.Client, prompt string, w io.Writer) (anthropic.Message, error) {
 	start := time.Now()
 	var ttft time.Duration
@@ -251,9 +343,64 @@ def stream_answer(prompt: str) -&gt; anthropic.types.Message:
 </code></pre></div>
   </div>
 
-  <h3>Учебный разбор SSE руками: net/http + bufio</h3>
-  <p>В проде берите SDK. Но один раз написать парсер стоит: станет понятно, что SSE — это просто строки, почему нужен большой буфер у <code>bufio.Scanner</code> и как отличить нормальное завершение от обрыва.</p>
-  <pre><code class="lang-go">// Учебный SSE-клиент для /v1/messages. В проде используйте SDK.
+  <h3 data-only="go">Учебный разбор SSE руками: net/http + bufio</h3>
+  <h3 data-only="java">Учебный разбор SSE руками: java.net.http + Jackson</h3>
+  <p data-only="java">В проде берите SDK. Но один раз написать парсер стоит: станет понятно, что SSE — это просто строки, почему статус 200 ещё ничего не гарантирует и как отличить нормальное завершение от обрыва.</p>
+  <p data-only="go">В проде берите SDK. Но один раз написать парсер стоит: станет понятно, что SSE — это просто строки, почему нужен большой буфер у <code>bufio.Scanner</code> и как отличить нормальное завершение от обрыва.</p>
+  <pre data-only="java"><code class="lang-java">// Учебный SSE-клиент для /v1/messages. В проде используйте SDK.
+private static final HttpClient HTTP = HttpClient.newHttpClient();
+private static final ObjectMapper JSON = new ObjectMapper();
+
+public static String rawStream(String apiKey, String prompt, Consumer&lt;String&gt; onText)
+        throws IOException, InterruptedException {
+    byte[] body = JSON.writeValueAsBytes(Map.of(
+            "model", "claude-opus-5", "max_tokens", 4096, "stream", true,
+            "messages", List.of(Map.of("role", "user", "content", prompt))));
+    HttpRequest req = HttpRequest.newBuilder(URI.create("https://api.anthropic.com/v1/messages"))
+            .header("x-api-key", apiKey)
+            .header("anthropic-version", "2023-06-01")
+            .header("content-type", "application/json")
+            .POST(HttpRequest.BodyPublishers.ofByteArray(body))
+            .build(); // без timeout(): длину стрима ограничивает вызывающий (interrupt / cancel)
+
+    HttpResponse&lt;Stream&lt;String&gt;&gt; resp = HTTP.send(req, HttpResponse.BodyHandlers.ofLines());
+    try (Stream&lt;String&gt; lines = resp.body()) { // close() рвёт соединение — так и отменяем стрим
+        if (resp.statusCode() != 200) {
+            String b = lines.limit(100).collect(Collectors.joining("\n"));
+            throw new IOException("status %d (retry-after=%s): %s".formatted(resp.statusCode(),
+                    resp.headers().firstValue("retry-after").orElse(""), b));
+        }
+        String event = "";
+        String stopReason = null;
+        boolean gotStop = false;
+        for (Iterator&lt;String&gt; it = lines.iterator(); it.hasNext(); ) {
+            String line = it.next(); // строка data: может быть длинной — ofLines её не режет
+            if (line.startsWith("event: ")) {
+                event = line.substring(7);
+            } else if (line.startsWith("data: ")) {
+                JsonNode d = JSON.readTree(line.substring(6)); // битый JSON → JsonProcessingException
+                switch (event) {
+                    case "content_block_delta" -&gt; {
+                        if ("text_delta".equals(d.path("delta").path("type").asText())) {
+                            onText.accept(d.path("delta").path("text").asText());
+                        }
+                    }
+                    case "message_delta" -&gt; stopReason = d.path("delta").path("stop_reason").asText(null);
+                    case "message_stop" -&gt; gotStop = true;
+                    case "error" -&gt; throw new IOException("stream error %s: %s".formatted(
+                            d.path("error").path("type").asText(), d.path("error").path("message").asText()));
+                    default -&gt; { } // ping, content_block_start/stop и т.п.
+                }
+            }
+        }
+        if (!gotStop) { // поток кончился без message_stop — ответ неполный
+            throw new EOFException("stream ended without message_stop, stop_reason=" + stopReason);
+        }
+        return stopReason;
+    }
+}
+</code></pre>
+  <pre data-only="go"><code class="lang-go">// Учебный SSE-клиент для /v1/messages. В проде используйте SDK.
 func RawStream(ctx context.Context, apiKey, prompt string, onText func(string)) (stopReason string, err error) {
 	body, _ := json.Marshal(map[string]any{
 		"model": "claude-opus-5", "max_tokens": 4096, "stream": true,
@@ -336,7 +483,7 @@ func RawStream(ctx context.Context, apiKey, prompt string, onText func(string)) 
   </ol>
   <p>Нюансы structured outputs, которые отличают сеньора:</p>
   <ul>
-    <li><b>Схема ограничена</b>: поддерживаются базовые типы, <code>enum</code>, <code>const</code>, <code>anyOf</code>, <code>$ref</code>, форматы строк (<code>date</code>, <code>email</code>, <code>uuid</code>…), обязательный <code>additionalProperties: false</code>. <b>Не</b> поддерживаются рекурсивные схемы, <code>minimum</code>/<code>maximum</code>, <code>minLength</code>/<code>maxLength</code>. Python/TS SDK выкидывают неподдерживаемые ограничения из схемы и проверяют их на клиенте; в Go это ваша работа.</li>
+    <li><b>Схема ограничена</b>: поддерживаются базовые типы, <code>enum</code>, <code>const</code>, <code>anyOf</code>, <code>$ref</code>, форматы строк (<code>date</code>, <code>email</code>, <code>uuid</code>…), обязательный <code>additionalProperties: false</code>. <b>Не</b> поддерживаются рекурсивные схемы, <code>minimum</code>/<code>maximum</code>, <code>minLength</code>/<code>maxLength</code>. Python/TS SDK выкидывают неподдерживаемые ограничения из схемы и проверяют их на клиенте; <span data-only="go">в Go это ваша работа.</span><span data-only="java">в Java-примере ниже схема написана вручную, и это ваша работа.</span></li>
     <li><b>Гарантия синтаксиса ≠ гарантия смысла</b>. Схема обещает, что <code>priority</code> — один из <code>p1|p2|p3</code>, но не то, что он выбран правильно. Бизнес-валидацию (сумма ≥ 0, дата не в будущем, id существует в БД) делаете сами.</li>
     <li><b>Исключения</b>: при <code>stop_reason: "max_tokens"</code> JSON обрезан, при <code>"refusal"</code> может не соответствовать схеме. Проверяйте stop_reason <i>до</i> парсинга.</li>
     <li><b>Первый запрос с новой схемой медленнее</b> — схема компилируется в грамматику, дальше кэшируется (порядка суток). Не генерируйте схему динамически на каждый запрос.</li>
@@ -345,7 +492,71 @@ func RawStream(ctx context.Context, apiKey, prompt string, onText func(string)) 
   <p>Паттерн «валидация + повтор с ошибкой»: если ответ не прошёл бизнес-валидацию, добавьте ответ модели в историю и следующим user-сообщением отдайте текст ошибки. Модель чинит конкретную проблему лучше, чем при слепом повторе. Лимит — 2–3 попытки, дальше ошибка наверх и метрика.</p>
 
   <div class="tabs">
-    <div class="tab-panel" data-tab="Go"><pre><code class="lang-go">type Ticket struct {
+    <div class="tab-panel" data-tab="Java" data-only="java"><pre><code class="lang-java">// Ticket.java. Jackson по умолчанию падает на неизвестных полях (FAIL_ON_UNKNOWN_PROPERTIES).
+public record Ticket(String category, String priority, String summary,
+                     @JsonProperty("order_id") String orderId) {
+
+    static final Map&lt;String, Object&gt; SCHEMA = Map.of(
+            "type", "object",
+            "properties", Map.of(
+                    "category", Map.of("type", "string", "enum", List.of("billing", "bug", "delivery", "other")),
+                    "priority", Map.of("type", "string", "enum", List.of("p1", "p2", "p3")),
+                    "summary", Map.of("type", "string"),
+                    "order_id", Map.of("type", "string")),
+            "required", List.of("category", "priority", "summary", "order_id"),
+            "additionalProperties", false);
+
+    private static final Pattern ORDER = Pattern.compile("^(ORD-\\d{6})?$");
+
+    /** То, что схема выразить не может (maxLength, формат id, бизнес-правила). */
+    void validate() {
+        int n = summary.codePointCount(0, summary.length());
+        if (n == 0 || n &gt; 200) {
+            throw new IllegalArgumentException("summary: длина %d, нужно 1..200 символов".formatted(n));
+        }
+        if (!ORDER.matcher(orderId).matches()) {
+            throw new IllegalArgumentException("order_id \"%s\": ожидается ORD-NNNNNN или пустая строка".formatted(orderId));
+        }
+    }
+}
+
+// TicketExtractor.java
+static Ticket extractTicket(AnthropicClient c, String text) {
+    var params = MessageCreateParams.builder()
+            .model("claude-sonnet-5")
+            .maxTokens(1024)
+            .addUserMessage("Разбери обращение клиента в тикет.\n&lt;message&gt;\n" + text + "\n&lt;/message&gt;")
+            // output_config через escape hatch тела запроса: работает независимо от версии SDK
+            .putAdditionalBodyProperty("output_config", JsonValue.from(Map.of(
+                    "format", Map.of("type", "json_schema", "schema", Ticket.SCHEMA))));
+    Exception lastErr = null;
+    for (int attempt = 0; attempt &lt; 3; attempt++) {
+        // сетевые ошибки и 429 ретраит слой ниже, здесь — только логика
+        Message resp = c.messages().create(params.build());
+        StopReason sr = resp.stopReason().orElseThrow();
+        if (sr.equals(StopReason.MAX_TOKENS) || sr.equals(StopReason.REFUSAL)) {
+            throw new IllegalStateException("no valid output: stop_reason=" + sr);
+        }
+        String raw = resp.content().stream()
+                .flatMap(b -&gt; b.text().stream())
+                .map(TextBlock::text)
+                .collect(Collectors.joining());
+        try {
+            Ticket t = JSON.readValue(raw, Ticket.class);
+            t.validate();
+            return t;
+        } catch (JsonProcessingException | IllegalArgumentException e) {
+            lastErr = e;
+        }
+        // Повтор с конкретной ошибкой: модель видит свой ответ и что в нём не так.
+        params.addMessage(resp.toParam())
+              .addUserMessage("Ответ не прошёл валидацию: " + lastErr.getMessage()
+                      + ". Верни исправленный JSON целиком.");
+    }
+    throw new IllegalStateException("ticket invalid after retries", lastErr);
+}
+</code></pre></div>
+    <div class="tab-panel" data-tab="Go" data-only="go"><pre><code class="lang-go">type Ticket struct {
 	Category string `json:"category"`
 	Priority string `json:"priority"`
 	Summary  string `json:"summary"`
@@ -435,14 +646,15 @@ resp = client.messages.parse(
 ticket: Ticket = resp.parsed_output  # уже провалидированный объект
 </code></pre></div>
   </div>
-  <div class="callout go"><span class="title">Аналогия из Go</span>Structured outputs — это как <code>json.Decoder.DisallowUnknownFields()</code> плюс enum-типы на стороне генератора: синтаксис и форма гарантированы, а <code>Validate()</code> на доменной структуре всё равно нужен — ровно как после <code>json.Unmarshal</code> входящего HTTP-запроса.</div>
+  <div class="callout go" data-only="java"><span class="title">Аналогия из Java</span>Structured outputs — это как Jackson с включённым <code>FAIL_ON_UNKNOWN_PROPERTIES</code> плюс enum-типы на стороне генератора: синтаксис и форма гарантированы, а <code>validate()</code> (или Bean Validation с <code>@Size</code>/<code>@Pattern</code>) на доменном record всё равно нужен — ровно как после десериализации <code>@RequestBody</code> входящего HTTP-запроса.</div>
+  <div class="callout go" data-only="go"><span class="title">Аналогия из Go</span>Structured outputs — это как <code>json.Decoder.DisallowUnknownFields()</code> плюс enum-типы на стороне генератора: синтаксис и форма гарантированы, а <code>Validate()</code> на доменной структуре всё равно нужен — ровно как после <code>json.Unmarshal</code> входящего HTTP-запроса.</div>
 
   <h2 id="tools">Tool use</h2>
   <p><b>Tool use</b> (он же function calling) — модель не выполняет код, она <i>просит</i> вас выполнить функцию. Вы передаёте в <code>tools</code> описания: имя, текстовое описание, JSON Schema входа. Модель отвечает блоками <code>tool_use</code> (<code>id</code>, <code>name</code>, <code>input</code>) и <code>stop_reason: "tool_use"</code>. Вы исполняете, кладёте результаты в <b>user</b>-сообщение блоками <code>tool_result</code> с тем же <code>tool_use_id</code> и снова зовёте API. Цикл продолжается до <code>end_turn</code>.</p>
   <ul>
     <li><b>Параллельные вызовы</b>: в одном ответе может быть несколько <code>tool_use</code>. Выполняйте их конкурентно и возвращайте <b>все</b> результаты <b>одним</b> user-сообщением. Разнести их по нескольким сообщениям — частая ошибка, которая приучает модель вызывать по одному инструменту за ход (медленнее) или ломает валидацию.</li>
     <li><b>Ошибки инструмента</b> — это данные, а не исключения: <code>tool_result</code> с <code>is_error: true</code> и понятным текстом («заказ не найден», «таймаут, попробуйте через минуту»). Модель адаптируется: переформулирует запрос, спросит пользователя. Падать всем циклом из-за одного инструмента — плохо.</li>
-    <li><b>Защита цикла</b>: лимит итераций, общий дедлайн через <code>context</code>, таймаут на инструмент, лимит размера результата (100 КБ логов в tool_result — это деньги и деградация внимания).</li>
+    <li><b>Защита цикла</b>: лимит итераций, общий дедлайн <span data-only="go">через <code>context</code></span><span data-only="java">(бюджет времени на весь цикл)</span>, таймаут на инструмент, лимит размера результата (100 КБ логов в tool_result — это деньги и деградация внимания).</li>
     <li><b><code>tool_choice</code></b>: <code>auto</code> (по умолчанию), <code>none</code>, <code>any</code>/<code>tool</code> (принудительный вызов). На Fable 5.1 и Opus 5.5 принудительные режимы возвращают 400 — используйте <code>auto</code> + явную инструкцию в промпте + <code>strict: true</code>, либо structured outputs, если вызов был нужен только ради JSON.</li>
     <li>Перед исполнением проверяйте <code>stop_reason</code>: при <code>max_tokens</code> аргументы могут быть обрезанным, но синтаксически валидным JSON; при <code>refusal</code> не исполняйте инструменты этого хода.</li>
   </ul>
@@ -471,10 +683,75 @@ ticket: Ticket = resp.parsed_output  # уже провалидированный
     <li><b>Идемпотентность и подтверждение</b>: инструменты с побочными эффектами (оплата, отправка письма) — с ключом идемпотентности и, для рискованных, подтверждением человеком. Модель может повторить вызов.</li>
   </ul>
 
-  <h3>Tool loop с параллельным выполнением на errgroup</h3>
-  <p>В Go SDK есть бета <code>toolrunner</code> (<code>client.Beta.Messages.NewToolRunner</code>), который крутит цикл сам. Ручной цикл нужен, когда хотите контроль: параллельность, таймауты по инструменту, аудит, human-in-the-loop. Вот он:</p>
+  <h3 data-only="go">Tool loop с параллельным выполнением на errgroup</h3>
+  <h3 data-only="java">Tool loop с параллельным выполнением на virtual threads</h3>
+  <p data-only="java">Готовые циклы есть в tool runner Python/TS SDK и во фреймворках (LangChain4j AiServices, Spring AI <code>ChatClient</code> с tools): они крутят цикл сами. Ручной цикл нужен, когда хотите контроль: параллельность, таймауты по инструменту, аудит, human-in-the-loop. Вот он:</p>
+  <p data-only="go">В Go SDK есть бета <code>toolrunner</code> (<code>client.Beta.Messages.NewToolRunner</code>), который крутит цикл сам. Ручной цикл нужен, когда хотите контроль: параллельность, таймауты по инструменту, аудит, human-in-the-loop. Вот он:</p>
   <div class="tabs">
-    <div class="tab-panel" data-tab="Go"><pre><code class="lang-go">type ToolFunc func(ctx context.Context, input json.RawMessage) (string, error)
+    <div class="tab-panel" data-tab="Java" data-only="java"><pre><code class="lang-java">@FunctionalInterface
+public interface ToolFunc {
+    // Реализация обязана уважать timeout: HttpRequest.timeout, JDBC queryTimeout и т.п.
+    String call(JsonValue input, Duration timeout) throws Exception;
+}
+
+public static String runTools(AnthropicClient c, List&lt;ToolUnion&gt; tools, Map&lt;String, ToolFunc&gt; impl,
+                              List&lt;MessageParam&gt; msgs) {
+    var params = MessageCreateParams.builder()
+            .model("claude-opus-5").maxTokens(16000).tools(tools).messages(msgs);
+
+    for (int turn = 0; turn &lt; 10; turn++) { // лимит итераций — защита от зацикливания
+        Message resp = c.messages().create(params.build());
+        params.addMessage(resp.toParam()); // ответ модели — в историю ДО tool_result
+
+        if (!resp.stopReason().map(StopReason.TOOL_USE::equals).orElse(false)) {
+            return resp.content().stream()
+                    .flatMap(b -&gt; b.text().stream())
+                    .map(TextBlock::text)
+                    .collect(Collectors.joining());
+        }
+
+        List&lt;ToolUseBlock&gt; calls = resp.content().stream().flatMap(b -&gt; b.toolUse().stream()).toList();
+        var limit = new Semaphore(4); // не больше 4 инструментов одновременно
+        List&lt;Future&lt;ContentBlockParam&gt;&gt; futures;
+        try (var exec = Executors.newVirtualThreadPerTaskExecutor()) { // close() ждёт все задачи
+            futures = calls.stream().map(call -&gt; exec.submit(() -&gt; {
+                limit.acquire();
+                try {
+                    return runOne(impl, call); // никогда не бросает: ошибка — в tool_result
+                } finally {
+                    limit.release();
+                }
+            })).toList();
+        }
+        // Порядок = порядок вызовов, а не порядок завершения.
+        List&lt;ContentBlockParam&gt; results = futures.stream().map(Future::resultNow).toList();
+        params.addUserMessageOfBlockParams(results); // ВСЕ результаты одним сообщением
+    }
+    throw new IllegalStateException("tool loop: превышен лимит итераций");
+}
+
+static ContentBlockParam runOne(Map&lt;String, ToolFunc&gt; impl, ToolUseBlock call) {
+    ToolFunc fn = impl.get(call.name());
+    if (fn == null) {
+        return toolResult(call.id(), "error: неизвестный инструмент " + call.name(), true);
+    }
+    try {
+        String out = fn.call(call._input(), Duration.ofSeconds(15));
+        if (out.length() &gt; 20_000) { // ponytail: обрезка по символам; лучше — суммаризация/пагинация в самом инструменте
+            out = out.substring(0, 20_000) + "\n…[обрезано]";
+        }
+        return toolResult(call.id(), out, false);
+    } catch (Exception e) { // ошибка инструмента — данные для модели, а не падение цикла
+        return toolResult(call.id(), "error: " + e.getMessage(), true);
+    }
+}
+
+static ContentBlockParam toolResult(String toolUseId, String content, boolean isError) {
+    return ContentBlockParam.ofToolResult(ToolResultBlockParam.builder()
+            .toolUseId(toolUseId).content(content).isError(isError).build());
+}
+</code></pre></div>
+    <div class="tab-panel" data-tab="Go" data-only="go"><pre><code class="lang-go">type ToolFunc func(ctx context.Context, input json.RawMessage) (string, error)
 
 func RunTools(ctx context.Context, c anthropic.Client, tools []anthropic.ToolUnionParam,
 	impl map[string]ToolFunc, msgs []anthropic.MessageParam) (string, error) {
@@ -565,7 +842,8 @@ async def run_tools(tools, impl, messages):
     raise RuntimeError("tool loop: превышен лимит итераций")
 </code></pre></div>
   </div>
-  <div class="callout go"><span class="title">Почему errgroup, а ошибки не возвращаем</span><code>errgroup.WithContext</code> отменяет контекст при первой ошибке — это правильно для «всё или ничего», но не для инструментов: таймаут погоды не должен убивать поиск билетов. Поэтому горутины возвращают <code>nil</code>, а ошибку кладут в <code>tool_result</code> с <code>is_error</code>. От errgroup остаются <code>SetLimit</code> (семафор) и аккуратный <code>Wait</code>. Запись в <code>results[i]</code> по индексу без мьютекса безопасна: каждая горутина пишет в свою ячейку.</div>
+  <div class="callout go" data-only="java"><span class="title">Почему не fail-fast и ошибки не бросаем</span><code>StructuredTaskScope.ShutdownOnFailure</code> (preview в Java 21) или <code>CompletableFuture.allOf</code> с отменой при первой ошибке — правильно для «всё или ничего», но не для инструментов: таймаут погоды не должен убивать поиск билетов. Поэтому <code>runOne</code> ловит исключение и кладёт его в <code>tool_result</code> с <code>is_error</code>. От executor остаются виртуальный поток на вызов, <code>Semaphore</code> как лимит параллельности и <code>close()</code>, который ждёт все задачи. Порядок результатов задаёт список <code>Future</code>, поэтому общая коллекция с синхронизацией не нужна.</div>
+  <div class="callout go" data-only="go"><span class="title">Почему errgroup, а ошибки не возвращаем</span><code>errgroup.WithContext</code> отменяет контекст при первой ошибке — это правильно для «всё или ничего», но не для инструментов: таймаут погоды не должен убивать поиск билетов. Поэтому горутины возвращают <code>nil</code>, а ошибку кладут в <code>tool_result</code> с <code>is_error</code>. От errgroup остаются <code>SetLimit</code> (семафор) и аккуратный <code>Wait</code>. Запись в <code>results[i]</code> по индексу без мьютекса безопасна: каждая горутина пишет в свою ячейку.</div>
 
   <h2 id="caching">Prompt caching</h2>
   <p>Большая часть входа повторяется между запросами: одни и те же tools, system prompt, документы, растущая история диалога. <b>Prompt caching</b> позволяет не обрабатывать этот префикс заново: сервер сохраняет вычисленное состояние (KV-cache из модуля 1) и при следующем запросе с тем же префиксом читает его.</p>
@@ -594,16 +872,30 @@ async def run_tools(tools, impl, messages):
   <h3>Типичные инвалидаторы</h3>
   <table>
     <tr><th>Что в коде</th><th>Почему ломает кэш</th><th>Как чинить</th></tr>
-    <tr><td><code>time.Now()</code> / дата в system prompt</td><td>Префикс меняется каждый запрос</td><td>Дату — в конец, в user-сообщение</td></tr>
+    <tr><td><span data-only="go"><code>time.Now()</code></span><span data-only="java"><code>Instant.now()</code></span> / дата в system prompt</td><td>Префикс меняется каждый запрос</td><td>Дату — в конец, в user-сообщение</td></tr>
     <tr><td>Request ID, UUID в начале контента</td><td>Каждый запрос уникален</td><td>Убрать или перенести после последнего breakpoint</td></tr>
-    <tr><td>Сериализация <code>map</code> в JSON с недетерминированным порядком</td><td>Байты префикса различаются</td><td>В Go <code>encoding/json</code> сортирует ключи map — но ваш собственный рендер через <code>range</code> по map нет</td></tr>
+    <tr><td>Сериализация <code>map</code> в JSON с недетерминированным порядком</td><td>Байты префикса различаются</td><td><span data-only="go">В Go <code>encoding/json</code> сортирует ключи map — но ваш собственный рендер через <code>range</code> по map нет</span><span data-only="java">Jackson пишет <code>HashMap</code> в порядке итерации: включите <code>ORDER_MAP_ENTRIES_BY_KEYS</code> или берите <code>TreeMap</code>/record; свой рендер через <code>forEach</code> по <code>HashMap</code> тоже недетерминирован</span></td></tr>
     <tr><td>Набор tools зависит от пользователя/режима</td><td>Tools в позиции 0 — не кэшируется ничего</td><td>Стабильный набор, отсортированный по имени; режим передавать в messages</td></tr>
     <tr><td>Условные секции в system (<code>if flag { system += … }</code>)</td><td>Каждая комбинация флагов — отдельный префикс</td><td>Меньше вариантов или флаги в messages</td></tr>
     <tr><td>Смена модели, thinking/effort между запросами</td><td>Кэш привязан к модели; thinking/effort инвалидируют кэш сообщений</td><td>Фиксировать настройки на маршрут</td></tr>
     <tr><td>Редактирование старой истории (удалили tool_result на 5-м ходу)</td><td>Всё после правки — промах</td><td>Append-only история, компакция реже и крупными шагами</td></tr>
   </table>
   <div class="tabs">
-    <div class="tab-panel" data-tab="Go"><pre><code class="lang-go">resp, err := client.Messages.New(ctx, anthropic.MessageNewParams{
+    <div class="tab-panel" data-tab="Java" data-only="java"><pre><code class="lang-java">Message resp = client.messages().create(MessageCreateParams.builder()
+        .model("claude-opus-5")
+        .maxTokens(4096)
+        .tools(tools) // стабильный набор, отсортирован по имени
+        .systemOfTextBlockParams(List.of(TextBlockParam.builder()
+                .text(policyAndCatalog) // 20K токенов, не меняется
+                .cacheControl(CacheControlEphemeral.builder().build()) // breakpoint #1: tools + system
+                .build()))
+        .messages(history) // на последнем блоке истории — breakpoint #2
+        .build());
+Usage u = resp.usage();
+log.info("cache read={} write={} uncached={}",
+        u.cacheReadInputTokens().orElse(0L), u.cacheCreationInputTokens().orElse(0L), u.inputTokens());
+</code></pre></div>
+    <div class="tab-panel" data-tab="Go" data-only="go"><pre><code class="lang-go">resp, err := client.Messages.New(ctx, anthropic.MessageNewParams{
 	Model:     "claude-opus-5",
 	MaxTokens: 4096,
 	Tools:     tools, // стабильный набор, отсортирован по имени
@@ -706,7 +998,22 @@ for res in client.messages.batches.results(batch.id):
     <li><b>Порядок</b>: изображения/документы ставьте <i>до</i> вопроса о них.</li>
     <li><b>Режимы отказа</b>: модель уверенно «читает» размытый текст (галлюцинация OCR), путает оси графиков, плохо считает объекты. Для критичных цифр — сверка с текстовым источником или structured output с полем уверенности.</li>
   </ul>
-  <pre><code class="lang-go">pdf, err := os.ReadFile("invoice.pdf")
+  <pre data-only="java"><code class="lang-java">byte[] pdf = Files.readAllBytes(Path.of("invoice.pdf"));
+MessageParam msg = MessageParam.builder()
+        .role(MessageParam.Role.USER)
+        .contentOfBlockParams(List.of(
+                ContentBlockParam.ofDocument(DocumentBlockParam.builder()
+                        .source(Base64PdfSource.builder()
+                                .data(Base64.getEncoder().encodeToString(pdf))
+                                .build())
+                        .build()),
+                ContentBlockParam.ofText(TextBlockParam.builder()
+                        .text("Извлеки номер счёта, дату и итоговую сумму.")
+                        .build())))
+        .build();
+// Картинки — аналогично ImageBlockParam (base64/URL); для повторного использования — Files API.
+</code></pre>
+  <pre data-only="go"><code class="lang-go">pdf, err := os.ReadFile("invoice.pdf")
 if err != nil {
 	return err
 }
@@ -747,13 +1054,62 @@ msg := anthropic.NewUserMessage(
   </table>
   <ul>
     <li><b>429 vs 529</b>: 429 — ваша квота (смотрите заголовки <code>retry-after</code> и <code>anthropic-ratelimit-*</code>, сглаживайте трафик, client-side rate limiter). 529 — перегрузка провайдера: ретраи помогают, но при затяжной перегрузке нужен fallback на другую модель/регион.</li>
-    <li><b>SDK ретраит сам</b>: по умолчанию 2 повтора с экспоненциальным backoff для 408/409/429/5xx. Если строите свой слой ретраев — отключите встроенный (<code>option.WithMaxRetries(0)</code>), иначе получите 3 × 3 = 9 попыток и retry storm.</li>
+    <li><b>SDK ретраит сам</b>: по умолчанию 2 повтора с экспоненциальным backoff для 408/409/429/5xx. Если строите свой слой ретраев — отключите встроенный (<span data-only="go"><code>option.WithMaxRetries(0)</code></span><span data-only="java"><code>.maxRetries(0)</code> у билдера клиента</span>), иначе получите 3 × 3 = 9 попыток и retry storm.</li>
     <li><b>Backoff с jitter</b>: без случайного разброса все ваши воркеры ретраят синхронно и снова ловят 429. Full jitter: <code>sleep = rand(0, min(cap, base·2^n))</code>. Если есть <code>retry-after</code> — он главнее формулы.</li>
-    <li><b>Бюджет ретраев</b>: ограничивайте общее время через <code>context</code>, а при массовых ошибках — circuit breaker, чтобы не добивать лежащий сервис.</li>
+    <li><b>Бюджет ретраев</b>: ограничивайте общее время <span data-only="go">через <code>context</code></span><span data-only="java">дедлайном на всю операцию</span>, а при массовых ошибках — circuit breaker, чтобы не добивать лежащий сервис.</li>
     <li><b>Идемпотентность</b>: сам вызов LLM «идемпотентен» (без побочных эффектов), но ретрай стоит денег, а ответ будет другим. Ретраить tool с побочным эффектом — только с ключом идемпотентности.</li>
   </ul>
   <div class="tabs">
-    <div class="tab-panel" data-tab="Go"><pre><code class="lang-go">// Клиент без встроенных ретраев — политику задаём сами.
+    <div class="tab-panel" data-tab="Java" data-only="java"><pre><code class="lang-java">// Клиент без встроенных ретраев — политику задаём сами.
+static final AnthropicClient CLIENT = AnthropicOkHttpClient.builder().fromEnv().maxRetries(0).build();
+
+public static &lt;T&gt; T withRetry(int attempts, Duration budget, Callable&lt;T&gt; fn) throws Exception {
+    Instant deadline = Instant.now().plus(budget); // общий бюджет времени на все попытки
+    for (int n = 0; ; n++) {
+        try {
+            return fn.call();
+        } catch (Exception e) {
+            Optional&lt;Duration&gt; delay = classify(e, n);
+            if (delay.isEmpty() || n + 1 &gt;= attempts || Instant.now().plus(delay.get()).isAfter(deadline)) {
+                throw e;
+            }
+            log.warn("llm retry attempt={} delay={}", n + 1, delay.get(), e);
+            Thread.sleep(delay.get()); // в виртуальном потоке дёшево; interrupt = отмена
+        }
+    }
+}
+
+/** Пустой Optional — не ретраить; иначе — сколько ждать. */
+static Optional&lt;Duration&gt; classify(Exception e, int n) {
+    long backoff = Math.min(30_000, 500L &lt;&lt; n);
+    Duration delay = Duration.ofMillis(ThreadLocalRandom.current().nextLong(backoff) + 100); // full jitter
+
+    if (e instanceof AnthropicServiceException api) {
+        int s = api.statusCode();
+        if (s == 408 || s == 409 || s == 429 || s &gt;= 500) { // 529 тоже здесь
+            return Optional.of(retryAfter(api).orElse(delay)); // сервер знает лучше
+        }
+        return Optional.empty(); // 400/401/403/404/413 — повтор не поможет
+    }
+    if (e instanceof AnthropicIoException || e instanceof IOException) {
+        return Optional.of(delay); // сеть, обрыв стрима
+    }
+    return Optional.empty(); // InterruptedException и прочее — не ретраим
+}
+
+static Optional&lt;Duration&gt; retryAfter(AnthropicServiceException e) {
+    try {
+        return e.headers().values("retry-after").stream().findFirst()
+                .map(v -&gt; Duration.ofSeconds(Long.parseLong(v.trim())));
+    } catch (NumberFormatException x) {
+        return Optional.empty();
+    }
+}
+
+// Использование:
+// Message resp = withRetry(4, Duration.ofSeconds(60), () -&gt; CLIENT.messages().create(params));
+</code></pre></div>
+    <div class="tab-panel" data-tab="Go" data-only="go"><pre><code class="lang-go">// Клиент без встроенных ретраев — политику задаём сами.
 var client = anthropic.NewClient(option.WithMaxRetries(0))
 
 func WithRetry[T any](ctx context.Context, attempts int, fn func(context.Context) (T, error)) (T, error) {
@@ -832,8 +1188,8 @@ except anthropic.APIStatusError as e:
 
   <h2 id="practice">Практика</h2>
   <div class="task">
-    <h3>Задание 1: стриминговый чат-сервис на Go</h3>
-    <p>HTTP-сервис <code>POST /chat/{session}</code>, который отдаёт ответ Claude через SSE вашему фронту. История — в Postgres или SQLite.</p>
+    <h3>Задание 1: стриминговый чат-сервис на <span data-only="go">Go</span><span data-only="java">Java</span></h3>
+    <p>HTTP-сервис <code>POST /chat/{session}</code><span data-only="go"></span><span data-only="java"> (Spring Boot, <code>SseEmitter</code> или WebFlux)</span>, который отдаёт ответ Claude через SSE вашему фронту. История — в Postgres или SQLite.</p>
     <ul>
       <li>Отмена: закрытие соединения клиентом отменяет запрос к API (проверьте логом, что генерация прекращается).</li>
       <li>Обрыв без <code>message_stop</code> помечается в БД как неполный ответ.</li>
@@ -844,7 +1200,7 @@ except anthropic.APIStatusError as e:
   </div>
   <div class="task">
     <h3>Задание 2: tool loop с параллельными инструментами</h3>
-    <p>Агент с 3 инструментами (например, <code>get_order</code>, <code>get_weather</code>, <code>search_docs</code>), цикл на errgroup из модуля.</p>
+    <p>Агент с 3 инструментами (например, <code>get_order</code>, <code>get_weather</code>, <code>search_docs</code>), цикл <span data-only="go">на errgroup</span><span data-only="java">на virtual threads</span> из модуля.</p>
     <ul>
       <li>Один инструмент искусственно падает в 30% случаев — модель получает <code>is_error</code> и справляется (перезапрос или честный ответ).</li>
       <li>Лимит итераций, таймаут на инструмент, общий дедлайн.</li>
@@ -854,7 +1210,7 @@ except anthropic.APIStatusError as e:
   </div>
   <div class="task">
     <h3>Задание 3: извлечение с валидацией и расчёт экономики</h3>
-    <p>Извлечение сущностей из 200 текстов (отзывы, письма) в структуру через structured outputs + <code>Validate()</code> + повтор с ошибкой. Прогоните один раз синхронно на Sonnet 5, один раз через Batch API на Haiku 4.5.</p>
+    <p>Извлечение сущностей из 200 текстов (отзывы, письма) в структуру через structured outputs + <span data-only="go"><code>Validate()</code></span><span data-only="java"><code>validate()</code></span> + повтор с ошибкой. Прогоните один раз синхронно на Sonnet 5, один раз через Batch API на Haiku 4.5.</p>
     <ul>
       <li>Посчитайте фактическую стоимость по <code>usage</code> обоих прогонов и долю повторов.</li>
       <li>Сравните качество на 30 размеченных вручную примерах. Напишите вывод на абзац: что выбрали бы в прод и почему.</li>
@@ -873,8 +1229,8 @@ except anthropic.APIStatusError as e:
   <details class="q"><summary>Результаты batch пришли в другом порядке. Как их сопоставить и как повторить упавшие?</summary><div class="a"><p>По <code>custom_id</code>, который вы задали для каждого запроса. Делайте его детерминированным (id записи + версия промпта): тогда повторная отправка только упавших (<code>errored</code>/<code>expired</code>) идемпотентна и легко дедуплицируется.</p></div></details>
 
   <h2 id="interview">Вопросы с собеседований</h2>
-  <details class="q interview"><summary>Спроектируйте слой интеграции с LLM API для продукта с 50 RPS. Что в нём будет?</summary><div class="a"><p>Тонкая обёртка над SDK со следующими ответственностями: (1) единая модель запроса/ответа с блоками, версией промпта и маршрутом; (2) ретраи с jitter и учётом <code>retry-after</code>, встроенные ретраи SDK отключены; бюджет по времени через context; circuit breaker на провайдера; (3) клиентский rate limiter по RPM и TPM (токены оценивать заранее), очередь с приоритетами для фоновых задач; (4) fallback-цепочка моделей/провайдеров с отдельными evals; (5) prompt caching: стабильный префикс, мониторинг hit rate; (6) observability: трейс на вызов с моделью, версией промпта, токенами (input/output/cache), стоимостью, TTFT, stop_reason; (7) стриминг до клиента с отменой по context; (8) лимиты стоимости на пользователя/тенанта. Оценка: 50 RPS × 3K input токенов — это 9M input токенов в минуту, надо сразу смотреть на TPM-лимиты и кэш.</p></div></details>
-  <details class="q interview"><summary>Как бы вы реализовали tool use с 3 параллельными вызовами, где один — медленный внешний API?</summary><div class="a"><p>Конкурентное выполнение (errgroup с <code>SetLimit</code>), таймаут на каждый инструмент, общий дедлайн цикла. Упавший или просроченный инструмент возвращает <code>tool_result</code> с <code>is_error: true</code> и подсказкой — модель решит, что делать; остальные результаты не теряются. Все результаты — одним user-сообщением. Если медленный API частый — кэш результатов, асинхронный инструмент (запустил задачу, вернул id, отдельный инструмент для статуса) или предзагрузка. Побочные эффекты — с ключом идемпотентности, потому что модель может повторить вызов.</p></div></details>
+  <details class="q interview"><summary>Спроектируйте слой интеграции с LLM API для продукта с 50 RPS. Что в нём будет?</summary><div class="a"><p>Тонкая обёртка над SDK со следующими ответственностями: (1) единая модель запроса/ответа с блоками, версией промпта и маршрутом; (2) ретраи с jitter и учётом <code>retry-after</code>, встроенные ретраи SDK отключены; бюджет по времени <span data-only="go">через context</span><span data-only="java">на всю операцию</span>; circuit breaker на провайдера; (3) клиентский rate limiter по RPM и TPM (токены оценивать заранее), очередь с приоритетами для фоновых задач; (4) fallback-цепочка моделей/провайдеров с отдельными evals; (5) prompt caching: стабильный префикс, мониторинг hit rate; (6) observability: трейс на вызов с моделью, версией промпта, токенами (input/output/cache), стоимостью, TTFT, stop_reason; (7) стриминг до клиента с отменой <span data-only="go">по context</span><span data-only="java">при разрыве соединения</span>; (8) лимиты стоимости на пользователя/тенанта. Оценка: 50 RPS × 3K input токенов — это 9M input токенов в минуту, надо сразу смотреть на TPM-лимиты и кэш.</p></div></details>
+  <details class="q interview"><summary>Как бы вы реализовали tool use с 3 параллельными вызовами, где один — медленный внешний API?</summary><div class="a"><p>Конкурентное выполнение (<span data-only="go">errgroup с <code>SetLimit</code></span><span data-only="java">виртуальный поток на вызов + <code>Semaphore</code></span>), таймаут на каждый инструмент, общий дедлайн цикла. Упавший или просроченный инструмент возвращает <code>tool_result</code> с <code>is_error: true</code> и подсказкой — модель решит, что делать; остальные результаты не теряются. Все результаты — одним user-сообщением. Если медленный API частый — кэш результатов, асинхронный инструмент (запустил задачу, вернул id, отдельный инструмент для статуса) или предзагрузка. Побочные эффекты — с ключом идемпотентности, потому что модель может повторить вызов.</p></div></details>
   <details class="q interview"><summary>У вас стоимость LLM выросла втрое за месяц без роста трафика. Как будете искать причину?</summary><div class="a"><p>Разложить стоимость по измерениям из телеметрии: маршрут/фича, модель, версия промпта, input vs output vs cache write vs cache read. Типичные причины: (1) упал cache hit rate — кто-то добавил динамику в system или поменял набор tools (сравнить payload двух соседних запросов); (2) выросла длина ответа — новая модель/промпт стали многословнее, или thinking/effort подняли; (3) растущие истории без компакции; (4) ретраи/зацикленные агенты — число вызовов на пользовательский запрос; (5) переключение fallback на дорогую модель. Лечить с метриками «стоимость на успешную задачу», а не на запрос.</p></div></details>
   <details class="q interview"><summary>JSON mode, tool use как экстрактор, structured outputs — что и когда выбрать?</summary><div class="a"><p>Structured outputs (constrained decoding по схеме) — дефолт для извлечения данных: гарантирует синтаксис и соответствие схеме, не нужен парсер-чинильщик. Strict tools — когда модель должна выбирать действия и аргументы должны быть валидны. «Просто попросить JSON» — только для прототипа или провайдеров без поддержки, с устойчивым парсером и повтором. В любом варианте — бизнес-валидация, обработка <code>max_tokens</code>/<code>refusal</code> и повтор с текстом ошибки. Минусы constrained decoding: ограниченное подмножество JSON Schema, компиляция схемы на первом запросе.</p></div></details>
   <details class="q interview"><summary>Объясните prompt caching так, чтобы стало понятно, почему порядок блоков важен.</summary><div class="a"><p>Сервер кэширует вычисленное внутреннее состояние модели (KV-cache) для префикса запроса. Префикс определён порядком <code>tools → system → messages</code>, ключ — точные байты до breakpoint'а. Трансформер обрабатывает токены слева направо, и состояние каждого зависит от всех предыдущих — поэтому изменение в середине делает невалидным всё справа, а изменение в конце — ничего. Значит: стабильное в начало (tools, политика, большие документы), изменчивое в конец. Экономика: чтение 0.1×, запись 1.25× (5 мин) или 2× (1 ч); плюс сильное снижение TTFT на длинных промптах. Мониторить <code>cache_read_input_tokens</code>.</p></div></details>
@@ -891,11 +1247,13 @@ except anthropic.APIStatusError as e:
     <li><a href="https://docs.anthropic.com/en/docs/build-with-claude/batch-processing" target="_blank" rel="noopener">Anthropic — Batch processing</a></li>
     <li><a href="https://docs.anthropic.com/en/docs/build-with-claude/vision" target="_blank" rel="noopener">Anthropic — Vision</a> и <a href="https://docs.anthropic.com/en/docs/build-with-claude/pdf-support" target="_blank" rel="noopener">PDF support</a></li>
     <li><a href="https://docs.anthropic.com/en/api/errors" target="_blank" rel="noopener">Anthropic — Errors</a> и <a href="https://docs.anthropic.com/en/api/rate-limits" target="_blank" rel="noopener">Rate limits</a></li>
-    <li><a href="https://github.com/anthropics/anthropic-sdk-go" target="_blank" rel="noopener">anthropic-sdk-go на GitHub</a> (примеры в <code>examples/</code>)</li>
+    <li data-only="java"><a href="https://github.com/anthropics/anthropic-sdk-java" target="_blank" rel="noopener">anthropic-sdk-java на GitHub</a> (примеры в <code>anthropic-java-example/</code>)</li>
+    <li data-only="go"><a href="https://github.com/anthropics/anthropic-sdk-go" target="_blank" rel="noopener">anthropic-sdk-go на GitHub</a> (примеры в <code>examples/</code>)</li>
     <li><a href="https://platform.openai.com/docs" target="_blank" rel="noopener">OpenAI API docs</a> (Chat Completions, Responses, Structured Outputs)</li>
     <li><a href="https://html.spec.whatwg.org/multipage/server-sent-events.html" target="_blank" rel="noopener">HTML Standard — Server-sent events</a></li>
     <li><a href="https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/" target="_blank" rel="noopener">AWS Builders' Library — Timeouts, retries and backoff with jitter</a></li>
-    <li><a href="https://pkg.go.dev/golang.org/x/sync/errgroup" target="_blank" rel="noopener">golang.org/x/sync/errgroup</a></li>
+    <li data-only="java"><a href="https://openjdk.org/jeps/444" target="_blank" rel="noopener">JEP 444 — Virtual Threads</a> и <a href="https://openjdk.org/jeps/453" target="_blank" rel="noopener">JEP 453 — Structured Concurrency</a></li>
+    <li data-only="go"><a href="https://pkg.go.dev/golang.org/x/sync/errgroup" target="_blank" rel="noopener">golang.org/x/sync/errgroup</a></li>
   </ul>
 </main>
 <script src="assets/course.js"></script>
@@ -992,9 +1350,11 @@ except anthropic.APIStatusError as e:
       log.append(d);
       ro.textContent = '✗ Обрыв: получено ' + shown.length + ' событий, message_stop нет → ответ НЕПОЛНЫЙ, даже если текст выглядит связным. Нет stop_reason и финального usage. Докачать нельзя: повторяем запрос целиком (backoff), частичный текст помечаем.';
     } else {
-      const d = document.createElement('div'); d.style.color = 'var(--warn)'; d.textContent = '✕ context canceled: клиент закрыл соединение';
+      const d = document.createElement('div'); d.style.color = 'var(--warn)'; d.textContent = Course.STACK === 'java' ? '✕ stream closed: клиент закрыл соединение' : '✕ context canceled: клиент закрыл соединение';
       log.append(d);
-      ro.textContent = '✕ Отмена через context: соединение закрыто, генерация остановлена. Уже сгенерированные токены закладывайте в стоимость. В Go: прокиньте r.Context() хэндлера до вызова SDK.';
+      ro.textContent = Course.STACK === 'java'
+        ? '✕ Отмена: соединение закрыто, генерация остановлена. Уже сгенерированные токены закладывайте в стоимость. В Java: закройте StreamResponse по onCompletion/onError SseEmitter (или по отмене подписки в WebFlux).'
+        : '✕ Отмена через context: соединение закрыто, генерация остановлена. Уже сгенерированные токены закладывайте в стоимость. В Go: прокиньте r.Context() хэндлера до вызова SDK.';
     }
   }
   document.getElementById('sse-run').onclick = run;
@@ -1011,12 +1371,13 @@ except anthropic.APIStatusError as e:
   const svg = document.getElementById('tool-svg');
   const ro = document.getElementById('tool-readout');
   const stepEl = document.getElementById('tool-step');
-  const LANES = [{ x: 90, name: 'Клиент (Go)' }, { x: 320, name: 'Модель (API)' }, { x: 550, name: 'Инструменты' }];
+  const J = Course.STACK === 'java';
+  const LANES = [{ x: 90, name: J ? 'Клиент (Java)' : 'Клиент (Go)' }, { x: 320, name: 'Модель (API)' }, { x: 550, name: 'Инструменты' }];
   const C = 0, M = 1, T = 2;
   const STEPS = [
     { arrows: [[C, M, 'POST /v1/messages: user + tools[2]']], text: 'Клиент отправляет историю и описания инструментов get_weather, search_flights.\n{"messages":[{"role":"user","content":"Погода в Берлине и Париже и есть ли билеты BER→CDG на завтра?"}],\n "tools":[{"name":"get_weather",…},{"name":"search_flights",…}]}' },
-    { arrows: [[M, C, 'stop_reason: tool_use · 3 × tool_use']], text: 'Модель решает вызвать три инструмента СРАЗУ (параллельные вызовы):\ncontent: [text "Проверю погоду и билеты",\n  tool_use{id:"tu_1", name:"get_weather", input:{"city":"Berlin"}},\n  tool_use{id:"tu_2", name:"get_weather", input:{"city":"Paris"}},\n  tool_use{id:"tu_3", name:"search_flights", input:{"from":"BER","to":"CDG","date":"2026-09-28"}}]\nКлиент добавляет этот ответ в историю как есть (resp.ToParam()).' },
-    { arrows: [[C, T, 'get_weather(Berlin)'], [C, T, 'get_weather(Paris)'], [C, T, 'search_flights(BER→CDG)']], par: true, text: 'errgroup: три горутины, SetLimit(4), у каждой свой таймаут 15 с. Модель не ждёт — ждёт ваш код; параллельность снижает латентность хода с суммы до максимума.' },
+    { arrows: [[M, C, 'stop_reason: tool_use · 3 × tool_use']], text: 'Модель решает вызвать три инструмента СРАЗУ (параллельные вызовы):\ncontent: [text "Проверю погоду и билеты",\n  tool_use{id:"tu_1", name:"get_weather", input:{"city":"Berlin"}},\n  tool_use{id:"tu_2", name:"get_weather", input:{"city":"Paris"}},\n  tool_use{id:"tu_3", name:"search_flights", input:{"from":"BER","to":"CDG","date":"2026-09-28"}}]\nКлиент добавляет этот ответ в историю как есть (' + (J ? 'resp.toParam()' : 'resp.ToParam()') + ').' },
+    { arrows: [[C, T, 'get_weather(Berlin)'], [C, T, 'get_weather(Paris)'], [C, T, 'search_flights(BER→CDG)']], par: true, text: (J ? 'Executor на virtual threads: три виртуальных потока, Semaphore(4), у каждого свой таймаут 15 с.' : 'errgroup: три горутины, SetLimit(4), у каждой свой таймаут 15 с.') + ' Модель не ждёт — ждёт ваш код; параллельность снижает латентность хода с суммы до максимума.' },
     { arrows: [[T, C, '☀ 18°C'], [T, C, '☁ 14°C, дождь'], [T, C, '✗ timeout 15s', true]], par: true, text: 'Два инструмента ответили, search_flights упал по таймауту. Это НЕ причина ронять цикл: ошибка станет данными для модели.' },
     { arrows: [[C, M, 'user: 3 × tool_result (1 × is_error)']], text: 'ОДНО user-сообщение со всеми результатами, порядок и tool_use_id сохранены:\n[{type:"tool_result", tool_use_id:"tu_1", content:"18°C, ясно"},\n {type:"tool_result", tool_use_id:"tu_2", content:"14°C, дождь"},\n {type:"tool_result", tool_use_id:"tu_3", is_error:true,\n  content:"timeout: провайдер билетов не ответил за 15с, можно повторить"}]' },
     { arrows: [[M, C, 'tool_use: search_flights (повтор)']], text: 'Модель видит ошибку и адаптируется: повторяет поиск (здесь — с расширенным окном дат).\ntool_use{id:"tu_4", name:"search_flights", input:{"from":"BER","to":"CDG","date":"2026-09-28","flex_days":1}}' },
@@ -1055,7 +1416,7 @@ except anthropic.APIStatusError as e:
       S('text', { x: 6, y: y0 + 4, 'font-size': 10, fill: 'var(--muted)' }, svg).textContent = String(si + 1);
       if (st.par) {
         S('rect', { x: LANES[C].x - 4, y: y0 - 16, width: 8, height: y - y0 - 4, rx: 3, fill: 'var(--teal-soft)', stroke: 'var(--teal)' }, svg);
-        S('text', { x: LANES[C].x - 10, y: y0 + 26, 'font-size': 10, 'text-anchor': 'end', fill: 'var(--teal)' }, svg).textContent = 'errgroup';
+        S('text', { x: LANES[C].x - 10, y: y0 + 26, 'font-size': 10, 'text-anchor': 'end', fill: 'var(--teal)' }, svg).textContent = J ? 'virtual threads' : 'errgroup';
         y += 10;
       }
     });

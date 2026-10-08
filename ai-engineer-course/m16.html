@@ -22,8 +22,8 @@
   <div class="module-hero">
     <div class="eyebrow">Модуль 16 · факультатив</div>
     <h1>Мультимодальность и голосовые агенты</h1>
-    <p class="lead">Необязательный модуль: остальной курс и капстоун на него не опираются, его можно пройти в любой момент после модулей 2 и 9 или пропустить. Внутри — vision как инженерная задача (где VLM заменяет OCR-пайплайн, а где уверенно врёт в цифрах) и голосовые агенты: каскад STT → LLM → TTS против speech-to-speech, бюджет латентности до первого звука, перебивание с корректной историей диалога, транспорт и evals. Код — конвейер голосового хода на горутинах и каналах с тестами без реальных API.</p>
-    <div class="meta-row"><span class="chip">≈ 6 часов</span><span class="chip">Go</span><span class="chip">2 визуализации</span><span class="chip">на момент написания: октябрь 2026</span></div>
+    <p class="lead">Необязательный модуль: остальной курс и капстоун на него не опираются, его можно пройти в любой момент после модулей 2 и 9 или пропустить. Внутри — vision как инженерная задача (где VLM заменяет OCR-пайплайн, а где уверенно врёт в цифрах) и голосовые агенты: каскад STT → LLM → TTS против speech-to-speech, бюджет латентности до первого звука, перебивание с корректной историей диалога, транспорт и evals. Код — конвейер голосового хода на <span data-only="go">горутинах и каналах</span><span data-only="java">виртуальных потоках и очередях</span> с тестами без реальных API.</p>
+    <div class="meta-row"><span class="chip">≈ 6 часов</span><span class="chip"><span data-only="go">Go</span><span data-only="java">Java</span></span><span class="chip">2 визуализации</span><span class="chip">на момент написания: октябрь 2026</span></div>
   </div>
 
   <h2 id="vision">Vision-модели и понимание документов</h2>
@@ -67,8 +67,52 @@
   <p><b>Гибрид</b> — частый продакшн-вариант. OCR даёт текст и координаты, VLM получает изображение страницы вместе с OCR-текстом и извлекает поля, а расхождение между ними — повод отправить документ человеку. Ещё проще маршрутизация: цифровые PDF с текстовым слоем идут в обычный парсер, сканы и фото — в VLM.</p>
 
   <h3>Извлечение с проверкой</h3>
-  <p>Выход VLM — недоверенный ввод. Structured outputs (модуль 2) гарантируют форму, а смысл проверяет код: суммы строк сходятся с итогом, даты разбираются, контрольные суммы реквизитов верны. Полезный приём — просить числа строкой «как напечатано» и разбирать их самим. Тогда модель только переписывает символы, а арифметика детерминирована и покрыта тестом (<code>examples/m16-voice/invoice</code>, функция <code>Kopecks</code> разбирает «12 345,67» в копейки без float).</p>
-  <pre><code class="lang-go">// Invoice — ответ модели по JSON-схеме. Суммы — строкой «как напечатано»:
+  <p>Выход VLM — недоверенный ввод. Structured outputs (модуль 2) гарантируют форму, а смысл проверяет код: суммы строк сходятся с итогом, даты разбираются, контрольные суммы реквизитов верны. Полезный приём — просить числа строкой «как напечатано» и разбирать их самим. Тогда модель только переписывает символы, а арифметика детерминирована и покрыта тестом (<span data-only="go"><code>examples/m16-voice/invoice</code>, функция <code>Kopecks</code></span><span data-only="java"><code>examples/java/m16-voice</code>, метод <code>Invoice.kopecks</code></span> разбирает «12 345,67» в копейки без float).</p>
+  <pre data-only="java"><code class="lang-java">/**
+ * Проверка полей, которые VLM извлекла из скана счёта.
+ * Выход модели — недоверенный ввод: суммы сверяются арифметикой, а не на глаз.
+ *
+ * &lt;p&gt;Ответ модели по JSON-схеме. Суммы — строкой «как напечатано»: модель только переписывает,
+ * а разбор числа детерминирован и тестируется. date — YYYY-MM-DD.
+ */
+public record Invoice(String number, String date, List&lt;Line&gt; lines, String total) {
+
+    public record Line(String name, String amount) {}
+
+    /** Все найденные расхождения; пустой список — счёт сходится. */
+    public List&lt;String&gt; validate() {
+        var errs = new ArrayList&lt;String&gt;();
+        if (number == null || number.isBlank()) {
+            errs.add("нет номера");
+        }
+        try {
+            LocalDate.parse(date);
+        } catch (DateTimeParseException | NullPointerException e) {
+            errs.add("дата \"" + date + "\": " + e.getMessage());
+        }
+        long sum = 0;
+        for (int i = 0; i &lt; lines.size(); i++) {
+            try {
+                sum += kopecks(lines.get(i).amount());
+            } catch (IllegalArgumentException e) {
+                errs.add("строка " + (i + 1) + ": " + e.getMessage());
+            }
+        }
+        try {
+            long t = kopecks(total);
+            if (errs.isEmpty() &amp;&amp; sum != t) {
+                // Классика VLM: перепутанные 3/8, потерянный разряд, строка прочитана дважды.
+                errs.add("сумма строк " + sum + " ≠ итог " + t + " (коп.)");
+            }
+        } catch (IllegalArgumentException e) {
+            errs.add("итог: " + e.getMessage());
+        }
+        return errs;
+    }
+
+    // kopecks(String) разбирает «12 345,67» в копейки без float — см. examples/java/m16-voice
+}</code></pre>
+  <pre data-only="go"><code class="lang-go">// Invoice — ответ модели по JSON-схеме. Суммы — строкой «как напечатано»:
 // модель только переписывает, а разбор числа детерминирован и тестируется.
 type Invoice struct {
 	Number string `json:"number"`
@@ -109,7 +153,8 @@ func (inv Invoice) Validate() error {
 	return errors.Join(errs...)
 }</code></pre>
   <p>Если проверка не прошла: повтор с кропом проблемной области в большем разрешении, затем другая модель, затем очередь на ручную проверку. Доля документов, ушедших к человеку, — полноценная метрика: это и стоимость, и ранний сигнал дрейфа входных данных.</p>
-  <div class="callout go"><span class="title">Аналогия из Go</span>VLM здесь — парсер с недокументированными багами. Вы же не поручаете <code>json.Unmarshal</code> проверку бизнес-инвариантов: после разбора идёт <code>Validate()</code>, и ошибка валидации — это 422, а не паника. JSON-схема играет роль типов, сходимость сумм — роль валидации.</div>
+  <div class="callout go" data-only="java"><span class="title">Аналогия из Java</span>VLM здесь — парсер с недокументированными багами. Вы же не поручаете Jackson <code>readValue</code> проверку бизнес-инвариантов: после десериализации идёт Bean Validation (<code>@Valid</code>) или явный <code>validate()</code>, и ошибка валидации — это 422 с <code>ProblemDetail</code>, а не 500. JSON-схема играет роль типов, сходимость сумм — роль валидации.</div>
+  <div class="callout go" data-only="go"><span class="title">Аналогия из Go</span>VLM здесь — парсер с недокументированными багами. Вы же не поручаете <code>json.Unmarshal</code> проверку бизнес-инвариантов: после разбора идёт <code>Validate()</code>, и ошибка валидации — это 422, а не паника. JSON-схема играет роль типов, сходимость сумм — роль валидации.</div>
 
   <h3>Evals для vision</h3>
   <ul>
@@ -220,7 +265,8 @@ func (inv Invoice) Validate() error {
     <li><b>Запись разговора.</b> Серверные метки не видят аудиостек клиента и сеть. Настоящую voice-to-voice латентность меряют по стереозаписи (пользователь и агент на разных каналах): расстояние от конца речи пользователя до начала речи агента. 10–20 записанных звонков ловят то, чего не видно в трейсах.</li>
     <li><b>Сегменты не всегда складываются.</b> При спекулятивном старте и параллельном retrieval сумма длительностей больше итоговой задержки. Отчитывайтесь и по сегментам, и итогом.</li>
   </ul>
-  <div class="callout go"><span class="title">Аналогия из Go</span>Бюджет хода устроен как SLO цепочки RPC в Go-сервисе: p95 суммы не равен сумме p95. Если пять сегментов независимо попадают в свой хвост в 5% случаев, хотя бы один хвост случится почти в каждом четвёртом ходе (1 − 0,95⁵ ≈ 23%). Поэтому бюджет задают на итог (p95 до первого звука), а по сегментам ищут, кто его съедает.</div>
+  <div class="callout go" data-only="java"><span class="title">Аналогия из Java</span>Бюджет хода устроен как SLO цепочки RPC между Spring-сервисами: p95 суммы не равен сумме p95. Если пять сегментов независимо попадают в свой хвост в 5% случаев, хотя бы один хвост случится почти в каждом четвёртом ходе (1 − 0,95⁵ ≈ 23%). Поэтому бюджет задают на итог (p95 до первого звука, один <code>Timer</code> в Micrometer), а по сегментам и спанам OpenTelemetry ищут, кто его съедает.</div>
+  <div class="callout go" data-only="go"><span class="title">Аналогия из Go</span>Бюджет хода устроен как SLO цепочки RPC в Go-сервисе: p95 суммы не равен сумме p95. Если пять сегментов независимо попадают в свой хвост в 5% случаев, хотя бы один хвост случится почти в каждом четвёртом ходе (1 − 0,95⁵ ≈ 23%). Поэтому бюджет задают на итог (p95 до первого звука), а по сегментам ищут, кто его съедает.</div>
 
   <h2 id="bargein">Barge-in: перебивание</h2>
   <p><b>Barge-in</b> — пользователь начинает говорить, пока агент ещё отвечает. Люди делают это постоянно: уточняют, поправляют, говорят «нет-нет, мне другое». Агент, который не умеет замолкать, договаривает 15 секунд в пустоту, а пользователь повторяет громче. Задача распадается на пять шагов.</p>
@@ -284,18 +330,68 @@ func (inv Invoice) Validate() error {
     <div class="readout" id="bi-read"></div>
   </div>
 
-  <div class="callout go"><span class="title">Аналогия из Go</span>Barge-in — это <code>r.Context()</code> HTTP-хендлера, когда клиент закрыл соединение: одна отмена должна дойти до каждой горутины конвейера, и каждая обязана на неё отреагировать. Разница в том, что «закрыть соединение» здесь может только голос, а решение об отмене принимает VAD, который иногда ошибается.</div>
+  <div class="callout go" data-only="java"><span class="title">Аналогия из Java</span>Barge-in — это отмена подписки в Spring WebFlux, когда клиент закрыл соединение: сигнал <code>cancel</code> должен дойти до каждого этапа конвейера, и каждый обязан на него отреагировать. В блокирующем коде на виртуальных потоках то же самое делает <code>Thread.interrupt()</code> каждого потока хода. Разница в том, что «закрыть соединение» здесь может только голос, а решение об отмене принимает VAD, который иногда ошибается.</div>
+  <div class="callout go" data-only="go"><span class="title">Аналогия из Go</span>Barge-in — это <code>r.Context()</code> HTTP-хендлера, когда клиент закрыл соединение: одна отмена должна дойти до каждой горутины конвейера, и каждая обязана на неё отреагировать. Разница в том, что «закрыть соединение» здесь может только голос, а решение об отмене принимает VAD, который иногда ошибается.</div>
 
-  <h2 id="go-pipeline">Конвейер голосового хода на Go</h2>
-  <p>Каскад естественно ложится на Go: этап — горутина, стрим — канал, отмена — <code>context</code>. Полный код с тестами лежит в <code>examples/m16-voice</code>. Внешние API не нужны: провайдеры заменены фейками с настраиваемыми задержками, а Claude-звено вынесено в отдельный адаптер.</p>
+  <h2 id="go-pipeline" data-only="go">Конвейер голосового хода на Go</h2>
+  <h2 id="go-pipeline" data-only="java">Конвейер голосового хода на Java</h2>
+  <p data-only="java">Каскад естественно ложится на виртуальные потоки Java 21: этап — виртуальный поток, стрим — блокирующая очередь (маленький класс <code>Chan</code> поверх <code>LinkedBlockingQueue</code> с закрытием), отмена — <code>Thread.interrupt()</code> всех потоков хода. Тот же конвейер можно собрать на Reactor (<code>Flux</code>, нарезка на фразы через <code>bufferUntil</code>, TTS через <code>concatMap</code>, отмена через <code>dispose()</code>), но блокирующий вариант проще читать и отлаживать. Полный код с тестами лежит в <code>examples/java/m16-voice</code>. Внешние API не нужны: провайдеры заменены фейками с настраиваемыми задержками, а Claude-звено вынесено в отдельный адаптер.</p>
+  <p data-only="go">Каскад естественно ложится на Go: этап — горутина, стрим — канал, отмена — <code>context</code>. Полный код с тестами лежит в <code>examples/m16-voice</code>. Внешние API не нужны: провайдеры заменены фейками с настраиваемыми задержками, а Claude-звено вынесено в отдельный адаптер.</p>
   <ul>
-    <li><b>Четыре этапа</b>: пересылка аудио в STT с меткой конца речи; LLM → нарезка на фразы; фразы → TTS; воспроизведение. Буфер канала позволяет TTS синтезировать следующую фразу, пока звучит текущая.</li>
-    <li><b>Одна отмена на ход</b>: <code>context.WithCancelCause</code>. Причина <code>ErrBargeIn</code> отличает перебивание от ухода клиента или ошибки TTS.</li>
-    <li><b>Правило дренажа</b>: после отмены каждый этап всё равно дочитывает входной канал до закрытия. Поэтому к концу <code>Turn</code> все горутины гарантированно завершены, а метки времени читаются без гонок: закрытие канала — граница happens-before.</li>
+    <li><b>Четыре этапа</b>: пересылка аудио в STT с меткой конца речи; LLM → нарезка на фразы; фразы → TTS; воспроизведение. <span data-only="go">Буфер канала</span><span data-only="java">Очередь между этапами</span> позволяет TTS синтезировать следующую фразу, пока звучит текущая.</li>
+    <li data-only="java"><b>Одна отмена на ход</b>: <code>Scope</code> запоминает первую причину и прерывает все потоки хода (аналог <code>StructuredTaskScope</code>, который в Java 21 ещё preview). Причина <code>BARGE_IN</code> отличает перебивание от ошибки TTS, а уход клиента — это прерывание вызывающего потока.</li>
+    <li data-only="go"><b>Одна отмена на ход</b>: <code>context.WithCancelCause</code>. Причина <code>ErrBargeIn</code> отличает перебивание от ухода клиента или ошибки TTS.</li>
+    <li data-only="java"><b>Правило ожидания</b>: <code>Scope.close()</code> прерывает и дожидается через <code>join()</code> каждого потока хода. Поэтому к концу <code>turn</code> все потоки гарантированно завершены, а метки времени читаются без гонок: <code>Thread.join</code> — граница happens-before.</li>
+    <li data-only="go"><b>Правило дренажа</b>: после отмены каждый этап всё равно дочитывает входной канал до закрытия. Поэтому к концу <code>Turn</code> все горутины гарантированно завершены, а метки времени читаются без гонок: закрытие канала — граница happens-before.</li>
     <li><b>История</b> получает только чанки, которые <code>Player</code> доиграл целиком.</li>
   </ul>
   <div class="tabs">
-    <div class="tab-panel" data-tab="Интерфейсы"><pre><code class="lang-go">type Transcript struct {
+    <div class="tab-panel" data-tab="Интерфейсы" data-only="java"><pre><code class="lang-java">/** interrupted — ответ оборван пользователем: в text только произнесённое. */
+public record Message(String role, String text, boolean interrupted) {
+    public Message(String role, String text) {
+        this(role, text, false);
+    }
+}
+
+/** isFinal == false — частичная гипотеза, ещё может измениться. */
+public record Transcript(String text, boolean isFinal) {}
+
+/**
+ * Кусок синтезированного звука и текст, который в нём звучит
+ * (выравнивание: многие TTS-API отдают таймкоды слов или символов).
+ */
+public record Chunk(byte[] audio, String text, Duration dur) {}
+
+/** Латентность, отсчитанная от конца речи пользователя. */
+public record Timings(
+        Duration stt,   // финальный транскрипт (endpointing + финализация)
+        Duration llm,   // первый токен ответа
+        Duration tts,   // первый чанк синтезированного звука
+        Duration audio, // начало воспроизведения: voice-to-voice без сети и аудиостека
+        boolean interrupted) {}
+
+@FunctionalInterface
+public interface Sink&lt;T&gt; {
+    void send(T v) throws InterruptedException;
+}
+
+public interface Stt {
+    void stream(Chan&lt;byte[]&gt; audio, Sink&lt;Transcript&gt; out) throws Exception;
+}
+
+public interface Llm {
+    void stream(List&lt;Message&gt; history, Sink&lt;String&gt; out) throws Exception;
+}
+
+public interface Tts {
+    void stream(String text, Sink&lt;Chunk&gt; out) throws Exception;
+}
+
+/** Проигрывает чанк и возвращает управление, только если чанк прозвучал целиком. */
+public interface Player {
+    void play(Chunk c) throws InterruptedException;
+}</code></pre></div>
+    <div class="tab-panel" data-tab="Интерфейсы" data-only="go"><pre><code class="lang-go">type Transcript struct {
 	Text  string
 	Final bool // false — частичная гипотеза, ещё может измениться
 }
@@ -336,7 +432,176 @@ type Timings struct {
 	Audio       time.Duration // начало воспроизведения: voice-to-voice без сети и аудиостека
 	Interrupted bool
 }</code></pre></div>
-    <div class="tab-panel" data-tab="Turn"><pre><code class="lang-go">var (
+    <div class="tab-panel" data-tab="Turn" data-only="java"><pre><code class="lang-java">/** Причина отмены «пользователь перебил» — не ошибка хода. */
+private static final Exception BARGE_IN = new Exception("voice: пользователь перебил", null, false, false) {};
+
+/**
+ * Проводит один ход. audio закрывается, когда пользователь замолчал (VAD);
+ * bargeIn (может быть null) срабатывает, когда пользователь заговорил во время ответа.
+ */
+public Timings turn(Chan&lt;byte[]&gt; audio, CountDownLatch bargeIn) throws VoiceException, InterruptedException {
+    var t = new Stamps();
+    var spoken = new ArrayList&lt;String&gt;();
+    boolean[] cut = {false}; // часть ответа не прозвучала
+    Throwable cause;
+
+    try (var scope = new Scope()) {
+        // Пересылаем аудио в STT и запоминаем момент конца речи — точку отсчёта бюджета.
+        var in = new Chan&lt;byte[]&gt;();
+        scope.go(() -&gt; {
+            try {
+                for (byte[] f; (f = audio.receive()) != null; ) in.send(f);
+                t.ended = System.nanoTime();
+            } finally {
+                in.close();
+            }
+        });
+        var transcripts = new Chan&lt;Transcript&gt;();
+        scope.go(() -&gt; {
+            try {
+                stt.stream(in, transcripts);
+            } finally {
+                transcripts.close();
+            }
+        });
+        String user = "";
+        for (Transcript tr; (tr = transcripts.receive()) != null; ) {
+            if (tr.isFinal()) {
+                user = tr.text();
+                break;
+            }
+        }
+        t.stt = System.nanoTime();
+        if (user.isEmpty()) {
+            throw new NoSpeechException(scope.cause.get());
+        }
+        t.t0 = t.ended != 0 ? t.ended : t.stt; // финал мог прийти раньше конца аудио (eager endpointing)
+
+        history.add(new Message("user", user));
+        var snapshot = List.copyOf(history);
+
+        // LLM → предложения: TTS стартует на первой фразе, а не на всём ответе.
+        var sentences = new Chan&lt;String&gt;();
+        scope.go(() -&gt; {
+            var buf = new StringBuilder();
+            try {
+                llm.stream(snapshot, d -&gt; {
+                    if (t.llm == 0) t.llm = System.nanoTime();
+                    buf.append(d);
+                    int i = lastSentenceEnd(buf);
+                    if (i &gt;= 0) {
+                        sentences.send(buf.substring(0, i + 1).strip());
+                        buf.delete(0, i + 1);
+                    }
+                });
+                if (!buf.isEmpty() &amp;&amp; !buf.toString().isBlank() &amp;&amp; !scope.cancelled()) {
+                    sentences.send(buf.toString().strip());
+                }
+            } finally {
+                sentences.close();
+            }
+        });
+
+        // Barge-in: одна отмена прерывает LLM, TTS и воспроизведение сразу.
+        if (bargeIn != null) {
+            scope.go(() -&gt; {
+                bargeIn.await();
+                scope.cancel(BARGE_IN);
+            });
+        }
+
+        // Предложения → звук. Синтез идёт быстрее реального времени, очередь chunks
+        // даёт TTS работать над следующей фразой, пока звучит текущая.
+        var chunks = new Chan&lt;Chunk&gt;();
+        scope.go(() -&gt; {
+            try {
+                for (String s; (s = sentences.receive()) != null; ) {
+                    tts.stream(s, c -&gt; {
+                        if (t.tts == 0) t.tts = System.nanoTime();
+                        chunks.send(c);
+                    });
+                }
+            } finally {
+                chunks.close();
+            }
+        });
+
+        // Воспроизведение: недоигранный чанк в историю не попадает.
+        Thread playback = scope.go(() -&gt; {
+            try {
+                for (Chunk c; (c = chunks.receive()) != null; ) {
+                    if (t.audio == 0) t.audio = System.nanoTime();
+                    player.play(c);
+                    spoken.add(c.text().strip());
+                }
+            } catch (InterruptedException e) {
+                cut[0] = true;
+            }
+        });
+        playback.join();
+        cause = scope.cause.get();
+    } // close(): прерываем и дожидаемся всех потоков хода — утечек нет, поля t видны после join
+
+    // В историю — только произнесённое: модель не должна «помнить», что сказала то,
+    // чего пользователь не услышал.
+    boolean interrupted = cause == BARGE_IN;
+    String text = String.join(" ", spoken);
+    if (!text.isEmpty()) {
+        if (cut[0]) text += "…";
+        history.add(new Message("assistant", text, cut[0]));
+    }
+    var tm = new Timings(t.since(t.stt), t.since(t.llm), t.since(t.tts), t.since(t.audio), interrupted);
+    if (cause != null &amp;&amp; !interrupted) {
+        throw new VoiceException("voice: ход прерван ошибкой", cause);
+    }
+    return tm;
+}
+
+@FunctionalInterface
+interface Task {
+    void run() throws Exception;
+}
+
+/**
+ * Потоки одного хода с общей отменой — аналог context.WithCancelCause.
+ * Первая причина запоминается, все потоки прерываются; close() прерывает оставшиеся и ждёт их.
+ * (StructuredTaskScope в Java 21 ещё preview, поэтому вручную.)
+ */
+private static final class Scope implements AutoCloseable {
+    final AtomicReference&lt;Throwable&gt; cause = new AtomicReference&lt;&gt;();
+    private final List&lt;Thread&gt; threads = new CopyOnWriteArrayList&lt;&gt;();
+
+    Thread go(Task task) {
+        Thread th = Thread.ofVirtual().unstarted(() -&gt; {
+            try {
+                task.run();
+            } catch (InterruptedException e) {
+                // отмена: выходим молча, причина уже в cause
+            } catch (Exception e) {
+                cancel(e);
+            }
+        });
+        threads.add(th);
+        th.start();
+        if (cancelled()) th.interrupt(); // отмена могла случиться до добавления в список
+        return th;
+    }
+
+    boolean cancelled() {
+        return cause.get() != null;
+    }
+
+    void cancel(Throwable c) {
+        if (cause.compareAndSet(null, c)) threads.forEach(Thread::interrupt);
+    }
+
+    @Override
+    public void close() throws InterruptedException {
+        threads.forEach(Thread::interrupt);
+        for (Thread th : threads) th.join();
+    }
+}</code></pre></div>
+    <div class="tab-panel" data-tab="Turn" data-only="go"><pre><code class="lang-go">var (
 	ErrBargeIn  = errors.New("voice: пользователь перебил")
 	ErrNoSpeech = errors.New("voice: нет финального транскрипта")
 )
@@ -499,7 +764,32 @@ func (a *Agent) Turn(ctx context.Context, audio &lt;-chan []byte, bargeIn &lt;-c
 	}
 	return tm, nil
 }</code></pre></div>
-    <div class="tab-panel" data-tab="Тест barge-in"><pre><code class="lang-go">// bargePlayer доигрывает after чанков, а на следующем «слышит» пользователя и ждёт отмены.
+    <div class="tab-panel" data-tab="Тест barge-in" data-only="java"><pre><code class="lang-java">@Test
+void bargeInTruncatesHistory() throws Exception {
+    var bargeIn = new CountDownLatch(1);
+    // Доигрывает 4 чанка, а на следующем «слышит» пользователя и ждёт прерывания.
+    Voice.Player player = new Voice.Player() {
+        int n;
+
+        @Override
+        public void play(Chunk c) throws InterruptedException {
+            if (n == 4) {
+                bargeIn.countDown();
+                Thread.sleep(Long.MAX_VALUE);
+            }
+            n++;
+        }
+    };
+    var a = new Agent(
+            new FakeStt("когда доставка", ms(1)),
+            new FakeLlm("Доставка в четверг с десяти до двух. Могу перенести на пятницу.", ms(1), Duration.ZERO),
+            new FakeTts(ms(1), ms(1)), player);
+    Timings tm = a.turn(speak(3), bargeIn);
+
+    assertTrue(tm.interrupted(), "interrupted = false");
+    assertEquals(new Message("assistant", "Доставка в четверг с…", true), a.history.getLast());
+}</code></pre></div>
+    <div class="tab-panel" data-tab="Тест barge-in" data-only="go"><pre><code class="lang-go">// bargePlayer доигрывает after чанков, а на следующем «слышит» пользователя и ждёт отмены.
 type bargePlayer struct {
 	after, n int
 	bargeIn  chan struct{}
@@ -538,7 +828,40 @@ func TestBargeInTruncatesHistory(t *testing.T) {
 		}
 	})
 }</code></pre></div>
-    <div class="tab-panel" data-tab="Claude-звено"><pre><code class="lang-go">// VoiceSystem — ответ озвучит TTS: формат и длина — часть голосового UX.
+    <div class="tab-panel" data-tab="Claude-звено" data-only="java"><pre><code class="lang-java">/**
+ * LLM-звено каскада поверх стримингового Messages API.
+ * model: в голосе важнее TTFT — маленькая модель, например "claude-haiku-4-5".
+ */
+public record ClaudeLlm(AnthropicClient client, String model) implements Voice.Llm {
+
+    /** Ответ озвучит TTS: формат и длина — часть голосового UX. */
+    public static final String VOICE_SYSTEM = """
+            Ты голосовой ассистент. Ответ будет озвучен синтезатором речи, поэтому:
+            без markdown, списков и ссылок; одна-три короткие фразы; первая фраза — сразу по делу;
+            числа и даты пиши так, как их произносят. Если нужен уточняющий вопрос — задай один.""";
+
+    @Override
+    public void stream(List&lt;Message&gt; history, Sink&lt;String&gt; out) throws InterruptedException {
+        var params = MessageCreateParams.builder().model(model).maxTokens(300).system(VOICE_SYSTEM);
+        for (Message m : history) {
+            if (m.role().equals("assistant")) {
+                params.addAssistantMessage(m.text());
+            } else {
+                params.addUserMessage(m.text()); // подряд идущие user-сообщения API склеит
+            }
+        }
+        // try-with-resources закрывает HTTP-стрим и при barge-in: генерация останавливается.
+        try (StreamResponse&lt;RawMessageStreamEvent&gt; stream = client.messages().createStreaming(params.build())) {
+            Iterator&lt;RawMessageStreamEvent&gt; it = stream.stream().iterator();
+            while (it.hasNext()) {
+                if (Thread.currentThread().isInterrupted()) throw new InterruptedException();
+                var text = it.next().contentBlockDelta().flatMap(d -&gt; d.delta().text()).map(TextDelta::text);
+                if (text.isPresent()) out.send(text.get());
+            }
+        }
+    }
+}</code></pre></div>
+    <div class="tab-panel" data-tab="Claude-звено" data-only="go"><pre><code class="lang-go">// VoiceSystem — ответ озвучит TTS: формат и длина — часть голосового UX.
 const VoiceSystem = `Ты голосовой ассистент. Ответ будет озвучен синтезатором речи, поэтому:
 без markdown, списков и ссылок; одна-три короткие фразы; первая фраза — сразу по делу;
 числа и даты пиши так, как их произносят. Если нужен уточняющий вопрос — задай один.`
@@ -581,8 +904,20 @@ func (c Claude) Stream(ctx context.Context, history []Message) (&lt;-chan string
 	return out, nil
 }</code></pre></div>
   </div>
-  <p>Тесты работают в <code>testing/synctest</code>: время внутри «пузыря» фейковое, поэтому латентность проверяется точными значениями. Например, 30 мс endpoint + 40 мс TTFT + две паузы между словами по 20 мс + 15 мс до первого звука TTS дают начало воспроизведения ровно на 125 мс, а без нарезки на фразы было бы 205 мс. Горутина, которая не отреагировала на отмену, роняет тест как deadlock — бесплатная проверка утечек, которую трудно получить с настоящими часами.</p>
-  <pre><code class="lang-bash">cd examples/m16-voice
+  <p data-only="java">В Java нет аналога <code>testing/synctest</code> из Go, поэтому тесты идут на настоящих часах и проверяют латентность с допуском ±25 мс. Арифметика та же: 30 мс endpoint + 40 мс TTFT + две паузы между словами по 20 мс + 15 мс до первого звука TTS дают начало воспроизведения около 125 мс, а без нарезки на фразы было бы 205 мс. Поток, который не отреагировал на прерывание, ловит <code>@Timeout</code> на классе теста: <code>turn</code> ждёт все свои потоки, поэтому утечка превращается в упавший тест, а не в зависший CI. Если нужны точные значения, инжектируйте <code>java.time.Clock</code> и фейковый планировщик вместо <code>Thread.sleep</code>.</p>
+  <p data-only="go">Тесты работают в <code>testing/synctest</code>: время внутри «пузыря» фейковое, поэтому латентность проверяется точными значениями. Например, 30 мс endpoint + 40 мс TTFT + две паузы между словами по 20 мс + 15 мс до первого звука TTS дают начало воспроизведения ровно на 125 мс, а без нарезки на фразы было бы 205 мс. Горутина, которая не отреагировала на отмену, роняет тест как deadlock — бесплатная проверка утечек, которую трудно получить с настоящими часами.</p>
+  <pre data-only="java"><code class="lang-bash">cd examples/java
+mvn -q -pl m16-voice verify
+mvn -q -pl m16-voice exec:java -Dexec.mainClass=course.m16voice.Simulate -Dexec.args="-n 200"   # 200 ходов параллельно, p50/p95 по этапам
+
+200 ходов, мс от конца речи пользователя
+этап                          p50    p95
+STT: финальный транскрипт     442    591
+LLM: первый токен             957   1228
+TTS: первый чанк             1179   1436
+начало воспроизведения       1179   1436
+</code></pre>
+  <pre data-only="go"><code class="lang-bash">cd examples/m16-voice
 go test -race ./...
 go run ./cmd/simulate -n 200   # 200 ходов параллельно, p50/p95 по этапам
 
@@ -594,7 +929,8 @@ TTS: первый чанк             1165   1511
 начало воспроизведения       1165   1511
 </code></pre>
   <p>Задержки в симуляторе условные, 5% ходов получают хвост +1,5 с к TTFT, как при перегрузке провайдера. Подставьте свои замеры из трейсов, и получится ваш бюджет: сразу видно, какой сегмент двигает p95.</p>
-  <div class="callout warn"><span class="title">Контракт каналов</span>Каждая реализация STT, LLM и TTS обязана отправлять в канал через <code>select</code> с <code>ctx.Done()</code> и закрывать канал при отмене. Реализация, которая пишет в канал без <code>select</code>, после barge-in навсегда повиснет на отправке. Это утечка горутины на каждый перебитый ход, а у голосового сервиса перебитых ходов тысячи в час.</div>
+  <div class="callout warn" data-only="java"><span class="title">Контракт отмены</span>Каждая реализация STT, LLM и TTS обязана реагировать на прерывание. Блокирующие вызовы (<code>Thread.sleep</code>, <code>BlockingQueue.take</code>, сетевой I/O на виртуальном потоке) бросают <code>InterruptedException</code> или закрывают сокет. Это исключение нельзя проглатывать: выйдите из метода или восстановите флаг через <code>Thread.currentThread().interrupt()</code>. Реализация, которая ловит его и продолжает цикл, после barge-in договорит ответ в пустоту и задержит <code>turn</code> на <code>join</code>. А SDK, который крутит ретраи в собственном пуле потоков, оставит висящий поток на каждый перебитый ход, и у голосового сервиса таких ходов тысячи в час.</div>
+  <div class="callout warn" data-only="go"><span class="title">Контракт каналов</span>Каждая реализация STT, LLM и TTS обязана отправлять в канал через <code>select</code> с <code>ctx.Done()</code> и закрывать канал при отмене. Реализация, которая пишет в канал без <code>select</code>, после barge-in навсегда повиснет на отправке. Это утечка горутины на каждый перебитый ход, а у голосового сервиса перебитых ходов тысячи в час.</div>
 
   <h2 id="transport">Транспорт и архитектура</h2>
   <h3>WebRTC или WebSocket</h3>
@@ -650,7 +986,7 @@ TTS: первый чанк             1165   1511
   <h2 id="practice">Практика</h2>
   <div class="task">
     <h3>Задание 1: голосовой интерфейс к RAG-агенту проекта A</h3>
-    <p>Модуль факультативный, задание тоже: соберите голосовой ход поверх своего <code>/ask</code> из проекта A (или агента проекта C). Конвейер возьмите из <code>examples/m16-voice</code>; LLM-звено — адаптер к вашему RAG-сервису или к Claude; STT и TTS — фейки или реальные API на выбор. Переделайте промпт под голос: без markdown и ссылок, первая фраза короткая, источники называются словами.</p>
+    <p>Модуль факультативный, задание тоже: соберите голосовой ход поверх своего <code>/ask</code> из проекта A (или агента проекта C). Конвейер возьмите из <span data-only="go"><code>examples/m16-voice</code></span><span data-only="java"><code>examples/java/m16-voice</code></span>; LLM-звено — адаптер к вашему RAG-сервису или к Claude; STT и TTS — фейки или реальные API на выбор. Переделайте промпт под голос: без markdown и ссылок, первая фраза короткая, источники называются словами.</p>
     <ul>
       <li>Не меньше 50 ходов на одном наборе вопросов и таблица p50/p95 по сегментам: endpoint, STT, LLM TTFT, первая фраза, TTS, начало воспроизведения. Одного итогового числа недостаточно.</li>
       <li>Для 10 ходов voice-to-voice измерен по стереозаписи на клиенте и сопоставлен с серверными метками; разница объяснена (сеть, аудиостек).</li>
@@ -663,7 +999,7 @@ TTS: первый чанк             1165   1511
     <h3>Задание 2: barge-in с корректной историей</h3>
     <p>Реализуйте перебивание в своём конвейере или расширьте <code>Turn</code> из примера.</p>
     <ul>
-      <li>Тесты: перебивание после N-го чанка — в истории ровно произнесённое и отметка обрыва; перебивание до первого звука — ответа в истории нет; <code>go test -race</code> чистый, горутины не утекают (synctest или проверка их числа).</li>
+      <li>Тесты: перебивание после N-го чанка — в истории ровно произнесённое и отметка обрыва; перебивание до первого звука — ответа в истории нет; <span data-only="go"><code>go test -race</code> чистый, горутины не утекают (synctest или проверка их числа)</span><span data-only="java">тесты стабильно зелёные при многократном прогоне (<code>@RepeatedTest</code>), потоки хода не утекают (<code>@Timeout</code> и проверка, что после <code>turn</code> не осталось живых потоков)</span>.</li>
       <li>Фильтр ложных перебиваний: минимальная длительность речи и минимум слов. Если STT за 600 мс не вернул ни слова, агент продолжает фразу. Есть тесты на кашель, «угу» и настоящее перебивание.</li>
       <li>Время реакции, от начала речи пользователя до тишины агента: p95 измерен по записи, объяснено, из чего он складывается (порог VAD, сеть, буфер клиента).</li>
       <li>Эксперимент с эхом: перебивания на громкой связи с AEC и без; результат записан.</li>
@@ -707,7 +1043,7 @@ TTS: первый чанк             1165   1511
   <h2 id="interview">Вопросы с собеседований</h2>
   <details class="q interview"><summary>Спроектируйте голосового ассистента записи к врачу для сети клиник: телефон, 5 000 звонков в день.</summary><div class="a">
     <p><b>Требования.</b> Сценарии: запись, перенос, отмена, вопросы о подготовке к приёму. Канал — телефон. Целевые метрики, о которых договариваемся с бизнесом: p95 до первого звука в пределах полутора секунд, доля звонков без оператора, ноль записей без явного подтверждения. Нагрузка небольшая: 5 000 звонков по 3 минуты — это десятки одновременных звонков в пик, планирование мощности ведём в одновременных звонках.</p>
-    <p><b>Архитектура.</b> Каскад: SIP-транк → оркестратор (Pipecat, LiveKit Agents или свой на Go) → стриминговый STT с моделью конца реплики → быстрая LLM с инструментами <code>find_slots</code>, <code>book</code>, <code>cancel</code> → TTS с кэшем частых фраз. Каскад, а не S2S, потому что здесь критичны инструменты и подтверждения, нужен текст для аудита, evals и PII-редакции. Все сервисы в одном регионе, соединения к STT и TTS открыты на весь звонок.</p>
+    <p><b>Архитектура.</b> Каскад: SIP-транк → оркестратор (Pipecat, LiveKit Agents или свой на <span data-only="go">Go</span><span data-only="java">Java</span>) → стриминговый STT с моделью конца реплики → быстрая LLM с инструментами <code>find_slots</code>, <code>book</code>, <code>cancel</code> → TTS с кэшем частых фраз. Каскад, а не S2S, потому что здесь критичны инструменты и подтверждения, нужен текст для аудита, evals и PII-редакции. Все сервисы в одном регионе, соединения к STT и TTS открыты на весь звонок.</p>
     <p><b>Диалог.</b> Barge-in с фильтром ложных срабатываний. Подтверждение перед записью: агент перечитывает врача, дату и время и ждёт явного «да». Фамилию и дату рождения просит продиктовать и повторяет. Пока ищутся слоты — филлер. Перевод на регистратуру с резюме разговора — штатный путь при неуверенности или по просьбе.</p>
     <p><b>Данные.</b> Медицинские и персональные данные: минимизация того, что попадает в LLM и логи, запись звонков по согласию, сроки хранения, разграничение доступа к записям. Конкретные требования определяет юрист.</p>
     <p><b>Evals и эксплуатация.</b> WER и точность сущностей на телефонных записях с фамилиями врачей и медицинскими терминами; симуляция звонков по сценариям как регрессия перед каждым изменением; task success — запись создана верно; в проде — p95 по сегментам, доли ложных перебиваний и переводов на оператора, выборочное прослушивание.</p>
@@ -731,7 +1067,13 @@ TTS: первый чанк             1165   1511
     <p>Метрики после изменений: обе доли перебиваний, латентность до первого звука и task success. Ускорение endpointing почти всегда увеличивает первую долю, поэтому ищем точку компромисса, а не минимум одной метрики.</p>
     <p><b>На что смотрит интервьюер:</b> различает ли кандидат две проблемы; знает ли про модели конца реплики и ложные перебивания; предлагает ли метрики и компромисс, а не один «правильный» порог.</p>
   </div></details>
-  <details class="q interview"><summary>Как вы реализуете barge-in в Go-сервисе и как это протестируете?</summary><div class="a">
+  <details class="q interview" data-only="java"><summary>Как вы реализуете barge-in в Java-сервисе и как это протестируете?</summary><div class="a">
+    <p>Этапы — виртуальные потоки, стримы — блокирующие очереди, на ход — один объект отмены, который запоминает первую причину и прерывает все потоки хода (по смыслу <code>StructuredTaskScope</code>; в Java 21 он preview, поэтому это 30 строк своего кода или Reactor с <code>Flux.dispose()</code>). Сигнал VAD о речи пользователя вызывает <code>cancel(BARGE_IN)</code>: LLM-стрим закрывается (try-with-resources на <code>StreamResponse</code> рвёт HTTP-соединение), синтез TTS и воспроизведение останавливаются. Все реализации уважают <code>InterruptedException</code>, а в конце хода <code>turn</code> делает <code>join()</code> всех потоков. Так к концу хода утечек нет, а гонок по общим меткам нет: <code>join</code> — граница happens-before.</p>
+    <p>Плеер возвращает управление, только если чанк прозвучал целиком; чанк несёт текст, который в нём звучит (выравнивание от TTS). В историю попадает текст доигранных чанков с отметкой обрыва. Если звук играет на клиенте, клиент сообщает, сколько проиграно. Результаты вызванных инструментов из истории не удаляются.</p>
+    <p>Тесты на JUnit 5: фейковые STT, LLM и TTS с задержками и фейковый плеер, который на N-м чанке сигналит barge-in. Проверяем историю, флаг перебивания и то, что перебивание до первого звука не оставляет ответа в истории. <code>@Timeout</code> превращает зависший после отмены поток в упавший тест. Латентности проверяем с допуском, а если нужна точность — инжектируем <code>Clock</code> и фейковый планировщик.</p>
+    <p><b>На что смотрит интервьюер:</b> понимает ли кандидат, что останавливать нужно воспроизведение, а не только генерацию; как он обрезает историю; знает ли контракт прерывания (не глотать <code>InterruptedException</code>); умеет ли тестировать конкурентный код без флаков: таймауты, допуски, инжекция времени вместо голых <code>Thread.sleep</code> в ассертах.</p>
+  </div></details>
+  <details class="q interview" data-only="go"><summary>Как вы реализуете barge-in в Go-сервисе и как это протестируете?</summary><div class="a">
     <p>Этапы — горутины, стримы — каналы, на ход — один <code>context.WithCancelCause</code>. Сигнал VAD о речи пользователя вызывает <code>cancel(ErrBargeIn)</code>, и отмена останавливает LLM-стрим (закрывается HTTP-соединение), синтез TTS и воспроизведение. Все реализации отправляют в каналы через <code>select</code> с <code>ctx.Done()</code>, а каждый этап дочитывает свой вход до закрытия. Так к концу хода все горутины завершены, а гонок по общим меткам нет.</p>
     <p>Плеер возвращает успех, только если чанк прозвучал целиком; чанк несёт текст, который в нём звучит (выравнивание от TTS). В историю попадает текст доигранных чанков с отметкой обрыва. Если звук играет на клиенте, клиент сообщает, сколько проиграно. Результаты вызванных инструментов из истории не удаляются.</p>
     <p>Тесты: фейковые STT, LLM и TTS с задержками и фейковый плеер, который на N-м чанке сигналит barge-in. Проверяем историю, флаг перебивания и то, что перебивание до первого звука не оставляет ответа в истории. Гоняем в <code>testing/synctest</code>: фейковое время даёт точные латентности, а зависшая горутина роняет тест как deadlock. Плюс <code>-race</code>.</p>
@@ -767,7 +1109,8 @@ TTS: первый чанк             1165   1511
     <li><a href="https://www.itu.int/rec/T-REC-G.114" target="_blank" rel="noopener">ITU-T G.114 — One-way transmission time</a></li>
     <li><a href="https://arxiv.org/abs/2212.04356" target="_blank" rel="noopener">Radford et al., 2022 — Robust Speech Recognition via Large-Scale Weak Supervision (Whisper)</a> и <a href="https://github.com/jitsi/jiwer" target="_blank" rel="noopener">jiwer</a> (WER)</li>
     <li><a href="https://arxiv.org/abs/2410.00037" target="_blank" rel="noopener">Défossez et al., 2024 — Moshi: a speech-text foundation model for real-time dialogue</a> и <a href="https://arxiv.org/abs/2503.04721" target="_blank" rel="noopener">Lin et al., 2025 — Full-Duplex-Bench</a></li>
-    <li><a href="https://pkg.go.dev/testing/synctest" target="_blank" rel="noopener">Go — testing/synctest</a> и <a href="https://pkg.go.dev/context#WithCancelCause" target="_blank" rel="noopener">context.WithCancelCause</a></li>
+    <li data-only="java"><a href="https://openjdk.org/jeps/444" target="_blank" rel="noopener">JEP 444 — Virtual Threads</a> и <a href="https://openjdk.org/jeps/453" target="_blank" rel="noopener">JEP 453 — Structured Concurrency</a></li>
+    <li data-only="go"><a href="https://pkg.go.dev/testing/synctest" target="_blank" rel="noopener">Go — testing/synctest</a> и <a href="https://pkg.go.dev/context#WithCancelCause" target="_blank" rel="noopener">context.WithCancelCause</a></li>
   </ul>
 </main>
 <script src="assets/course.js"></script>

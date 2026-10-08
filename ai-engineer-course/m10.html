@@ -26,8 +26,8 @@
   <div class="module-hero">
     <div class="eyebrow">Модуль 10</div>
     <h1>Свои модели: инференс и адаптация</h1>
-    <p class="lead">Два повода уйти с чужого API на свою модель — собственный инференс и адаптация под задачу. В первой половине модуля разбираем, как устроен serving: prefill и decode, continuous batching, PagedAttention, KV-cache как бюджет конкурентности, speculative decoding. Дальше квантизация и её цена в качестве, экономика self-host против API, Go-шлюз перед vLLM и лицензии open-weight моделей. Во второй половине — когда fine-tuning оправдан, LoRA и QLoRA, датасет и синтетика, DPO, дистилляция, честная оценка «до и после» и multi-LoRA serving.</p>
-    <div class="meta-row"><span class="chip">≈ 15 часов</span><span class="chip">Go + Python</span><span class="chip">6 визуализаций</span><span class="chip">на момент написания: октябрь 2026</span></div>
+    <p class="lead">Два повода уйти с чужого API на свою модель — собственный инференс и адаптация под задачу. В первой половине модуля разбираем, как устроен serving: prefill и decode, continuous batching, PagedAttention, KV-cache как бюджет конкурентности, speculative decoding. Дальше квантизация и её цена в качестве, экономика self-host против API, <span data-only="go">Go-шлюз перед vLLM и лицензии</span><span data-only="java">Java-шлюз перед vLLM и лицензии</span> open-weight моделей. Во второй половине — когда fine-tuning оправдан, LoRA и QLoRA, датасет и синтетика, DPO, дистилляция, честная оценка «до и после» и multi-LoRA serving.</p>
+    <div class="meta-row"><span class="chip">≈ 15 часов</span><span class="chip"><span data-only="go">Go</span><span data-only="java">Java</span> + Python</span><span class="chip">6 визуализаций</span><span class="chip">на момент написания: октябрь 2026</span></div>
   </div>
 
   <h2 id="serving">Как устроен serving</h2>
@@ -58,7 +58,10 @@
   <p>Пример: Qwen3-8B (36 слоёв, 8 KV-голов, head_dim 128) на одном H100 80 ГБ. Веса в BF16 занимают 16.4 ГБ, KV на токен — 2 × 36 × 8 × 128 × 2 байта = 144 КБ. При <code>--gpu-memory-utilization 0.9</code> и паре гигабайт служебной памяти на KV-cache остаётся около 53 ГБ, то есть примерно 360 тысяч токенов. Запросов по 4K токенов (промпт плюс ответ) поместится около 90, по 32K — всего 11. FP8 для KV-cache (<code>--kv-cache-dtype fp8</code>) удваивает эти числа. При старте vLLM пишет в лог размер KV-cache в токенах и максимальную конкурентность для <code>--max-model-len</code>: сверяйте свою оценку с ним.</p>
   <p>Отсюда смысл двух флагов. <code>--max-model-len</code> ограничивает длину одного запроса, <code>--max-num-seqs</code> — число последовательностей в батче. Ставить <code>--max-model-len</code> с запасом до 128K «на всякий случай» вредно: один длинный запрос занимает место десятков коротких. Если длинные запросы редки, выделите под них отдельную реплику или пул.</p>
 
-  <div class="callout go"><span class="title">Аналогия из Go</span>
+  <div class="callout go" data-only="java"><span class="title">Аналогия из Java</span>
+    <p>KV-бюджет работает как <code>java.util.concurrent.Semaphore</code>, где запрос берёт не одно разрешение, а <code>acquire(n)</code> по числу токенов в контексте: запрос «стоит» столько, сколько у него токенов, а не одну единицу. Поэтому <code>--max-num-seqs</code> — только верхняя граница, а реальную конкурентность определяет длина запросов. Шлюз ниже держит обычный семафор по числу запросов: этого хватает, когда длины предсказуемы.</p>
+  </div>
+  <div class="callout go" data-only="go"><span class="title">Аналогия из Go</span>
     <p>KV-бюджет работает как <code>semaphore.Weighted</code> из <code>golang.org/x/sync</code> с весом в байтах: запрос «стоит» столько, сколько токенов у него в контексте, а не одну единицу. Поэтому <code>--max-num-seqs</code> — только верхняя граница, а реальную конкурентность определяет длина запросов. Шлюз ниже держит обычный семафор по числу запросов: этого хватает, когда длины предсказуемы.</p>
   </div>
 
@@ -232,7 +235,7 @@ vllm bench serve --model Qwen/Qwen3-8B \
   <p>Нагрузочный тест нужен, чтобы получить реальный goodput для калькулятора. Поднимайте конкурентность, пока суммарная пропускная способность растёт, а p95 TTFT и TPOT укладываются в SLO: эта точка и есть ёмкость одной реплики. Длины промптов и ответов берите из логов своего продукта, а не случайные: от них зависит всё.</p>
 
   <h3>Ollama для локальной разработки</h3>
-  <p>Ollama даёт тот же OpenAI-совместимый API на ноутбуке без GPU-сервера. Поэтому клиентский код, Go-шлюз из следующего раздела и eval-прогон можно отладить локально, а потом переключить <code>base_url</code> на vLLM.</p>
+  <p>Ollama даёт тот же OpenAI-совместимый API на ноутбуке без GPU-сервера. Поэтому клиентский код, <span data-only="go">Go-шлюз из следующего раздела</span><span data-only="java">Java-шлюз из следующего раздела</span> и eval-прогон можно отладить локально, а потом переключить <code>base_url</code> на vLLM.</p>
   <pre><code class="lang-bash">ollama pull qwen3:8b                       # ≈ 5 ГБ, 4-битная GGUF-квантизация
 OLLAMA_CONTEXT_LENGTH=16384 ollama serve   # по умолчанию 4K при VRAM &lt; 24 ГБ: длинный RAG-промпт обрежется
 curl -s http://localhost:11434/v1/chat/completions \
@@ -247,7 +250,8 @@ curl -s http://localhost:11434/v1/chat/completions \
     <p>«Мы посчитали по формуле с goodput из нагрузочного теста: при нашем пике, который втрое выше среднего, две реплики окупались бы только при объёме в несколько раз больше текущего. Поэтому основной чат остался на API. Self-hosted подняли для классификатора с LoRA: там ровный поток, данные не должны уходить наружу, а 4B-модель с адаптером догнала Sonnet на нашем eval-наборе».</p>
   </div>
 
-  <h2 id="gateway">Go-шлюз перед vLLM</h2>
+  <h2 id="gateway" data-only="go">Go-шлюз перед vLLM</h2>
+  <h2 id="gateway" data-only="java">Java-шлюз перед vLLM</h2>
   <p>Клиентам не стоит ходить в vLLM напрямую. Флаг <code>--api-key</code> защищает только пути с префиксами <code>/v1</code>, <code>/v2</code>, <code>/inference</code> и <code>/cohere</code>, остальные эндпоинты открыты, и документация vLLM сама советует ставить перед сервером reverse proxy. Общий LLM-шлюз с роутингом между провайдерами разобран в <a href="m09.html#gateway">модуле 9</a>; здесь — его часть, специфичная для своего сервера. Кроме авторизации, шлюз берёт на себя то, чего vLLM не делает:</p>
   <ul>
     <li><b>Публичные имена моделей.</b> Клиент просит <code>clf</code>, шлюз отправляет в vLLM имя LoRA-адаптера <code>ticket-clf</code> или базовой модели. Клиент не знает о внутренней раскладке, а откат адаптера — правка одной строки конфига.</li>
@@ -258,7 +262,7 @@ curl -s http://localhost:11434/v1/chat/completions \
   </ul>
   <p>Формат запроса и стрима — Chat Completions от OpenAI: <code>POST /v1/chat/completions</code>, при <code>"stream": true</code> ответ идёт как SSE, строки <code>data: {chat.completion.chunk}</code> и в конце <code>data: [DONE]</code>. С <code>"stream_options": {"include_usage": true}</code> последний чанк несёт <code>usage</code> с точным числом токенов. Шлюз добавляет этот параметр сам: считать токены по чанкам ненадёжно, потому что vLLM может класть несколько токенов в один чанк (параметр <code>stream_interval</code>).</p>
   <div class="tabs">
-    <div class="tab-panel" data-tab="Go: шлюз"><pre><code class="lang-go">// Шлюз перед OpenAI-совместимым сервером vLLM (подойдёт и Ollama на :11434).
+    <div class="tab-panel" data-tab="Go: шлюз" data-only="go"><pre><code class="lang-go">// Шлюз перед OpenAI-совместимым сервером vLLM (подойдёт и Ollama на :11434).
 // Делает пять вещей: публичное имя модели → база или LoRA-адаптер в vLLM, лимит
 // одновременных запросов под --max-num-seqs, ретраи на 429/5xx, пока клиенту
 // ещё ничего не отправлено, таймаут на первый байт стрима и метрики TTFT/TPOT.
@@ -531,7 +535,363 @@ func apiError(w http.ResponseWriter, code int, msg string) {
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"message": msg, "code": code}})
 }</code></pre></div>
-    <div class="tab-panel" data-tab="Go: запуск"><pre><code class="lang-go">// go run . -upstream http://localhost:8000 -models "clf=ticket-clf,chat=Qwen/Qwen3-8B" -max-inflight 128
+    <div class="tab-panel" data-tab="Java: шлюз" data-only="java"><pre><code class="lang-java">// Шлюз перед OpenAI-совместимым сервером vLLM (подойдёт и Ollama на :11434).
+// Делает пять вещей: публичное имя модели → база или LoRA-адаптер в vLLM, лимит
+// одновременных запросов под --max-num-seqs, ретраи на 429/5xx, пока клиенту
+// ещё ничего не отправлено, таймаут на первый байт стрима и метрики TTFT/TPOT.
+package course.m10models;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpHandler;
+import java.io.BufferedInputStream;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.io.UncheckedIOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.net.http.HttpTimeoutException;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
+
+public final class Gateway implements HttpHandler {
+
+    /**
+     * upstream — http://vllm:8000; apiKey — --api-key vLLM, пусто — без авторизации;
+     * models — публичное имя → имя в vLLM: база или адаптер из --lora-modules;
+     * maxInFlight ≈ max-num-seqs × число реплик; queueWait — сколько запрос ждёт свободный слот, потом 429;
+     * firstByte — стрим: нет первого байта за это время — отменяем попытку и повторяем;
+     * timeout — общий потолок на запрос; backoff — база экспоненциального backoff с full jitter;
+     * observe — куда отдать метрики: лог, Micrometer, OTel (модуль 9).
+     */
+    public record Config(String upstream, String apiKey, Map&lt;String, String&gt; models, int maxInFlight,
+                         Duration queueWait, Duration firstByte, Duration timeout, int maxRetries,
+                         Duration backoff, Consumer&lt;Stats&gt; observe) {}
+
+    /** ttft — от прихода запроса до первого непустого токена; tpot — (последний токен − первый) / (токенов − 1). */
+    public static final class Stats {
+        public final String model;
+        public int status, attempts, outTokens;
+        public Duration ttft = Duration.ZERO, tpot = Duration.ZERO;
+
+        Stats(String model) {
+            this.model = model;
+        }
+
+        @Override
+        public String toString() {
+            return "Stats[model=%s, status=%d, attempts=%d, ttft=%s, tpot=%s, outTokens=%d]"
+                    .formatted(model, status, attempts, ttft, tpot, outTokens);
+        }
+    }
+
+    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final int MAX_BODY = 4 &lt;&lt; 20;
+    private static final ExecutorService VT = Executors.newVirtualThreadPerTaskExecutor();
+
+    private final Config cfg;
+    // Пул соединений HttpClient для HTTP/1.1 по умолчанию не ограничен, так что 128 параллельных
+    // стримов не пересоздают соединения. HTTP/1.1 явно: vLLM не говорит h2c.
+    private final HttpClient client = HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_1_1)
+            .connectTimeout(Duration.ofSeconds(5))
+            .build();
+    final Semaphore slots;
+
+    public Gateway(Config cfg) {
+        this.cfg = cfg;
+        this.slots = new Semaphore(cfg.maxInFlight());
+    }
+
+    @Override
+    public void handle(HttpExchange ex) throws IOException {
+        long start = System.nanoTime();
+        try (ex) {
+            serve(ex, start);
+        }
+    }
+
+    private void serve(HttpExchange ex, long start) throws IOException {
+        if (!ex.getRequestMethod().equals("POST") || !ex.getRequestURI().getPath().equals("/v1/chat/completions")) {
+            apiError(ex, 404, "only POST /v1/chat/completions");
+            return;
+        }
+        ObjectNode req; // остальные поля запроса пробрасываем как есть
+        try {
+            byte[] raw = ex.getRequestBody().readNBytes(MAX_BODY + 1);
+            if (raw.length &gt; MAX_BODY) {
+                throw new IOException("request body too large");
+            }
+            req = (ObjectNode) JSON.readTree(raw);
+        } catch (IOException | ClassCastException e) {
+            apiError(ex, 400, "bad JSON: " + e.getMessage());
+            return;
+        }
+        String pub = req.path("model").asText();
+        boolean stream = req.path("stream").asBoolean(false);
+        String target = cfg.models().get(pub);
+        if (target == null) {
+            apiError(ex, 404, "model \"%s\" not found".formatted(pub));
+            return;
+        }
+        req.put("model", target);
+        if (stream &amp;&amp; !req.has("stream_options")) {
+            req.putObject("stream_options").put("include_usage", true); // точное число токенов в последнем чанке
+        }
+        byte[] body = JSON.writeValueAsBytes(req);
+
+        var st = new Stats(pub);
+        try {
+            proxy(ex, body, stream, start, st);
+        } finally {
+            if (cfg.observe() != null) {
+                cfg.observe().accept(st);
+            }
+        }
+    }
+
+    private void proxy(HttpExchange ex, byte[] body, boolean stream, long start, Stats st) throws IOException {
+        long deadline = start + cfg.timeout().toNanos();
+        // Слот: в vLLM не больше maxInFlight запросов, остальные ждут здесь, а не в его очереди.
+        try {
+            if (!slots.tryAcquire(cfg.queueWait().toNanos(), TimeUnit.NANOSECONDS)) {
+                st.status = 429;
+                ex.getResponseHeaders().set("Retry-After", "1");
+                apiError(ex, st.status, "all slots busy");
+                return;
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return;
+        }
+        try {
+            Upstream up;
+            try {
+                up = send(body, stream, deadline, st);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            } catch (Exception e) {
+                st.status = System.nanoTime() &gt;= deadline ? 504 : 502;
+                apiError(ex, st.status, "upstream: " + e);
+                return;
+            }
+            try (up) {
+                st.status = up.resp().statusCode();
+                if (stream &amp;&amp; st.status == 200) {
+                    pipeSSE(ex, up.body(), start, st);
+                    return;
+                }
+                byte[] raw;
+                try {
+                    raw = up.body().readAllBytes();
+                } catch (IOException e) {
+                    st.status = 502;
+                    apiError(ex, st.status, "upstream: " + e);
+                    return;
+                }
+                try {
+                    st.outTokens = JSON.readTree(raw).path("usage").path("completion_tokens").asInt(0);
+                } catch (IOException ignored) {
+                    // тело ошибки бывает не JSON — отдаём как есть
+                }
+                st.ttft = Duration.ofNanos(System.nanoTime() - start); // без стрима пользователь видит первый токен вместе с последним
+                ex.getResponseHeaders().set("Content-Type",
+                        up.resp().headers().firstValue("Content-Type").orElse("application/json"));
+                ex.sendResponseHeaders(st.status, raw.length == 0 ? -1 : raw.length);
+                ex.getResponseBody().write(raw);
+            }
+        } finally {
+            slots.release();
+        }
+    }
+
+    /** close() закрывает тело: соединение рвётся, и vLLM освобождает слот и KV-cache. */
+    private record Upstream(HttpResponse&lt;InputStream&gt; resp, BufferedInputStream body) implements AutoCloseable {
+        @Override
+        public void close() {
+            try {
+                body.close();
+            } catch (IOException ignored) {
+                // соединение и так закрывается
+            }
+        }
+    }
+
+    /**
+     * Повторяет запрос, пока vLLM отвечает 429/502/503/504 или стрим молчит дольше firstByte.
+     * Повторять можно только до первого байта клиенту: после него ответ уже частично отдан.
+     */
+    private Upstream send(byte[] body, boolean stream, long deadline, Stats st) throws Exception {
+        for (int attempt = 1; ; attempt++) {
+            st.attempts = attempt;
+            Upstream up = null;
+            Exception err = null;
+            try {
+                up = attempt(body, stream, deadline);
+            } catch (InterruptedException e) {
+                throw e;
+            } catch (Exception e) {
+                err = e;
+            }
+            if (up != null &amp;&amp; !retryable(up.resp().statusCode())) {
+                return up;
+            }
+            if (attempt &gt; cfg.maxRetries() || System.nanoTime() &gt;= deadline) {
+                if (up != null) {
+                    return up; // последний 429/503 отдаём клиенту как есть
+                }
+                throw err;
+            }
+            long ceil = cfg.backoff().toNanos() &lt;&lt; (attempt - 1);
+            long delay = ceil &gt; 0 ? ThreadLocalRandom.current().nextLong(ceil) : 0;
+            if (up != null) {
+                delay = Math.max(delay, retryAfterNanos(up.resp()));
+                up.close();
+            }
+            Thread.sleep(Duration.ofNanos(Math.max(0, Math.min(delay, deadline - System.nanoTime()))));
+        }
+    }
+
+    private Upstream attempt(byte[] body, boolean stream, long deadline) throws Exception {
+        long left = deadline - System.nanoTime();
+        if (left &lt;= 0) {
+            throw new HttpTimeoutException("gateway deadline exceeded");
+        }
+        var b = HttpRequest.newBuilder(URI.create(cfg.upstream() + "/v1/chat/completions"))
+                .timeout(Duration.ofNanos(left))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body));
+        if (!cfg.apiKey().isEmpty()) {
+            b.header("Authorization", "Bearer " + cfg.apiKey());
+        }
+        long wait = stream &amp;&amp; cfg.firstByte().isPositive() ? Math.min(cfg.firstByte().toNanos(), left) : left;
+        var sent = client.sendAsync(b.build(), HttpResponse.BodyHandlers.ofInputStream());
+        var ready = sent.thenApplyAsync(Gateway::peekFirstByte, VT);
+        try {
+            return ready.get(wait, TimeUnit.NANOSECONDS);
+        } catch (java.util.concurrent.TimeoutException e) {
+            sent.cancel(true);                                    // заголовков ещё нет — обрываем запрос,
+            sent.thenAccept(r -&gt; new Upstream(r, new BufferedInputStream(r.body())).close()); // а если есть — закрываем тело
+            throw new HttpTimeoutException("no first byte in " + Duration.ofNanos(wait));
+        } catch (ExecutionException e) {
+            throw e.getCause() instanceof Exception c ? c : e;
+        }
+    }
+
+    /** Ждёт первый байт тела: заголовки могли уйти, а токенов нет — реплика зависла на prefill. */
+    private static Upstream peekFirstByte(HttpResponse&lt;InputStream&gt; resp) {
+        var up = new Upstream(resp, new BufferedInputStream(resp.body()));
+        try {
+            up.body().mark(1);
+            up.body().read(); // -1 (пустое тело) тоже годится
+            up.body().reset();
+            return up;
+        } catch (IOException e) {
+            up.close();
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    private static long retryAfterNanos(HttpResponse&lt;?&gt; resp) {
+        try {
+            return resp.headers().firstValue("Retry-After")
+                    .map(s -&gt; TimeUnit.SECONDS.toNanos(Long.parseLong(s.trim()))).orElse(0L);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    static boolean retryable(int code) {
+        return code == 429 || code == 502 || code == 503 || code == 504;
+    }
+
+    /** Пробрасывает стрим построчно и сбрасывает буфер после каждой строки. */
+    private static void pipeSSE(HttpExchange ex, InputStream src, long start, Stats st) throws IOException {
+        var h = ex.getResponseHeaders();
+        h.set("Content-Type", "text/event-stream");
+        h.set("Cache-Control", "no-cache");
+        h.set("X-Accel-Buffering", "no"); // nginx перед шлюзом не должен копить стрим
+        ex.sendResponseHeaders(200, 0);   // 0 — chunked: длина заранее неизвестна
+        OutputStream out = ex.getResponseBody();
+        var in = new BufferedReader(new InputStreamReader(src, StandardCharsets.UTF_8));
+        long first = 0, last = 0;
+        int chunks = 0;
+        while (true) {
+            String line;
+            try {
+                line = in.readLine();
+            } catch (IOException e) {
+                break; // upstream оборвал стрим
+            }
+            if (line == null) {
+                break;
+            }
+            try {
+                out.write((line + "\n").getBytes(StandardCharsets.UTF_8));
+                out.flush();
+            } catch (IOException e) {
+                return; // клиент ушёл: Upstream.close() оборвёт запрос к vLLM, генерация остановится
+            }
+            if (!line.startsWith("data:")) {
+                continue;
+            }
+            JsonNode c;
+            try {
+                c = JSON.readTree(line.substring(5));
+            } catch (JsonProcessingException e) {
+                continue; // "[DONE]" не JSON — пропускаем
+            }
+            // reasoning — у reasoning-моделей; в старых vLLM поле звалось reasoning_content.
+            JsonNode delta = c.path("choices").path(0).path("delta");
+            if (!delta.path("content").asText("").isEmpty() || !delta.path("reasoning").asText("").isEmpty()) {
+                long now = System.nanoTime();
+                if (first == 0) {
+                    first = now;
+                }
+                last = now;
+                chunks++;
+            }
+            if (c.hasNonNull("usage")) {
+                st.outTokens = c.path("usage").path("completion_tokens").asInt();
+            }
+        }
+        if (st.outTokens == 0) {
+            st.outTokens = chunks; // без usage: чанк ≈ токен, если stream_interval = 1
+        }
+        if (first != 0) {
+            st.ttft = Duration.ofNanos(first - start);
+            if (st.outTokens &gt; 1) {
+                st.tpot = Duration.ofNanos((last - first) / (st.outTokens - 1));
+            }
+        }
+    }
+
+    static void apiError(HttpExchange ex, int code, String msg) throws IOException {
+        byte[] b = JSON.writeValueAsBytes(Map.of("error", Map.of("message", msg, "code", code)));
+        ex.getResponseHeaders().set("Content-Type", "application/json");
+        ex.sendResponseHeaders(code, b.length);
+        ex.getResponseBody().write(b);
+    }
+}</code></pre></div>
+    <div class="tab-panel" data-tab="Go: запуск" data-only="go"><pre><code class="lang-go">// go run . -upstream http://localhost:8000 -models "clf=ticket-clf,chat=Qwen/Qwen3-8B" -max-inflight 128
 // Локально без GPU: -upstream http://localhost:11434 -models "chat=qwen3:8b" (Ollama).
 package main
 
@@ -574,7 +934,61 @@ func main() {
 		os.Exit(1)
 	}
 }</code></pre></div>
-    <div class="tab-panel" data-tab="Go: тест с фейковым vLLM"><pre><code class="lang-go">// fakeVLLM — httptest-сервер, который отвечает как vLLM; handle решает, что вернуть на n-й вызов.
+    <div class="tab-panel" data-tab="Java: запуск" data-only="java"><pre><code class="lang-java">// mvn -q -pl m10-models compile exec:java -Dexec.mainClass=course.m10models.Main \
+//   -Dexec.args='--upstream http://localhost:8000 --models clf=ticket-clf,chat=Qwen/Qwen3-8B --max-inflight 128'
+// Локально без GPU: --upstream http://localhost:11434 --models chat=qwen3:8b (Ollama).
+package course.m10models;
+
+import com.sun.net.httpserver.HttpServer;
+import java.lang.System.Logger.Level;
+import java.net.InetSocketAddress;
+import java.time.Duration;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.Executors;
+
+public final class Main {
+    public static void main(String[] args) throws Exception {
+        Map&lt;String, String&gt; flags = new HashMap&lt;&gt;(Map.of(
+                "--listen", ":8080",                       // адрес шлюза
+                "--upstream", "http://localhost:8000",     // vLLM или Ollama
+                "--models", "chat=Qwen/Qwen3-8B",          // публичное=имя_в_vLLM через запятую
+                "--max-inflight", "128"));                 // ≈ --max-num-seqs × реплики
+        for (int i = 0; i + 1 &lt; args.length; i += 2) {
+            if (!flags.containsKey(args[i])) {
+                throw new IllegalArgumentException("unknown flag " + args[i]);
+            }
+            flags.put(args[i], args[i + 1]);
+        }
+
+        Map&lt;String, String&gt; models = new HashMap&lt;&gt;();
+        for (String kv : flags.get("--models").split(",")) {
+            String[] p = kv.split("=", 2);
+            if (p.length == 2) {
+                models.put(p[0], p[1]);
+            }
+        }
+        var log = System.getLogger("gateway");
+        var gw = new Gateway(new Gateway.Config(
+                flags.get("--upstream"), Objects.requireNonNullElse(System.getenv("VLLM_API_KEY"), ""), models,
+                Integer.parseInt(flags.get("--max-inflight")), Duration.ofSeconds(2),
+                Duration.ofSeconds(10), Duration.ofMinutes(5), 2, Duration.ofMillis(200),
+                s -&gt; log.log(Level.INFO, "llm model={0} status={1} attempts={2} ttft_ms={3} tpot_ms={4} out_tokens={5}",
+                        s.model, s.status, s.attempts, s.ttft.toMillis(), s.tpot.toMillis(), s.outTokens)));
+
+        String listen = flags.get("--listen");
+        int colon = listen.lastIndexOf(':');
+        String host = listen.substring(0, colon);
+        int port = Integer.parseInt(listen.substring(colon + 1));
+        var srv = HttpServer.create(host.isEmpty() ? new InetSocketAddress(port) : new InetSocketAddress(host, port), 0);
+        srv.createContext("/", gw);
+        srv.setExecutor(Executors.newVirtualThreadPerTaskExecutor()); // поток на запрос: стримы держат соединение минутами
+        srv.start();
+        log.log(Level.INFO, "gateway listen={0} upstream={1} models={2}", listen, flags.get("--upstream"), models);
+    }
+}</code></pre></div>
+    <div class="tab-panel" data-tab="Go: тест с фейковым vLLM" data-only="go"><pre><code class="lang-go">// fakeVLLM — httptest-сервер, который отвечает как vLLM; handle решает, что вернуть на n-й вызов.
 func fakeVLLM(t *testing.T, handle func(n int, w http.ResponseWriter, body map[string]any)) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
 	var calls atomic.Int32
@@ -656,16 +1070,147 @@ func TestNoFirstByteRetries(t *testing.T) {
 		t.Fatalf("code %d, calls %d, body %s", rec.Code, calls.Load(), rec.Body)
 	}
 }</code></pre></div>
+    <div class="tab-panel" data-tab="Java: тест с фейковым vLLM" data-only="java"><pre><code class="lang-java">// Фрагмент GatewayTest (JUnit 5): фейковый vLLM на com.sun.net.httpserver, шлюз на случайном порту.
+class GatewayTest {
+    static final ObjectMapper JSON = new ObjectMapper();
+    static final HttpClient HTTP = HttpClient.newHttpClient();
+    final List&lt;HttpServer&gt; servers = new ArrayList&lt;&gt;();
+    final List&lt;Gateway.Stats&gt; stats = new CopyOnWriteArrayList&lt;&gt;();
+
+    @FunctionalInterface
+    interface Handle {
+        void handle(int n, HttpExchange ex, JsonNode body) throws Exception;
+    }
+
+    HttpServer serve(com.sun.net.httpserver.HttpHandler h) throws IOException {
+        var srv = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        srv.createContext("/", h);
+        srv.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
+        srv.start();
+        servers.add(srv);
+        return srv;
+    }
+
+    static String url(HttpServer s) {
+        return "http://127.0.0.1:" + s.getAddress().getPort();
+    }
+
+    /** Фейковый vLLM: handle решает, что вернуть на n-й вызов. */
+    String fakeVLLM(AtomicInteger calls, Handle handle) throws IOException {
+        return url(serve(ex -&gt; {
+            try (ex) {
+                if (!ex.getRequestURI().getPath().equals("/v1/chat/completions")
+                        || !"Bearer k".equals(ex.getRequestHeaders().getFirst("Authorization"))) {
+                    reply(ex, 400, "text/plain", "bad request to upstream");
+                    return;
+                }
+                handle.handle(calls.incrementAndGet(), ex, JSON.readTree(ex.getRequestBody()));
+            } catch (Exception e) {
+                throw new IOException(e);
+            }
+        }));
+    }
+
+    static void reply(HttpExchange ex, int code, String contentType, String body) throws IOException {
+        byte[] b = body.getBytes(StandardCharsets.UTF_8);
+        ex.getResponseHeaders().set("Content-Type", contentType);
+        ex.sendResponseHeaders(code, b.length == 0 ? -1 : b.length);
+        ex.getResponseBody().write(b);
+    }
+
+    static Gateway.Config config(String upstream, int maxInFlight, Consumer&lt;Gateway.Stats&gt; observe) {
+        return new Gateway.Config(upstream, "k", Map.of("clf", "ticket-clf", "chat", "Qwen/Qwen3-8B"),
+                maxInFlight, Duration.ofMillis(50), Duration.ofMillis(200), Duration.ofSeconds(5), 2,
+                Duration.ofMillis(1), observe);
+    }
+
+    String newGW(String upstream) throws IOException {
+        return url(serve(new Gateway(config(upstream, 4, stats::add))));
+    }
+
+    static HttpResponse&lt;String&gt; post(String gw, String body) throws Exception {
+        return HTTP.send(HttpRequest.newBuilder(URI.create(gw + "/v1/chat/completions"))
+                .POST(HttpRequest.BodyPublishers.ofString(body)).build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    /** observe вызывается после записи ответа: ждём его, а не полагаемся на порядок. */
+    Gateway.Stats awaitStats() throws InterruptedException {
+        for (int i = 0; i &lt; 200 &amp;&amp; stats.isEmpty(); i++) {
+            Thread.sleep(5);
+        }
+        assertEquals(1, stats.size(), "stats = " + stats);
+        return stats.getFirst();
+    }
+
+    @Test
+    void streamPassthroughAndMetrics() throws Exception {
+        String up = fakeVLLM(new AtomicInteger(), (n, ex, body) -&gt; {
+            assertTrue(body.path("stream_options").path("include_usage").asBoolean(),
+                    "gateway must request usage in stream");
+            ex.getResponseHeaders().set("Content-Type", "text/event-stream");
+            ex.sendResponseHeaders(200, 0);
+            var out = ex.getResponseBody();
+            Consumer&lt;String&gt; send = s -&gt; {
+                try {
+                    out.write(("data: " + s + "\n\n").getBytes(StandardCharsets.UTF_8));
+                    out.flush();
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+            };
+            send.accept("{\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}]}");
+            Thread.sleep(30); // prefill
+            for (String tok : List.of("При", "вет", "!")) {
+                send.accept("{\"choices\":[{\"delta\":{\"content\":\"" + tok + "\"}}]}");
+                Thread.sleep(10); // decode
+            }
+            send.accept("{\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":3}}");
+            send.accept("[DONE]");
+        });
+        var rec = post(newGW(up), "{\"model\":\"chat\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"привет\"}]}");
+        String out = rec.body();
+        assertEquals(200, rec.statusCode());
+        assertEquals("text/event-stream", rec.headers().firstValue("Content-Type").orElse(""));
+        assertTrue(out.indexOf("\"При\"") &lt; out.indexOf("\"вет\"") &amp;&amp; out.endsWith("data: [DONE]\n\n"),
+                "stream is not passed through in order:\n" + out);
+        var s = awaitStats();
+        assertEquals(3, s.outTokens, s.toString());
+        assertTrue(s.ttft.compareTo(Duration.ofMillis(30)) &gt;= 0, s.toString());
+        assertTrue(s.tpot.compareTo(Duration.ofMillis(5)) &gt;= 0 &amp;&amp; s.tpot.compareTo(s.ttft) &lt;= 0, s.toString());
+    }
+
+    @Test
+    void noFirstByteRetries() throws Exception {
+        var calls = new AtomicInteger();
+        String up = fakeVLLM(calls, (n, ex, body) -&gt; {
+            ex.getResponseHeaders().set("Content-Type", "text/event-stream");
+            ex.sendResponseHeaders(200, 0); // заголовки ушли, а токенов нет: реплика зависла на prefill
+            if (n == 1) {
+                Thread.sleep(1000);
+                return;
+            }
+            ex.getResponseBody().write("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n"
+                    .getBytes(StandardCharsets.UTF_8));
+        });
+        var rec = post(newGW(up), "{\"model\":\"chat\",\"stream\":true,\"messages\":[]}");
+        assertEquals(200, rec.statusCode());
+        assertEquals(2, calls.get());
+        assertTrue(rec.body().contains("\"ok\""), rec.body());
+    }
+}</code></pre></div>
   </div>
-  <p>Полный код с тестами (маппинг модели, стрим и метрики, ретрай на 503, исчерпание ретраев, таймаут первого байта, лимит конкурентности) — в <code>examples/m10-models</code>, запуск <code>go test -race ./...</code>. На что обратить внимание:</p>
+  <p>Полный код с тестами (маппинг модели, стрим и метрики, ретрай на 503, исчерпание ретраев, таймаут первого байта, лимит конкурентности) <span data-only="go">— в <code>examples/m10-models</code>, запуск <code>go test -race ./...</code>.</span><span data-only="java">— в <code>examples/java/m10-models</code> (только JDK и Jackson: <code>com.sun.net.httpserver</code>, <code>java.net.http</code>, virtual threads), запуск <code>mvn -pl m10-models -am verify</code> из <code>examples/java</code>.</span> На что обратить внимание:</p>
   <ul>
-    <li><b>Отмена контекста при уходе клиента.</b> Запрос к vLLM привязан к <code>r.Context()</code>. Пользователь закрыл вкладку, соединение с vLLM закрылось, и он прерывает генерацию и освобождает KV-cache. Шлюз, который дочитывает ответ «в никуда», занимает слот батча впустую.</li>
-    <li><b><code>MaxIdleConnsPerHost</code></b> по умолчанию равен 2. При сотне параллельных стримов к одному хосту соединения пересоздавались бы на каждый запрос.</li>
-    <li><b>Сброс буфера после каждой строки</b> (<code>http.NewResponseController(w).Flush()</code>) и заголовок <code>X-Accel-Buffering: no</code> для nginx: иначе стрим приходит пачками, и TTFT у клиента не совпадает с измеренным.</li>
+    <li data-only="go"><b>Отмена контекста при уходе клиента.</b> Запрос к vLLM привязан к <code>r.Context()</code>. Пользователь закрыл вкладку, соединение с vLLM закрылось, и он прерывает генерацию и освобождает KV-cache. Шлюз, который дочитывает ответ «в никуда», занимает слот батча впустую.</li>
+    <li data-only="java"><b>Отмена при уходе клиента.</b> Шлюз пишет ответ построчно; когда пользователь закрыл вкладку, запись бросает <code>IOException</code>, и <code>Upstream.close()</code> закрывает тело ответа vLLM. Соединение рвётся, vLLM прерывает генерацию и освобождает KV-cache. Шлюз, который дочитывает ответ «в никуда», занимает слот батча впустую.</li>
+    <li data-only="go"><b><code>MaxIdleConnsPerHost</code></b> по умолчанию равен 2. При сотне параллельных стримов к одному хосту соединения пересоздавались бы на каждый запрос.</li>
+    <li data-only="java"><b>Пул соединений.</b> <code>java.net.http.HttpClient</code> для HTTP/1.1 по умолчанию не ограничивает число keep-alive соединений к хосту, так что сотня параллельных стримов не пересоздаёт соединения. Версию <code>HTTP_1_1</code> стоит задать явно: vLLM не говорит h2c, а попытка upgrade до HTTP/2 — лишняя работа на каждом соединении.</li>
+    <li data-only="go"><b>Сброс буфера после каждой строки</b> (<code>http.NewResponseController(w).Flush()</code>) и заголовок <code>X-Accel-Buffering: no</code> для nginx: иначе стрим приходит пачками, и TTFT у клиента не совпадает с измеренным.</li>
+    <li data-only="java"><b>Сброс буфера после каждой строки</b> (<code>out.flush()</code> в chunked-ответе <code>HttpExchange</code>; в Spring — <code>SseEmitter</code> или <code>Flux&lt;ServerSentEvent&lt;String&gt;&gt;</code> в WebFlux) и заголовок <code>X-Accel-Buffering: no</code> для nginx: иначе стрим приходит пачками, и TTFT у клиента не совпадает с измеренным.</li>
     <li><b>Ретрай после таймаута первого байта не бесплатен:</b> отменённая попытка уже потратила prefill. Поэтому таймаут ставится с запасом над p99 TTFT, а не «на всякий случай короткий».</li>
   </ul>
   <div class="callout tip"><span class="title">Что упрощено</span>
-    <p>Поле <code>model</code> в ответе не переписывается обратно, и клиент видит имя адаптера. Один upstream: несколько реплик ставятся за балансировщик с политикой least-outstanding-requests или с учётом префикса. Одна общая очередь без справедливости между тенантами: когда тенантов много, нужна очередь на тенанта с весами. Метрики отдаются колбэком <code>Observe</code>, гистограммы Prometheus или OTel из модуля 9 подключаются в нём.</p>
+    <p>Поле <code>model</code> в ответе не переписывается обратно, и клиент видит имя адаптера. Один upstream: несколько реплик ставятся за балансировщик с политикой least-outstanding-requests или с учётом префикса. Одна общая очередь без справедливости между тенантами: когда тенантов много, нужна очередь на тенанта с весами. Метрики отдаются <span data-only="go">колбэком <code>Observe</code></span><span data-only="java">колбэком <code>observe</code> (<code>Consumer&lt;Stats&gt;</code>)</span>, гистограммы Prometheus или OTel из модуля 9 подключаются в нём.</p>
   </div>
 
   <h2 id="licenses">Лицензии open-weight моделей</h2>
@@ -753,7 +1298,10 @@ func TestNoFirstByteRetries(t *testing.T) {
     <div class="readout" id="lora-read"></div>
   </div>
 
-  <div class="callout go"><span class="title">Аналогия из Go</span>
+  <div class="callout go" data-only="java"><span class="title">Аналогия из Java</span>
+    <p>LoRA-адаптер похож на <code>Filter</code> или <code>HandlerInterceptor</code> поверх неизменяемого контроллера: базовая модель общая и read-only, а поведение меняет тонкая обёртка, которую можно менять на каждый запрос. Отсюда и multi-LoRA-сервинг, где на одном GPU одна база и десятки адаптеров, выбираемых по полю <code>model</code> в запросе.</p>
+  </div>
+  <div class="callout go" data-only="go"><span class="title">Аналогия из Go</span>
     <p>LoRA-адаптер похож на middleware поверх неизменяемого <code>http.Handler</code>: базовая модель общая и read-only, а поведение меняет тонкая обёртка, которую можно менять на каждый запрос. Отсюда и multi-LoRA-сервинг, где на одном GPU одна база и десятки адаптеров, выбираемых по полю <code>model</code> в запросе.</p>
   </div>
 
@@ -961,7 +1509,7 @@ def filter_examples(cands: list[tuple[str, str]], eval_texts: list[str], labeler
   </div>
 
   <h3 id="code">Код: от JSONL до метрик</h3>
-  <p>Пайплайн: сырые размеченные данные → дедупликация → стратифицированное разбиение → проверка утечки → LoRA-обучение с early stopping → метрики на test с выбором порога на validation. Валидатор JSONL на Go удобно ставить в CI перед каждым запуском обучения.</p>
+  <p>Пайплайн: сырые размеченные данные → дедупликация → стратифицированное разбиение → проверка утечки → LoRA-обучение с early stopping → метрики на test с выбором порога на validation. <span data-only="go">Валидатор JSONL на Go удобно</span><span data-only="java">Валидатор JSONL на Java удобно</span> ставить в CI перед каждым запуском обучения.</p>
 
   <div class="tabs">
     <div class="tab-panel" data-tab="Python: датасет и сплиты"><pre><code class="lang-python"># pip install scikit-learn pandas
@@ -1179,7 +1727,7 @@ report(y_test, s_test, th)                               # …а честную 
 labels_true = np.load("test_labels.npy", allow_pickle=True)
 labels_pred = np.load("test_pred_labels.npy", allow_pickle=True)
 print(classification_report(labels_true, labels_pred, digits=3, zero_division=0))</code></pre></div>
-    <div class="tab-panel" data-tab="Go: валидатор JSONL"><pre><code class="lang-go">// Валидатор и дедупликатор чат-датасета: go run . -in train.jsonl -out clean.jsonl
+    <div class="tab-panel" data-tab="Go: валидатор JSONL" data-only="go"><pre><code class="lang-go">// Валидатор и дедупликатор чат-датасета: go run . -in train.jsonl -out clean.jsonl
 // Падает (exit 1) при ошибках схемы — удобно в CI перед запуском обучения.
 package main
 
@@ -1302,6 +1850,136 @@ func main() {
 		os.Exit(1)
 	}
 }</code></pre></div>
+    <div class="tab-panel" data-tab="Java: валидатор JSONL" data-only="java"><pre><code class="lang-java">// Валидатор и дедупликатор чат-датасета: java -cp ... dataset.JsonlValidator --in train.jsonl --out clean.jsonl
+// Падает (exit 1) при ошибках схемы — удобно в CI перед запуском обучения.
+package dataset;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HashMap;
+import java.util.HexFormat;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+
+public final class JsonlValidator {
+    record Message(String role, String content) {}
+
+    record Example(List&lt;Message&gt; messages) {}
+
+    static final ObjectMapper JSON = new ObjectMapper()
+            .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+    static final Set&lt;String&gt; ROLES = Set.of("system", "user", "assistant");
+
+    /** Бросает IllegalArgumentException с причиной, если пример не годится для обучения. */
+    static void validate(Example ex, int maxChars) {
+        List&lt;Message&gt; ms = Objects.requireNonNullElse(ex.messages(), List.of());
+        if (ms.size() &lt; 2) {
+            throw new IllegalArgumentException("меньше двух сообщений");
+        }
+        String prev = "";
+        int total = 0;
+        for (int i = 0; i &lt; ms.size(); i++) {
+            String role = Objects.requireNonNullElse(ms.get(i).role(), "");
+            String content = Objects.requireNonNullElse(ms.get(i).content(), "");
+            if (!ROLES.contains(role)) {
+                throw new IllegalArgumentException("msg %d: неизвестная роль \"%s\"".formatted(i, role));
+            } else if (role.equals("system") &amp;&amp; i != 0) {
+                throw new IllegalArgumentException("msg %d: system не первым".formatted(i));
+            } else if (content.isBlank()) {
+                throw new IllegalArgumentException("msg %d: пустой content".formatted(i));
+            } else if (role.equals(prev) &amp;&amp; !role.equals("system")) {
+                throw new IllegalArgumentException("msg %d: роли не чередуются".formatted(i));
+            }
+            prev = role;
+            total += content.codePointCount(0, content.length());
+        }
+        if (!ms.getLast().role().equals("assistant")) {
+            throw new IllegalArgumentException("последнее сообщение не assistant: учить нечему");
+        }
+        if (total &gt; maxChars) { // грубо ~3–4 символа на токен; точнее — токенизатором модели
+            throw new IllegalArgumentException("слишком длинный пример: %d символов".formatted(total));
+        }
+    }
+
+    // key: нормализованный текст всех не-assistant сообщений. Одинаковый вход с разными
+    // ответами — это конфликт разметки, его стоит показать человеку, а не молча выбросить.
+    static String key(Example ex) throws NoSuchAlgorithmException {
+        var b = new StringBuilder();
+        for (Message m : ex.messages()) {
+            if (!m.role().equals("assistant")) {
+                b.append(String.join(" ", m.content().toLowerCase(Locale.ROOT).strip().split("\\s+"))).append('\0');
+            }
+        }
+        byte[] h = MessageDigest.getInstance("SHA-256").digest(b.toString().getBytes(StandardCharsets.UTF_8));
+        return HexFormat.of().formatHex(h);
+    }
+
+    public static void main(String[] args) throws Exception {
+        Map&lt;String, String&gt; flags = new HashMap&lt;&gt;(Map.of(
+                "--in", "train.jsonl",     // входной JSONL
+                "--out", "clean.jsonl",    // выход без дубликатов
+                "--max-chars", "16000"));  // лимит длины примера
+        for (int i = 0; i + 1 &lt; args.length; i += 2) {
+            flags.put(args[i], args[i + 1]);
+        }
+        int maxChars = Integer.parseInt(flags.get("--max-chars"));
+
+        Map&lt;String, String&gt; seen = new HashMap&lt;&gt;(); // ключ → ответ ассистента
+        int line = 0, bad = 0, dups = 0, conflicts = 0;
+        // BufferedReader не ограничивает длину строки: длинные примеры JSONL читаются целиком.
+        try (BufferedReader in = Files.newBufferedReader(Path.of(flags.get("--in")));
+             BufferedWriter out = Files.newBufferedWriter(Path.of(flags.get("--out")))) {
+            for (String raw; (raw = in.readLine()) != null; ) {
+                line++;
+                Example ex;
+                try {
+                    ex = JSON.readValue(raw, Example.class);
+                    validate(ex, maxChars);
+                } catch (JsonProcessingException e) {
+                    bad++;
+                    System.err.printf("line %d: невалидный JSON: %s%n", line, e.getOriginalMessage());
+                    continue;
+                } catch (IllegalArgumentException e) {
+                    bad++;
+                    System.err.printf("line %d: %s%n", line, e.getMessage());
+                    continue;
+                }
+                String k = key(ex), ans = ex.messages().getLast().content();
+                String prev = seen.putIfAbsent(k, ans);
+                if (prev != null) {
+                    if (!prev.equals(ans)) {
+                        conflicts++;
+                        System.err.printf("line %d: тот же вход, другой ответ: \"%s\" vs \"%s\"%n", line, prev, ans);
+                    }
+                    dups++;
+                    continue;
+                }
+                out.write(raw);
+                out.newLine();
+            }
+        } catch (IOException e) {
+            System.err.println("read: " + e);
+            System.exit(1);
+        }
+        System.out.printf("строк %d, ок %d, ошибок %d, дубликатов %d (конфликтов %d)%n",
+                line, seen.size(), bad, dups, conflicts);
+        if (bad &gt; 0) {
+            System.exit(1);
+        }
+    }
+}</code></pre></div>
   </div>
   <div class="callout tip"><span class="title">Что упрощено</span>
     <p>Валидатор ищет только точные дубликаты после нормализации. Почти-дубликаты требуют MinHash или embeddings, добавляйте их, когда в данных есть шаблонные тексты. Длина считается в символах. Если лимит жёсткий (<code>max_length</code> в тренере), считайте токенизатором целевой модели в Python-части пайплайна.</p>
@@ -1408,7 +2086,7 @@ curl -s localhost:8000/v1/models | jq '.data[] | {id, parent}'</code></pre>
   <h2 id="practice">Практика</h2>
   <div class="task">
     <h3>Задание 1: open-weight против API на eval-наборе проекта</h3>
-    <p>Возьмите eval-набор проекта B (вопросы к RAG проекта A с эталонами) и поднимите open-weight модель: Qwen3-8B в vLLM на арендованной GPU или <code>qwen3:8b</code> в Ollama, если GPU нет. Подключите её к <code>/ask</code> проекта A через Go-шлюз из этого модуля, не меняя остальной пайплайн. Прогоните набор на трёх вариантах: ваша текущая модель Claude (например, <code>claude-haiku-4-5</code> или <code>claude-sonnet-5</code>), open-weight модель в BF16 и она же в FP8 или AWQ.</p>
+    <p>Возьмите eval-набор проекта B (вопросы к RAG проекта A с эталонами) и поднимите open-weight модель: Qwen3-8B в vLLM на арендованной GPU или <code>qwen3:8b</code> в Ollama, если GPU нет. Подключите её к <code>/ask</code> проекта A <span data-only="go">через Go-шлюз из этого модуля</span><span data-only="java">через Java-шлюз из этого модуля</span>, не меняя остальной пайплайн. Прогоните набор на трёх вариантах: ваша текущая модель Claude (например, <code>claude-haiku-4-5</code> или <code>claude-sonnet-5</code>), open-weight модель в BF16 и она же в FP8 или AWQ.</p>
     <ul>
       <li>Таблица по трём вариантам: качество по метрикам проекта B и разница с Claude с 95% ДИ (парно, модуль 8); доля ответов с корректными цитатами; суммарные tok/s, TTFT и TPOT p50/p95/p99 при 1, 8, 32 и 128 одновременных запросах (метрики шлюза, нагрузочный скрипт или <code>vllm bench serve</code>); стоимость 1000 запросов по формуле из раздела <a href="#selfhosted">self-hosted</a>.</li>
       <li>Измеренный goodput подставлен в калькулятор, найдена точка безубыточности против Haiku 4.5 по вашей цене GPU-часа; параметры (цена GPU-часа, goodput одной GPU при вашем SLO, C_ops) записаны в README.</li>
@@ -1421,7 +2099,7 @@ curl -s localhost:8000/v1/models | jq '.data[] | {id, parent}'</code></pre>
     <h3>Задание 2: LoRA под узкую задачу с доказанным выигрышем</h3>
     <p>Выберите в проекте A узкую задачу с объёмом: классификацию вопроса перед поиском (раздел документации, «нужен ли поиск вообще», язык) или извлечение полей из вопроса (версия продукта, компонент). Соберите 1000–3000 примеров: реальные вопросы из логов, размеченные вами или сильной моделью, плюс синтетика через <code>synth.py</code> с фильтрами. Test — 200+ реальных примеров, размеченных людьми.</p>
     <ul>
-      <li>Датасет прошёл Go-валидатор и проверку пересечения сплитов. Намеренно оставленные 10% почти-дубликатов между train и test показали, насколько утечка завышает метрику, после чего их убрали.</li>
+      <li><span data-only="go">Датасет прошёл Go-валидатор</span><span data-only="java">Датасет прошёл Java-валидатор</span> и проверку пересечения сплитов. Намеренно оставленные 10% почти-дубликатов между train и test показали, насколько утечка завышает метрику, после чего их убрали.</li>
       <li>Сравнение на одном test: zero-shot и few-shot на Claude, база без адаптера, LoRA (<code>lora_sft.py</code>). Метрика задачи (macro-F1 или per-field F1) и разница LoRA с лучшей альтернативой с 95% ДИ. Выигрыш засчитывается, только если нижняя граница ДИ выше нуля; честно опровергнутый выигрыш тоже результат.</li>
       <li>Регрессионный набор из 30–50 общих задач прогнан до и после, заметной деградации нет.</li>
       <li>Адаптер поднят в vLLM через <code>--lora-modules</code>, шлюз отдаёт его под публичным именем; латентность p95 и стоимость 1M классификаций сравнены с Claude.</li>

@@ -24,10 +24,10 @@
     <div class="eyebrow">Модуль 9</div>
     <h1>Продакшн: надёжность, стоимость, латентность</h1>
     <p class="lead">LLM-провайдер ведёт себя как ненадёжная, медленная и дорогая внешняя зависимость с жёсткими квотами. В этом модуле собираем вокруг неё то же, что вы строили вокруг любого внешнего API: ретраи, таймауты, circuit breaker, лимиты, кэши, LLM-шлюз с роутингом по сложности, трейсинг и guardrails. А затем то, чего у обычного API не бывает: SLO для недетерминированных ответов, мониторинг дрейфа и фича-флаги для промптов и моделей.</p>
-    <div class="meta-row"><span class="chip">≈ 12 часов</span><span class="chip">Go</span><span class="chip">6 визуализаций</span><span class="chip">на момент написания: октябрь 2026</span></div>
+    <div class="meta-row"><span class="chip">≈ 12 часов</span><span class="chip"><span data-only="go">Go</span><span data-only="java">Java</span></span><span class="chip">6 визуализаций</span><span class="chip">на момент написания: октябрь 2026</span></div>
   </div>
 
-  <p>Большая часть модуля знакома любому Go-бэкендеру: backoff, <code>context</code>, middleware, circuit breaker, token bucket, OpenTelemetry. У LLM есть три особенности, из-за которых привычные приёмы приходится донастраивать.</p>
+  <p>Большая часть модуля знакома любому <span data-only="go">Go-бэкендеру: backoff, <code>context</code>, middleware, circuit breaker, token bucket</span><span data-only="java">Java-бэкендеру: backoff, таймауты, декораторы и interceptors, circuit breaker (Resilience4j), token bucket</span>, OpenTelemetry. У LLM есть три особенности, из-за которых привычные приёмы приходится донастраивать.</p>
   <ul>
     <li><b>Длинные и сильно разбросанные по длительности запросы.</b> Ответ идёт от 300 мс до нескольких минут, и время зависит от числа токенов на выходе. Один общий таймаут на 30 секунд либо оборвёт длинные ответы, либо будет ждать полминуты вместо того, чтобы вовремя переключиться на fallback.</li>
     <li><b>Лимиты считаются в токенах.</b> Помимо RPM провайдер ограничивает input и output tokens в минуту. Один запрос с документом на 200K токенов расходует квоту сотни обычных.</li>
@@ -75,7 +75,7 @@
   </ul>
 
   <div class="callout danger"><span class="title">Retry storm: ретраи на нескольких слоях</span>
-    <p>SDK Anthropic по умолчанию делает 2 ретрая. Вокруг него ваша middleware делает ещё 3. Выше API-gateway ретраит 5xx ещё 3 раза, а мобильный клиент добавляет свои 2. В худшем случае это 3·4·4·3 = <b>144 вызова</b> на одно нажатие кнопки, и каждый из них оплачивается. Правило простое: ретраи живут на <b>одном</b> слое, как правило ближайшем к провайдеру, а остальные слои ретраи выключают. В Go SDK это <code>option.WithMaxRetries(0)</code>, если ретраи у вас свои.</p>
+    <p>SDK Anthropic по умолчанию делает 2 ретрая. Вокруг него ваша middleware делает ещё 3. Выше API-gateway ретраит 5xx ещё 3 раза, а мобильный клиент добавляет свои 2. В худшем случае это 3·4·4·3 = <b>144 вызова</b> на одно нажатие кнопки, и каждый из них оплачивается. Правило простое: ретраи живут на <b>одном</b> слое, как правило ближайшем к провайдеру, а остальные слои ретраи выключают. <span data-only="go">В Go SDK это <code>option.WithMaxRetries(0)</code>, если ретраи у вас свои.</span><span data-only="java">В Java SDK это <code>AnthropicOkHttpClient.builder().maxRetries(0)</code>, если ретраи у вас свои.</span></p>
   </div>
 
   <h3>Идемпотентность</h3>
@@ -86,7 +86,10 @@
     <li><b>Batch и фоновые пайплайны.</b> Нужны <code>custom_id</code> и upsert результата, чтобы повторная обработка не создавала дубликаты.</li>
   </ul>
 
-  <div class="callout go"><span class="title">Аналогия из Go</span>
+  <div class="callout go" data-only="java"><span class="title">Аналогия из Java</span>
+    <p>Это обычный decorator над интерфейсом, как <code>Interceptor</code> в OkHttp или <code>ClientHttpRequestInterceptor</code> в Spring <code>RestClient</code>. У каждого слоя (retry, breaker, limiter, trace) одна ответственность, а порядок слоёв задаёт семантику. Resilience4j устроен так же: <code>Decorators.ofSupplier(call).withRateLimiter(...).withRetry(...).withCircuitBreaker(...)</code> — и от порядка вызовов зависит, что считает каждый слой. Лимитер снаружи ретраев считает логические запросы, внутри — каждую попытку. Для провайдерских лимитов правильный второй вариант.</p>
+  </div>
+  <div class="callout go" data-only="go"><span class="title">Аналогия из Go</span>
     <p>Это обычный decorator над интерфейсом, как <code>http.RoundTripper</code> в <code>http.Client</code>. У каждого слоя (retry, breaker, limiter, trace) одна ответственность, а порядок слоёв задаёт семантику. Лимитер снаружи ретраев считает логические запросы, внутри — каждую попытку. Для провайдерских лимитов правильный второй вариант.</p>
   </div>
 
@@ -98,11 +101,11 @@
     <tr><td><b>TTFT deadline</b></td><td>Время до первого токена: очередь у провайдера плюс prefill контекста</td><td>p99 TTFT × 2, обычно 5–20 с. Для длинного контекста больше, для короткого чата меньше</td></tr>
     <tr><td><b>Idle timeout</b></td><td>Пауза между чанками стрима. Ловит «зависшее» соединение, которое не закрылось</td><td>10–30 с. С extended thinking паузы длиннее, но провайдер шлёт <code>ping</code>, и таймер сбрасывается на них тоже</td></tr>
     <tr><td><b>Total deadline</b></td><td>Весь ответ. Выводится из <code>max_tokens / скорость генерации + TTFT</code></td><td>От секунд для классификатора до 10+ минут для длинной генерации</td></tr>
-    <tr><td><b>Request deadline</b></td><td>Бюджет всего пользовательского запроса, то есть <code>ctx</code> сверху</td><td>По SLO продукта. Ретраи и fallback укладываются <i>внутрь</i> него</td></tr>
+    <tr><td><b>Request deadline</b></td><td>Бюджет всего пользовательского запроса, <span data-only="go">то есть <code>ctx</code> сверху</span><span data-only="java">то есть дедлайн, пришедший сверху (<code>Request.deadline</code>)</span></td><td>По SLO продукта. Ретраи и fallback укладываются <i>внутрь</i> него</td></tr>
   </table>
   <p>Главная идея: <b>при стриминге TTFT и полное время ограничиваются раздельно</b>. Без стриминга есть только total. Если его выставить в 60 с, то при зависшем провайдере вы узнаете об этом через минуту. Со стримингом через 8 секунд без первого токена можно отменить попытку и уйти на fallback, а длинная генерация по-прежнему может идти хоть 5 минут.</p>
 
-  <pre><code class="lang-go">// Стриминг с раздельными дедлайнами: TTFT, простой между чанками, общий.
+  <pre data-only="go"><code class="lang-go">// Стриминг с раздельными дедлайнами: TTFT, простой между чанками, общий.
 var (
 	ErrTTFT = errors.New("llm: no first token before deadline")
 	ErrIdle = errors.New("llm: stream stalled")
@@ -148,11 +151,80 @@ func StreamWithDeadlines(ctx context.Context, c anthropic.Client, p anthropic.Me
 	}
 	return nil
 }</code></pre>
+  <pre data-only="java"><code class="lang-java">// Стриминг с раздельными дедлайнами: TTFT, простой между чанками, общий.
+package course.m09prod.llmmw;
+
+import com.anthropic.client.AnthropicClient;
+import com.anthropic.core.http.StreamResponse;
+import com.anthropic.models.messages.MessageCreateParams;
+import com.anthropic.models.messages.RawMessageStreamEvent;
+import java.time.Duration;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
+
+public final class Streams {
+    public static final class TtftException extends TimeoutException {
+        public TtftException() { super("llm: no first token before deadline"); }
+    }
+
+    public static final class IdleException extends TimeoutException {
+        public IdleException() { super("llm: stream stalled"); }
+    }
+
+    public static void streamWithDeadlines(AnthropicClient c, MessageCreateParams p,
+            Duration ttft, Duration idle, Duration total, Consumer&lt;String&gt; onText) throws TimeoutException {
+        var started = new AtomicBoolean();
+        var cause = new AtomicReference&lt;TimeoutException&gt;();
+        ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor(Thread.ofVirtual().factory());
+        // createStreaming возвращается после заголовков ответа; до них стрим ограничивает
+        // таймаут клиента (AnthropicOkHttpClient.builder().timeout(...)).
+        try (StreamResponse&lt;RawMessageStreamEvent&gt; stream = c.messages().createStreaming(p)) {
+            // Срабатывание любого таймера закрывает стрим: итерация ниже падает с исключением.
+            Consumer&lt;TimeoutException&gt; kill = e -&gt; {
+                cause.compareAndSet(null, e);
+                stream.close();
+            };
+            timer.schedule(() -&gt; kill.accept(new TimeoutException("llm: total deadline")),
+                    total.toMillis(), TimeUnit.MILLISECONDS);
+            var watchdog = new AtomicReference&lt;ScheduledFuture&lt;?&gt;&gt;(
+                    timer.schedule(() -&gt; kill.accept(new TtftException()), ttft.toMillis(), TimeUnit.MILLISECONDS));
+
+            stream.stream().forEach(ev -&gt; {
+                // Любое событие, включая ping, продлевает жизнь.
+                watchdog.getAndSet(timer.schedule(
+                        () -&gt; kill.accept(started.get() ? new IdleException() : new TtftException()),
+                        idle.toMillis(), TimeUnit.MILLISECONDS)).cancel(false);
+                ev.contentBlockDelta()
+                        .flatMap(d -&gt; d.delta().text())
+                        .ifPresent(t -&gt; {
+                            started.set(true);
+                            onText.accept(t.text());
+                        });
+            });
+        } catch (RuntimeException e) {
+            if (cause.get() != null) {
+                throw cause.get(); // TTFT / idle / total: понятно, что именно сработало
+            }
+            throw e;
+        } finally {
+            timer.shutdownNow();
+        }
+        if (cause.get() != null) {
+            throw cause.get(); // стрим закрыли таймером между событиями
+        }
+    }
+}</code></pre>
 
   <div class="callout warn"><span class="title">Режим отказа: дедлайн меньше, чем нужно ответу</span>
     <p>Total deadline 30 с при <code>max_tokens: 8000</code> и скорости около 60 tok/s. Ответы длиннее примерно 1700 токенов будут стабильно отваливаться по таймауту, ретраиться и снова отваливаться. Вы платите за три обрезанные генерации и не получаете ни одного ответа. Дедлайн должен соответствовать <code>max_tokens</code>, или наоборот. Ещё лучше стримить и проверять <code>stop_reason: "max_tokens"</code>.</p>
   </div>
-  <p>Перед каждым ретраем стоит проверить остаток родительского дедлайна: <code>if dl, ok := ctx.Deadline(); ok &amp;&amp; time.Until(dl) &lt; backoff+minAttempt { return err }</code>. Пятисекундный backoff при оставшихся двух секундах бюджета бессмысленен. Лучше сразу вернуть ошибку или быстрый fallback.</p>
+  <p>Перед каждым ретраем стоит проверить остаток родительского дедлайна: <span data-only="go"><code>if dl, ok := ctx.Deadline(); ok &amp;&amp; time.Until(dl) &lt; backoff+minAttempt { return err }</code></span><span data-only="java"><code>if (req.timeLeft().map(left -&gt; left.compareTo(backoff.plus(minAttempt)) &lt; 0).orElse(false)) throw e;</code></span>. Пятисекундный backoff при оставшихся двух секундах бюджета бессмысленен. Лучше сразу вернуть ошибку или быстрый fallback.</p>
 
   <h2 id="fallback">Fallback и circuit breaker</h2>
   <p>Ретраи спасают от кратких сбоев, но не от минутных инцидентов у провайдера. На этот случай нужна <b>цепочка fallback</b>, например: основная модель, модель поменьше у того же провайдера, модель другого провайдера или того же через другое облако (Bedrock, Vertex), self-hosted модель и, наконец, деградированный ответ вроде «сервис перегружен, вот ссылки на FAQ».</p>
@@ -195,7 +267,8 @@ func StreamWithDeadlines(ctx context.Context, c anthropic.Client, p anthropic.Me
   <h3>Клиентский лимитер, очередь, приоритеты</h3>
   <p>Упираться в лимит провайдера и потом ретраить 429 — плохая стратегия: вы тратите попытки, увеличиваете латентность и конкурируете со своими же сервисами. Лучше держать <b>свой token bucket чуть ниже провайдерского</b> (90%) в трёх измерениях и ждать на нём:</p>
   <ul>
-    <li><code>golang.org/x/time/rate</code>: <code>rate.NewLimiter(rate.Limit(itpm/60.0), burst)</code> и <code>WaitN(ctx, estTokens)</code>. Если дедлайн контекста не дождётся токенов, <code>WaitN</code> сразу вернёт ошибку, и вы получаете load shedding без дополнительного кода.</li>
+    <li data-only="go"><code>golang.org/x/time/rate</code>: <code>rate.NewLimiter(rate.Limit(itpm/60.0), burst)</code> и <code>WaitN(ctx, estTokens)</code>. Если дедлайн контекста не дождётся токенов, <code>WaitN</code> сразу вернёт ошибку, и вы получаете load shedding без дополнительного кода.</li>
+    <li data-only="java">Token bucket с резервированием: свой на 30 строк (<code>Limiter.TokenBucket</code> ниже) или Bucket4j. Вызов <code>acquire(estTokens, deadline)</code>: если до дедлайна запроса токенов не дождаться, он сразу бросает исключение, и вы получаете load shedding без дополнительного кода. Resilience4j <code>RateLimiter</code> тоже ждёт с таймаутом (<code>acquirePermission(n)</code>), но пополняет разрешения циклами фиксированной длины, а не непрерывно.</li>
     <li>Оценку input tokens даёт <code>/v1/messages/count_tokens</code> или эвристика «символы / 3.5» с запасом. OTPM резервируется по <code>max_tokens</code>.</li>
     <li>Несколько инстансов сервиса делят один лимит организации. Локальный лимитер делит квоту поровну (<code>limit / replicas</code>), а распределённый хранит состояние в Redis (GCRA, скрипт на Lua). Второй честнее, но добавляет сетевой hop и точку отказа.</li>
     <li><b>Приоритеты.</b> Интерактивный чат важнее фоновой суммаризации. Держите две очереди с раздельными лимитерами или взвешенную очередь. Фоновые задачи лучше отправлять в Batch API: −50% к цене и отдельная ёмкость.</li>
@@ -221,7 +294,7 @@ func StreamWithDeadlines(ctx context.Context, c anthropic.Client, p anthropic.Me
     <li><b>Сократить вывод.</b> Структурированный короткий ответ, «без преамбулы», JSON вместо прозы, ограничение <code>max_tokens</code>. Эффект линейный и бесплатный.</li>
     <li><b>Стриминг.</b> Полное время не уменьшается, но воспринимаемая латентность сокращается до TTFT. Для чата это главный UX-рычаг.</li>
     <li><b>Модель поменьше или ниже effort.</b> Haiku-класс генерирует в разы быстрее и дешевле. Для новых Claude <code>output_config.effort: "low"</code> сокращает thinking. Маршрутизируйте по сложности: простое на маленькую модель, сложное на большую (код и схема — в <a href="#gateway">уроке про шлюз</a>).</li>
-    <li><b>Параллелизм.</b> Retrieval из нескольких источников, независимые подзадачи, input guardrail параллельно с основным вызовом — это <code>errgroup</code>.</li>
+    <li><b>Параллелизм.</b> Retrieval из нескольких источников, независимые подзадачи, input guardrail <span data-only="go">параллельно с основным вызовом — это <code>errgroup</code>.</span><span data-only="java">параллельно с основным вызовом — это <code>CompletableFuture</code> на virtual threads или <code>StructuredTaskScope</code>.</span></li>
     <li><b>Кэши.</b> Точный и семантический кэш убирают вызов целиком. Prompt caching сокращает TTFT на длинном префиксе (по заявлению Anthropic до ~85% для длинных промптов) и снижает стоимость input до 0.1×.</li>
   </ol>
   <p>Бюджет латентности голосового агента — <a href="m16.html#latency">модуль 16</a> (факультатив).</p>
@@ -241,7 +314,10 @@ func StreamWithDeadlines(ctx context.Context, c anthropic.Client, p anthropic.Me
     <div class="readout" id="wf-read"></div>
   </div>
 
-  <div class="callout go"><span class="title">Аналогия из Go</span>
+  <div class="callout go" data-only="java"><span class="title">Аналогия из Java</span>
+    <p>Retrieval из pgvector и BM25 из Elasticsearch — это две задачи на virtual threads: <code>CompletableFuture.supplyAsync(..., executor)</code> и <code>allOf</code>, или <code>StructuredTaskScope.ShutdownOnFailure</code> (в Java 21 — preview API). Input guardrail работает как спекулятивное выполнение: запускаете классификатор и основной вызов одновременно, и если классификатор сказал «нет», отменяете основной вызов (<code>future.cancel(true)</code> прерывает его поток). Guardrail при этом не добавляет латентности, но в худшем случае вы заплатите за отменённый вызов (обычно за prefill).</p>
+  </div>
+  <div class="callout go" data-only="go"><span class="title">Аналогия из Go</span>
     <p>Retrieval из pgvector и BM25 из Elasticsearch — это <code>errgroup.WithContext</code> с двумя горутинами. Input guardrail работает как спекулятивное выполнение: запускаете классификатор и основной вызов одновременно, и если классификатор сказал «нет», отменяете <code>ctx</code> основного. Guardrail при этом не добавляет латентности, но в худшем случае вы заплатите за отменённый вызов (обычно за prefill).</p>
   </div>
 
@@ -279,7 +355,7 @@ func StreamWithDeadlines(ctx context.Context, c anthropic.Client, p anthropic.Me
   </ul>
 
   <h4>Prompt caching на практике</h4>
-  <p>Коротко (подробно в модуле 2). Порядок: tools → system → messages. Ставьте <code>cache_control</code> на конец стабильной части, всего до 4 breakpoint'ов. Любой байт, изменившийся раньше breakpoint'а, инвалидирует всё после него. Классические ошибки: <code>time.Now()</code> в system prompt, недетерминированный порядок tools (ключи <code>map</code> в Go!), id запроса в начале сообщения. Проверяйте кэш метрикой <code>cache_read_input_tokens / (input + cache_read + cache_write)</code> в дашборде. Если она внезапно упала до нуля, значит, кто-то поменял префикс.</p>
+  <p>Коротко (подробно в модуле 2). Порядок: tools → system → messages. Ставьте <code>cache_control</code> на конец стабильной части, всего до 4 breakpoint'ов. Любой байт, изменившийся раньше breakpoint'а, инвалидирует всё после него. Классические ошибки: <span data-only="go"><code>time.Now()</code> в system prompt, недетерминированный порядок tools (ключи <code>map</code> в Go!)</span><span data-only="java"><code>Instant.now()</code> в system prompt, недетерминированный порядок tools (<code>HashMap</code> вместо <code>LinkedHashMap</code>!)</span>, id запроса в начале сообщения. Проверяйте кэш метрикой <code>cache_read_input_tokens / (input + cache_read + cache_write)</code> в дашборде. Если она внезапно упала до нуля, значит, кто-то поменял префикс.</p>
 
   <p>Механика у провайдеров разная, и это влияет на дизайн промпта и на то, сломает ли шлюз кэш (по состоянию на октябрь 2026, сверено с документацией):</p>
   <table>
@@ -305,7 +381,10 @@ func StreamWithDeadlines(ctx context.Context, c anthropic.Client, p anthropic.Me
     <tr><td>Отказ</td><td>Падает один сервис</td><td>Общая точка отказа: N+2 реплик, понятная политика fail-open</td></tr>
   </table>
   <p>Правило: один-два сервиса на одном стеке — библиотека. Три и больше команд, требования комплаенса к ключам и аудиту, несколько языков — сервис. На практике часто и то и другое: тонкая клиентская библиотека (таймауты, трейсинг, идемпотентность) поверх шлюза (ключи, квоты, роутинг, аудит).</p>
-  <div class="callout go"><span class="title">Аналогия из Go</span>
+  <div class="callout go" data-only="java"><span class="title">Аналогия из Java</span>
+    <p>Это тот же выбор, что между интерцепторами в клиенте (gRPC-java <code>ClientInterceptor</code>, Spring <code>ClientHttpRequestInterceptor</code>) и service mesh. Интерцептор дешевле и ближе к коду, но его надо обновить в каждом сервисе. Mesh-прокси централизует политику, но добавляет hop и ещё один компонент, который должен быть надёжнее всего, что за ним стоит.</p>
+  </div>
+  <div class="callout go" data-only="go"><span class="title">Аналогия из Go</span>
     <p>Это тот же выбор, что между gRPC-интерцепторами и service mesh. Интерцептор дешевле и ближе к коду, но его надо обновить в каждом сервисе. Mesh-прокси централизует политику, но добавляет hop и ещё один компонент, который должен быть надёжнее всего, что за ним стоит.</p>
   </div>
 
@@ -331,7 +410,7 @@ func StreamWithDeadlines(ctx context.Context, c anthropic.Client, p anthropic.Me
     <div class="stat-row" id="rt-stats"></div>
   </div>
   <p>Что видно на схеме: с обученным классификатором или с эскалацией можно отправить на Haiku больше половины трафика, сэкономить около 40% и потерять меньше пункта качества; шумная эвристика при том же пороге теряет больше. Правее порога кривая резко падает — это сложные запросы, ошибочно принятые за простые. Лучший классификатор сдвигает всю кривую к идеальной. Эскалация поднимает качество на дешёвом конце, но съедает часть экономии.</p>
-  <pre><code class="lang-go">package llmmw
+  <pre data-only="go"><code class="lang-go">package llmmw
 
 import (
 	"context"
@@ -426,6 +505,109 @@ func (r *Router) Complete(ctx context.Context, req Request) (*Response, error) {
 	return resp, nil
 }
 </code></pre>
+  <pre data-only="java"><code class="lang-java">package course.m09prod.llmmw;
+
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.LongAdder;
+import java.util.function.Predicate;
+
+/**
+ * Отправляет простое на дешёвую цепочку, сложное — на сильную. cheap и strong — обычные LLM:
+ * как правило, каждая — свой Fallback со своими моделями. threshold приходит из фича-флага:
+ * score ≥ threshold → strong. accept — проверка ответа дешёвой модели; false → эскалация (null — без проверки).
+ */
+public record Router(LLM cheap, LLM strong, Classifier classify, double threshold,
+                     Predicate&lt;Response&gt; accept) implements LLM {
+
+    /** Оценивает сложность запроса в [0, 1]. */
+    @FunctionalInterface
+    public interface Classifier {
+        double score(Request req) throws Exception;
+    }
+
+    private static final List&lt;String&gt; HARD = List.of("почему", "сравни", "проанализируй", "спроектируй", "оптимизируй", "```");
+
+    /**
+     * Бесплатный классификатор на признаках текста. Веса и слова подбираются
+     * на размеченной выборке из логов, а не на глаз.
+     */
+    // ponytail: словарь признаков; когда его станет мало — modelClassifier или свой маленький классификатор.
+    public static double heuristic(Request req) {
+        String q = req.lastUserText().toLowerCase(Locale.ROOT);
+        double score = 0;
+        int n = q.codePointCount(0, q.length());
+        if (n &gt; 1500) {
+            score += 0.4;
+        } else if (n &gt; 400) {
+            score += 0.2;
+        }
+        for (String w : HARD) {
+            if (q.contains(w)) {
+                score += 0.3;
+            }
+        }
+        if (q.chars().filter(c -&gt; c == '?').count() &gt; 1) {
+            score += 0.15; // несколько вопросов в одном
+        }
+        if (req.messages().size() &gt; 6) {
+            score += 0.15; // длинный диалог: контекст запутаннее
+        }
+        return Math.min(score, 1);
+    }
+
+    /**
+     * Спрашивает дешёвую модель «simple или complex». Это +200–400 мс и доли цента,
+     * поэтому зовите её только в «серой зоне» эвристики, а не на каждый запрос.
+     */
+    public static Classifier modelClassifier(LLM cheap) {
+        return req -&gt; {
+            Response resp = cheap.complete(new Request(req.tenant(), "claude-haiku-4-5",
+                    "Оцени, нужна ли для ответа сильная модель. Ответь одним словом: simple или complex.",
+                    List.of(Msg.user(req.lastUserText())), 5, 0, req.deadline()));
+            return resp.text().toLowerCase(Locale.ROOT).contains("complex") ? 1 : 0;
+        };
+    }
+
+    /** Счётчики решений роутера; в проде — Micrometer Counter или та же метрика в OTel. */
+    private static final Map&lt;String, LongAdder&gt; ROUTED = new ConcurrentHashMap&lt;&gt;();
+
+    public static long routed(String decision) {
+        LongAdder a = ROUTED.get(decision);
+        return a == null ? 0 : a.sum();
+    }
+
+    private static void count(String decision) {
+        ROUTED.computeIfAbsent(decision, k -&gt; new LongAdder()).increment();
+    }
+
+    @Override
+    public Response complete(Request req) throws Exception {
+        double score;
+        try {
+            score = classify.score(req);
+        } catch (Exception e) {
+            count("classifier_error");
+            score = 1; // не знаем — платим за качество, а не экономим вслепую
+        }
+        if (score &gt;= threshold) {
+            count("strong");
+            return strong.complete(req);
+        }
+        count("cheap");
+        // Доступность — забота Fallback внутри цепочки; роутер отвечает за качество.
+        Response resp = cheap.complete(req);
+        if (accept != null &amp;&amp; !accept.test(resp)) {
+            // Откат на сильную модель: платим за оба вызова. Доля эскалаций — главная метрика роутера:
+            // если она растёт, порог пора поднимать (или дешёвая модель деградировала).
+            count("escalated");
+            return strong.complete(req);
+        }
+        return resp;
+    }
+}</code></pre>
   <ul>
     <li><b>Метрики роутера.</b> Доля трафика на дешёвую модель, доля эскалаций, качество по маршрутам (онлайн-judge на выборке, см. <a href="#drift">урок про дрейф</a>), стоимость на запрос. Рост эскалаций — сигнал, что поменялся трафик или деградировала маленькая модель.</li>
     <li><b>Откат.</b> <code>Threshold</code> приходит из фича-флага (<a href="#flags">урок ниже</a>): поднять порог до 1.0 — значит мгновенно вернуть весь трафик на сильную модель без деплоя.</li>
@@ -434,8 +616,8 @@ func (r *Router) Complete(ctx context.Context, req Request) (*Response, error) {
   </ul>
 
   <h3>Fallback на другого провайдера: адаптер</h3>
-  <p>Цепочка fallback из урока выше умеет переключаться между звеньями, но второму провайдеру нужен адаптер под интерфейс <code>LLM</code>. Главное в нём не HTTP-вызов, а нормализация. Ошибки надо привести к той же классификации, иначе <code>Retryable</code> не узнает 503 чужого провайдера: он не будет ретраиться и не откроет breaker. <code>stop_reason</code> тоже переводится в общий словарь, иначе семантический кэш закэширует обрезанный ответ. Тот же адаптер подходит для self-hosted vLLM или Ollama: у них OpenAI-совместимый API.</p>
-  <pre><code class="lang-go">package llmmw
+  <p>Цепочка fallback из урока выше умеет переключаться между звеньями, но второму провайдеру нужен адаптер под интерфейс <code>LLM</code>. Главное в нём не HTTP-вызов, а нормализация. Ошибки надо привести к той же классификации, <span data-only="go">иначе <code>Retryable</code> не узнает</span><span data-only="java">иначе <code>Retry.retryable</code> не узнает</span> 503 чужого провайдера: он не будет ретраиться и не откроет breaker. <code>stop_reason</code> тоже переводится в общий словарь, иначе семантический кэш закэширует обрезанный ответ. Тот же адаптер подходит для self-hosted vLLM или Ollama: у них OpenAI-совместимый API.</p>
+  <pre data-only="go"><code class="lang-go">package llmmw
 
 import (
 	"bytes"
@@ -515,6 +697,100 @@ func OpenAICompat(hc *http.Client, baseURL, apiKey string) LLM {
 	})
 }
 </code></pre>
+  <pre data-only="java"><code class="lang-java">package course.m09prod.llmmw;
+
+import com.fasterxml.jackson.annotation.JsonProperty;
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.TimeoutException;
+
+/**
+ * Звено под второго провайдера или self-hosted (vLLM, Ollama) через OpenAI-совместимый
+ * Chat Completions. Только текст, без tools: для fallback этого хватает.
+ */
+public record OpenAiCompat(HttpClient http, String baseUrl, String apiKey) implements LLM {
+
+    /**
+     * Ошибка адаптера в той же классификации, что и ошибки Anthropic SDK:
+     * по ней работают retryable, breaker и метрика error.type.
+     */
+    public static final class HttpError extends IOException {
+        private final int statusCode;
+        private final Duration retryAfter;
+
+        public HttpError(int statusCode, Duration retryAfter, String body) {
+            super("http " + statusCode + ": " + body);
+            this.statusCode = statusCode;
+            this.retryAfter = retryAfter;
+        }
+
+        public int statusCode() {
+            return statusCode;
+        }
+
+        public Duration retryAfter() {
+            return retryAfter;
+        }
+    }
+
+    record ChatMsg(String role, String content) {}
+
+    record ChatResp(String model, List&lt;Choice&gt; choices, Usage usage) {
+        record Choice(ChatMsg message, @JsonProperty("finish_reason") String finishReason) {}
+
+        record Usage(@JsonProperty("prompt_tokens") long promptTokens,
+                     @JsonProperty("completion_tokens") long completionTokens) {}
+    }
+
+    @Override
+    public Response complete(Request req) throws Exception {
+        List&lt;ChatMsg&gt; msgs = new ArrayList&lt;&gt;();
+        msgs.add(new ChatMsg("system", req.system()));
+        req.messages().forEach(m -&gt; msgs.add(new ChatMsg(m.role(), m.text())));
+        byte[] body = Flags.JSON.writeValueAsBytes(
+                Map.of("model", req.model(), "messages", msgs, "max_tokens", req.maxTokens()));
+        var hreq = HttpRequest.newBuilder(URI.create(baseUrl + "/chat/completions"))
+                .header("Content-Type", "application/json")
+                .header("Authorization", "Bearer " + apiKey)
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body));
+        if (req.expired()) {
+            throw new TimeoutException("deadline exceeded");
+        }
+        req.timeLeft().ifPresent(hreq::timeout);
+        // IOException (сеть, HttpTimeoutException): retryable разберётся.
+        HttpResponse&lt;byte[]&gt; resp = http.send(hreq.build(), HttpResponse.BodyHandlers.ofByteArray());
+        if (resp.statusCode() != 200) {
+            byte[] b = resp.body();
+            throw new HttpError(resp.statusCode(),
+                    Retry.retryAfter(resp.headers().firstValue("retry-after").orElse(null)),
+                    new String(b, 0, Math.min(b.length, 1024), StandardCharsets.UTF_8));
+        }
+        ChatResp out = Flags.JSON.readValue(resp.body(), ChatResp.class);
+        if (out.choices() == null || out.choices().isEmpty()) {
+            throw new HttpError(502, Duration.ZERO, "no choices");
+        }
+        var c = out.choices().getFirst();
+        // stop_reason приводим к словарю Anthropic: остальная цепочка (кэш, метрики) знает только его.
+        String stop = switch (Objects.requireNonNullElse(c.finishReason(), "")) {
+            case "stop" -&gt; "end_turn";
+            case "length" -&gt; "max_tokens";
+            case "content_filter" -&gt; "refusal";
+            default -&gt; "";
+        };
+        var usage = out.usage() != null ? out.usage() : new ChatResp.Usage(0, 0);
+        return new Response(c.message().content(), out.model(), stop, "",
+                usage.promptTokens(), usage.completionTokens(), 0, 0);
+    }
+}</code></pre>
   <p>Чтобы <code>Retryable</code>, breaker и метрика <code>error.type</code> понимали обе ошибки, классификация статуса вынесена в одну функцию <code>httpStatus</code> (вкладка 1 в <a href="#code">сборке</a>). Ретраи с backoff и jitter — из <a href="#retries">первого урока</a>: в шлюзе они живут ровно на одном слое, а клиенты свои выключают. Бюджеты на тенанта — <code>Metered</code> из той же сборки.</p>
 
   <h3>Build vs buy</h3>
@@ -571,8 +847,8 @@ func OpenAICompat(hc *http.Client, baseURL, apiKey string) LLM {
   <p>Для агентов спаны вкладываются так: <code>invoke_agent</code>, внутри него каждая итерация с <code>chat</code> и <code>execute_tool</code>. Так видно, на какой итерации агент «заблудился», и сколько стоила каждая.</p>
 
   <h3>Спаны агента и TTFT в коде</h3>
-  <p>Агент, работающий в вашем процессе, получает спан <code>invoke_agent {имя}</code> с kind <code>INTERNAL</code>; вызов удалённого агента по сети — <code>CLIENT</code>. Вызов инструмента — <code>execute_tool {имя}</code>, тоже <code>INTERNAL</code>. Вложенность получается сама: <code>Traced</code> и <code>ExecuteTool</code> берут родителя из <code>ctx</code>. TTFT пишется колбэком из стриминга: первый чанк записывает гистограмму, остальные ничего не делают.</p>
-  <pre><code class="lang-go">package llmmw
+  <p>Агент, работающий в вашем процессе, получает спан <code>invoke_agent {имя}</code> с kind <code>INTERNAL</code>; вызов удалённого агента по сети — <code>CLIENT</code>. Вызов инструмента — <code>execute_tool {имя}</code>, тоже <code>INTERNAL</code>. Вложенность получается сама: <span data-only="go"><code>Traced</code> и <code>ExecuteTool</code> берут родителя из <code>ctx</code>.</span><span data-only="java"><code>Traced</code> и <code>executeTool</code> делают свой спан текущим (<code>makeCurrent()</code>), а дочерние берут родителя из <code>Context.current()</code>. При переходе в другой поток контекст переносят явно: <code>Context.current().wrap(executor)</code>.</span> TTFT пишется колбэком из стриминга: первый чанк записывает гистограмму, остальные ничего не делают.</p>
+  <pre data-only="go"><code class="lang-go">package llmmw
 
 import (
 	"context"
@@ -638,7 +914,114 @@ func ExecuteTool(ctx context.Context, tool, callID string, fn func(ctx context.C
 	return out, err
 }
 </code></pre>
-  <p>Использование: <code>onText</code> в <code>StreamWithDeadlines</code> оборачивается так: <code>first := FirstChunk(ctx, time.Now(), attribute.String("gen_ai.request.model", model))</code>, а внутри колбэка первой строкой вызывается <code>first()</code>. Тест в <code>examples/m09-prod</code> проверяет вложенность спанов через <code>tracetest.SpanRecorder</code> и наличие метрик через <code>metric.NewManualReader</code>, без коллектора и сети.</p>
+  <pre data-only="java"><code class="lang-java">package course.m09prod.llmmw;
+
+import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.api.common.Attributes;
+import io.opentelemetry.api.metrics.DoubleHistogram;
+import io.opentelemetry.api.metrics.LongHistogram;
+import io.opentelemetry.api.metrics.Meter;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanKind;
+import io.opentelemetry.api.trace.StatusCode;
+import io.opentelemetry.api.trace.Tracer;
+import io.opentelemetry.context.Scope;
+import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+/** Инструменты OpenTelemetry по конвенции GenAI: трейсер, гистограммы, спаны агента и инструментов. */
+public final class GenAi {
+    final Tracer tracer;
+    final LongHistogram tokenUsage;
+    final DoubleHistogram opDuration, ttft;
+
+    // Границы бакетов — рекомендованные конвенцией: токены растут степенями 4, секунды — удвоением.
+    private static final List&lt;Long&gt; TOKENS = List.of(1L, 4L, 16L, 64L, 256L, 1024L, 4096L, 16384L, 65536L,
+            262144L, 1048576L, 4194304L, 16777216L, 67108864L);
+    private static final List&lt;Double&gt; SECONDS = List.of(0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28,
+            2.56, 5.12, 10.24, 20.48, 40.96, 81.92);
+
+    public GenAi(OpenTelemetry otel) {
+        tracer = otel.getTracer("llmmw");
+        Meter meter = otel.getMeter("llmmw");
+        tokenUsage = meter.histogramBuilder("gen_ai.client.token.usage").ofLongs().setUnit("{token}")
+                .setExplicitBucketBoundariesAdvice(TOKENS).build();
+        opDuration = meter.histogramBuilder("gen_ai.client.operation.duration").setUnit("s")
+                .setExplicitBucketBoundariesAdvice(SECONDS).build();
+        // TTFT на клиенте — метрика конвенции (semconv v1.41, статус Development).
+        ttft = meter.histogramBuilder("gen_ai.client.operation.time_to_first_chunk").setUnit("s")
+                .setExplicitBucketBoundariesAdvice(SECONDS).build();
+    }
+
+    /**
+     * Колбэк для стрима: первый вызов пишет TTFT, остальные — no-op.
+     * Вызывайте его из onText в streamWithDeadlines.
+     */
+    public Runnable firstChunk(long startNanos, Attributes attrs) {
+        var once = new AtomicBoolean();
+        return () -&gt; {
+            if (once.compareAndSet(false, true)) {
+                ttft.record((System.nanoTime() - startNanos) / 1e9, attrs);
+            }
+        };
+    }
+
+    /**
+     * Спан всей задачи агента. Спаны chat и execute_tool внутри run становятся его детьми
+     * через Context.current(): в трейсе видно, на какой итерации агент «заблудился».
+     */
+    public &lt;T&gt; T invokeAgent(String agent, Callable&lt;T&gt; run) throws Exception {
+        Span span = tracer.spanBuilder("invoke_agent " + agent)
+                .setSpanKind(SpanKind.INTERNAL) // агент в нашем процессе; удалённый агент — CLIENT
+                .setAttribute("gen_ai.operation.name", "invoke_agent")
+                .setAttribute("gen_ai.agent.name", agent)
+                .startSpan();
+        try (Scope ignored = span.makeCurrent()) {
+            return run.call();
+        } catch (Exception e) {
+            fail(span, e, "agent failed");
+            throw e;
+        } finally {
+            span.end();
+        }
+    }
+
+    /**
+     * Спан одного вызова инструмента. Аргументы и результат в атрибуты не пишем: по конвенции
+     * это opt-in (gen_ai.tool.call.arguments/result), там бывают PII.
+     */
+    public String executeTool(String tool, String callId, Callable&lt;String&gt; fn) throws Exception {
+        Span span = tracer.spanBuilder("execute_tool " + tool)
+                .setSpanKind(SpanKind.INTERNAL)
+                .setAttribute("gen_ai.operation.name", "execute_tool")
+                .setAttribute("gen_ai.tool.name", tool)
+                .setAttribute("gen_ai.tool.call.id", callId)
+                .setAttribute("gen_ai.tool.type", "function")
+                .startSpan();
+        try (Scope ignored = span.makeCurrent()) {
+            return fn.call();
+        } catch (Exception e) {
+            fail(span, e, "tool failed");
+            throw e;
+        } finally {
+            span.end();
+        }
+    }
+
+    static void fail(Span span, Exception e, String msg) {
+        span.recordException(e);
+        span.setStatus(StatusCode.ERROR, msg);
+        span.setAttribute("error.type", errorType(e));
+    }
+
+    static String errorType(Throwable e) {
+        Retry.Status s = Retry.httpStatus(e);
+        return s != null ? String.valueOf(s.code()) : "_OTHER"; // значение по конвенции OTel для неклассифицированных ошибок
+    }
+}</code></pre>
+  <p data-only="go">Использование: <code>onText</code> в <code>StreamWithDeadlines</code> оборачивается так: <code>first := FirstChunk(ctx, time.Now(), attribute.String("gen_ai.request.model", model))</code>, а внутри колбэка первой строкой вызывается <code>first()</code>. Тест в <code>examples/m09-prod</code> проверяет вложенность спанов через <code>tracetest.SpanRecorder</code> и наличие метрик через <code>metric.NewManualReader</code>, без коллектора и сети.</p>
+  <p data-only="java">Использование: <code>onText</code> в <code>streamWithDeadlines</code> оборачивается так: <code>Runnable first = genai.firstChunk(System.nanoTime(), Attributes.of(stringKey("gen_ai.request.model"), model))</code>, а внутри колбэка первой строкой вызывается <code>first.run()</code>. Тест в <code>examples/java/m09-prod</code> проверяет вложенность спанов через <code>InMemorySpanExporter</code> и наличие метрик через <code>InMemoryMetricReader</code> (артефакт <code>opentelemetry-sdk-testing</code>), без коллектора и сети.</p>
 
   <h3>Инструменты</h3>
   <ul>
@@ -658,7 +1041,7 @@ func ExecuteTool(ctx context.Context, tool, callID string, fn func(ctx context.C
     <li><b>Retention и доступ.</b> Сырые промпты 14–30 дней в отдельном хранилище с отдельными правами; агрегаты храните дольше. Нужны процедура удаления по запросу пользователя (GDPR) и аудит доступа.</li>
     <li><b>Идентификаторы.</b> <code>user_id</code> пишите через HMAC, а не открытым текстом. Ключ HMAC ротируется.</li>
   </ul>
-  <pre><code class="lang-go">// Грубое маскирование PII перед логированием. Регэкспы ловят «структурные» PII;
+  <pre data-only="go"><code class="lang-go">// Грубое маскирование PII перед логированием. Регэкспы ловят «структурные» PII;
 // имена и адреса ловит NER (Presidio). Маскировать надо до того, как текст уйдёт в логи.
 var piiPatterns = []struct {
 	re   *regexp.Regexp
@@ -674,6 +1057,21 @@ func MaskPII(s string) string {
 		s = p.re.ReplaceAllString(s, p.mask)
 	}
 	return s
+}</code></pre>
+  <pre data-only="java"><code class="lang-java">// Грубое маскирование PII перед логированием. Регэкспы ловят «структурные» PII;
+// имена и адреса ловит NER (Presidio). Маскировать надо до того, как текст уйдёт в логи.
+record PiiPattern(Pattern re, String mask) {}
+
+static final List&lt;PiiPattern&gt; PII_PATTERNS = List.of(
+        new PiiPattern(Pattern.compile("[\\w.+-]+@[\\w-]+\\.[\\w.-]+"), "&lt;EMAIL&gt;"),
+        new PiiPattern(Pattern.compile("\\b(?:\\d[ -]?){13,19}\\b"), "&lt;CARD&gt;"),
+        new PiiPattern(Pattern.compile("\\+?\\d[\\d\\s()-]{9,}\\d"), "&lt;PHONE&gt;"));
+
+static String maskPii(String s) {
+    for (PiiPattern p : PII_PATTERNS) {
+        s = p.re().matcher(s).replaceAll(p.mask());
+    }
+    return s;
 }</code></pre>
 
   <h2 id="slo">SLO для недетерминированных систем</h2>
@@ -722,7 +1120,7 @@ func MaskPII(s string) string {
     <div class="readout" id="bn-read"></div>
   </div>
 
-  <pre><code class="lang-go">package slo
+  <pre data-only="go"><code class="lang-go">package slo
 
 import "time"
 
@@ -777,7 +1175,65 @@ func Firing(rules []Rule, objective, minEvents float64, window func(time.Duratio
 	return out
 }
 </code></pre>
-  <p>Тест в <code>examples/m09-prod/slo</code> прогоняет четыре сценария: норма (тишина), 20-минутная авария на 30% (только быстрый page), четыре дня тлеющей деградации на 0.6% при SLO 99.5% (только тикет) и авария, закончившаяся два часа назад (тишина благодаря короткому окну). Отдельно проверяется выборочный SLI: 9 плохих оценок judge за 15 минут без порога событий будят дежурного, а с порогом 50 событий в коротком окне — нет. Это осознанный компромисс: по выборочному SLI быстрый page не строят.</p>
+  <pre data-only="java"><code class="lang-java">package course.m09prod.slo;
+
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.Function;
+
+public final class BurnRate {
+    private BurnRate() {}
+
+    /** События SLI за окно: всего и «плохих». */
+    public record Counts(double total, double bad) {}
+
+    /**
+     * Во сколько раз быстрее допустимого тратится error budget:
+     * 1 — бюджет кончится ровно к концу окна SLO, 14.4 — за 30 дней / 14.4 ≈ 2 дня.
+     */
+    public static double burnRate(Counts c, double objective) {
+        return c.total() == 0 ? 0 : (c.bad() / c.total()) / (1 - objective);
+    }
+
+    /** Какая доля error budget осталась за окно SLO (уходит в минус при перерасходе). */
+    public static double budgetLeft(Counts c, double objective) {
+        return c.total() == 0 ? 1 : 1 - c.bad() / (c.total() * (1 - objective));
+    }
+
+    /** page = false — тикет, а не звонок дежурному. */
+    public record Rule(Duration longWindow, Duration shortWindow, double burn, boolean page) {}
+
+    /**
+     * Multiwindow, multi-burn-rate правила из Google SRE Workbook для SLO на 30 дней.
+     * Короткое окно = 1/12 длинного: алерт гаснет, как только инцидент закончился.
+     */
+    public static final List&lt;Rule&gt; WORKBOOK = List.of(
+            new Rule(Duration.ofHours(1), Duration.ofMinutes(5), 14.4, true),   // 2% бюджета за час
+            new Rule(Duration.ofHours(6), Duration.ofMinutes(30), 6, true),     // 5% за 6 часов
+            new Rule(Duration.ofHours(72), Duration.ofHours(6), 1, false));     // 10% за 3 дня
+
+    /**
+     * Возвращает сработавшие правила. window(d) отдаёт счётчики за последние d.
+     * minEvents отсекает решения по горстке событий: на малом трафике и на выборочном SLI
+     * (онлайн-judge на 2% ответов) короткое окно — это шум, а не сигнал.
+     */
+    public static List&lt;Rule&gt; firing(List&lt;Rule&gt; rules, double objective, double minEvents,
+                                    Function&lt;Duration, Counts&gt; window) {
+        List&lt;Rule&gt; out = new ArrayList&lt;&gt;();
+        for (Rule r : rules) {
+            Counts lng = window.apply(r.longWindow()), shrt = window.apply(r.shortWindow());
+            if (shrt.total() &lt; minEvents) {
+                continue;
+            }
+            if (burnRate(lng, objective) &gt;= r.burn() &amp;&amp; burnRate(shrt, objective) &gt;= r.burn()) {
+                out.add(r);
+            }
+        }
+        return out;
+    }
+}</code></pre>
+  <p><span data-only="go">Тест в <code>examples/m09-prod/slo</code></span><span data-only="java">Тест <code>BurnRateTest</code> в <code>examples/java/m09-prod</code></span> прогоняет четыре сценария: норма (тишина), 20-минутная авария на 30% (только быстрый page), четыре дня тлеющей деградации на 0.6% при SLO 99.5% (только тикет) и авария, закончившаяся два часа назад (тишина благодаря короткому окну). Отдельно проверяется выборочный SLI: 9 плохих оценок judge за 15 минут без порога событий будят дежурного, а с порогом 50 событий в коротком окне — нет. Это осознанный компромисс: по выборочному SLI быстрый page не строят.</p>
   <p>Организационная сторона — что делать, когда бюджет кончился (заморозка выкаток промптов и моделей, приоритет надёжности над фичами), кто дежурит и как писать постмортем AI-инцидента, — в модуле 13 (<a href="m13.html#slo">политика error budget и on-call</a>, <a href="m13.html#postmortem">постмортем</a>).</p>
 
   <h2 id="drift">Мониторинг дрейфа и качества в проде</h2>
@@ -791,7 +1247,7 @@ func Firing(rules []Rule, objective, minEvents float64, window func(time.Duratio
     <tr><td>Модель</td><td><code>gen_ai.response.model</code> сменился, изменились токены и латентность на тех же запросах</td><td>Алерт на новое значение; ежедневный прогон golden set</td></tr>
   </table>
   <p><b>PSI</b> (population stability index) сравнивает доли по корзинам: <code>PSI = Σ (qᵢ − pᵢ) · ln(qᵢ / pᵢ)</code>, где <code>p</code> — эталон, <code>q</code> — текущее окно. Распространённое эмпирическое правило из кредитного скоринга: меньше 0.1 — стабильно, 0.1–0.25 — заметный сдвиг, больше 0.25 — сильный. Это ориентир, а не закон. Посчитайте PSI между двумя спокойными соседними неделями: это ваш шумовой фон. <b>JS-дивергенция</b> (Йенсена–Шеннона) симметрична, ограничена отрезком [0, 1] при логарифме по основанию 2 и не ломается на пустых корзинах, поэтому её удобнее показывать на дашборде.</p>
-  <pre><code class="lang-go">package drift
+  <pre data-only="go"><code class="lang-go">package drift
 
 import "math"
 
@@ -861,6 +1317,70 @@ func LengthBucket(tokens int) string {
 	}
 }
 </code></pre>
+  <pre data-only="java"><code class="lang-java">package course.m09prod.drift;
+
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+
+public final class Drift {
+    private Drift() {}
+
+    // PSI — population stability index между эталонным распределением (например, прошлый месяц)
+    // и текущим (последние сутки) по категориям: темы, языки, бакеты длины.
+    // Эмпирика из кредитного скоринга: &lt; 0.1 — стабильно, 0.1–0.25 — заметный сдвиг, &gt; 0.25 — сильный.
+    public static double psi(Map&lt;String, Double&gt; ref, Map&lt;String, Double&gt; cur) {
+        final double eps = 1e-4; // пустая корзина дала бы ln(0) = −∞
+        Shares s = shares(ref, cur);
+        double psi = 0;
+        for (String k : s.p().keySet()) {
+            double a = Math.max(s.p().get(k), eps), b = Math.max(s.q().get(k), eps);
+            psi += (b - a) * Math.log(b / a);
+        }
+        return psi;
+    }
+
+    /** JS — дивергенция Йенсена–Шеннона по основанию 2: симметрична, ограничена [0, 1], пустые корзины не ломают формулу. */
+    public static double js(Map&lt;String, Double&gt; ref, Map&lt;String, Double&gt; cur) {
+        Shares s = shares(ref, cur);
+        double js = 0;
+        for (String k : s.p().keySet()) {
+            double p = s.p().get(k), q = s.q().get(k), m = (p + q) / 2;
+            js += kl(p, m) / 2 + kl(q, m) / 2;
+        }
+        return js;
+    }
+
+    private static double kl(double a, double m) {
+        return a == 0 ? 0 : a * Math.log(a / m) / Math.log(2);
+    }
+
+    private record Shares(Map&lt;String, Double&gt; p, Map&lt;String, Double&gt; q) {}
+
+    // shares переводит счётчики в доли по объединению ключей: новая тема в текущем окне —
+    // тоже сигнал дрейфа, её нельзя потерять.
+    private static Shares shares(Map&lt;String, Double&gt; a, Map&lt;String, Double&gt; b) {
+        double sa = a.values().stream().mapToDouble(Double::doubleValue).sum();
+        double sb = b.values().stream().mapToDouble(Double::doubleValue).sum();
+        Set&lt;String&gt; keys = new HashSet&lt;&gt;(a.keySet());
+        keys.addAll(b.keySet());
+        Map&lt;String, Double&gt; p = new HashMap&lt;&gt;(), q = new HashMap&lt;&gt;();
+        for (String k : keys) {
+            p.put(k, a.getOrDefault(k, 0.0) / sa);
+            q.put(k, b.getOrDefault(k, 0.0) / sb);
+        }
+        return new Shares(p, q);
+    }
+
+    /** Корзина длины запроса в токенах: длина — самый дешёвый признак дрейфа. */
+    public static String lengthBucket(int tokens) {
+        if (tokens &lt; 50) return "&lt;50";
+        if (tokens &lt; 200) return "50-199";
+        if (tokens &lt; 1000) return "200-999";
+        return "1000+";
+    }
+}</code></pre>
   <ul>
     <li><b>Сравнивайте сопоставимое.</b> Понедельник с понедельником, рабочие часы с рабочими часами; окно не меньше нескольких сотен событий, иначе PSI шумит. Эталон обновляйте осознанно (после того как убедились, что новое распределение обслуживается хорошо), а не скользящим окном, которое «привыкает» к деградации.</li>
     <li><b>Онлайн-judge на выборке.</b> Асинхронно, стратифицированно по кластерам (иначе редкие новые темы почти не попадут в выборку), тем же откалиброванным судьёй, что в CI. Порядок цены: 2% от 1M запросов в месяц — 20 000 оценок на Haiku 4.5 по ~3K токенов на вход и ~100 на выход, примерно $70 в месяц.</li>
@@ -879,7 +1399,7 @@ func LengthBucket(tokens int) string {
     <li><b>Кэши.</b> Вариант входит в scope семантического кэша, а префикс prompt caching у варианта свой, поэтому во время эксперимента hit rate падает, а стоимость растёт. Закладывайте это в бюджет.</li>
   </ul>
   <p><b>Жизненный цикл изменения промпта:</b> офлайн-eval на golden set как гейт в CI (модуль 8, <a href="m08.html#ci">quality gate</a>) → canary на внутренних пользователях → 5% → 25% → 50% с guardrail-метриками на каждой ступени (burn rate SLI, качество по judge, доля отказов и эскалаций, стоимость на запрос) → 100% → удаление флага и старого промпта. Флаг, переживший эксперимент на полгода, — это технический долг: два пути в коде, которые оба надо тестировать.</p>
-  <pre><code class="lang-go">package llmmw
+  <pre data-only="go"><code class="lang-go">package llmmw
 
 import (
 	"encoding/json"
@@ -962,9 +1482,105 @@ func (r *Registry) Variant(key, tenant, unit string, def Variant) Variant {
 	return f.Evaluate(tenant, unit)
 }
 </code></pre>
+  <pre data-only="java"><code class="lang-java">package course.m09prod.llmmw;
+
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
+
+public final class Flags {
+    private Flags() {}
+
+    static final ObjectMapper JSON = new ObjectMapper()
+            .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+
+    /**
+     * Что переключает флаг: промпт, модель и параметры вместе. Промпт, отлаженный под одну модель,
+     * на другой ведёт себя иначе, поэтому раздельные флаги дают непроверенные комбинации.
+     * name пишется в трейс (app.flag.variant) и в онлайн-evals; prompt — "answer@v13".
+     */
+    public record Variant(String name, String prompt, String model, @JsonProperty("max_tokens") long maxTokens) {
+        public Variant(String name, String model) {
+            this(name, null, model, 0);
+        }
+    }
+
+    /**
+     * killed — kill switch: всем control, без деплоя. percent — доля трафика на treatment, 0–100.
+     * tenants — таргетинг: true — всегда treatment, false — никогда.
+     */
+    public record Flag(String key, boolean killed, Variant control, Variant treatment,
+                       double percent, Map&lt;String, Boolean&gt; tenants) {
+
+        /**
+         * Детерминирован: один unit (пользователь или тенант) всегда получает один вариант,
+         * а при росте percent 1 → 5 → 25 → 100 попавшие в treatment из него не выпадают.
+         */
+        public Variant evaluate(String tenant, String unit) {
+            if (killed) {
+                return control;
+            }
+            Boolean on = tenants == null ? null : tenants.get(tenant);
+            if (on != null) {
+                return on ? treatment : control;
+            }
+            // Ключ флага в хэше: разные флаги режут трафик независимо.
+            long bucket = Integer.toUnsignedLong(fnv32a(key + "/" + unit)) % 10000;
+            return bucket &lt; percent * 100 ? treatment : control;
+        }
+    }
+
+    static int fnv32a(String s) {
+        int h = 0x811c9dc5;
+        for (byte b : s.getBytes(StandardCharsets.UTF_8)) {
+            h ^= b &amp; 0xff;
+            h *= 0x01000193;
+        }
+        return h;
+    }
+
+    /** Хранит флаги и перечитывает их на лету (файл, etcd, сервис флагов). */
+    public static final class Registry {
+        private final AtomicReference&lt;Map&lt;String, Flag&gt;&gt; flags = new AtomicReference&lt;&gt;();
+
+        /**
+         * Заменяет конфиг целиком. Битый конфиг отклоняется, и работает предыдущий:
+         * опечатка в JSON не должна переключить весь прод на непроверенный промпт.
+         */
+        public void load(byte[] data) throws IOException {
+            List&lt;Flag&gt; list = JSON.readValue(data, new TypeReference&lt;&gt;() {});
+            Map&lt;String, Flag&gt; m = new HashMap&lt;&gt;();
+            for (Flag f : list) {
+                if (f.percent() &lt; 0 || f.percent() &gt; 100 || !hasModel(f.control()) || !hasModel(f.treatment())) {
+                    throw new IllegalArgumentException("flags: \"" + f.key() + "\": percent 0–100 and both models required");
+                }
+                m.put(f.key(), f);
+            }
+            flags.set(Map.copyOf(m));
+        }
+
+        private static boolean hasModel(Variant v) {
+            return v != null &amp;&amp; v.model() != null &amp;&amp; !v.model().isEmpty();
+        }
+
+        /** Вариант для запроса; если флага нет, возвращается def (поведение «как до флагов»). */
+        public Variant variant(String key, String tenant, String unit, Variant def) {
+            Map&lt;String, Flag&gt; m = flags.get();
+            Flag f = m == null ? null : m.get(key);
+            return f == null ? def : f.evaluate(tenant, unit);
+        }
+    }
+}</code></pre>
   <p>Тест проверяет то, что ломается на практике: доля Treatment на 20 000 пользователях около 10%, пользователи из 10% остаются в Treatment при росте до 30%, таргетинг и kill switch возвращают всех на Control, битый конфиг (процент 250) отклоняется, и работает предыдущий.</p>
-  <p>В проде флаги обычно живут в сервисе флагов (flagd, Unleash, LaunchDarkly, GO Feature Flag и др.), а код читает их через вендор-нейтральный <b>OpenFeature</b> SDK: процент, таргетинг и kill switch настраиваются в сервисе, а вызов в коде не зависит от провайдера. Сверено с <code>github.com/open-feature/go-sdk</code> v1.19:</p>
-  <pre><code class="lang-go">package llmmw
+  <p>В проде флаги обычно живут в сервисе флагов (flagd, Unleash, LaunchDarkly, GO Feature Flag и др.), а код читает их через вендор-нейтральный <b>OpenFeature</b> SDK: процент, таргетинг и kill switch настраиваются в сервисе, а вызов в коде не зависит от провайдера. <span data-only="go">Сверено с <code>github.com/open-feature/go-sdk</code> v1.19:</span><span data-only="java">Сверено с <code>dev.openfeature:sdk</code> 1.20:</span></p>
+  <pre data-only="go"><code class="lang-go">package llmmw
 
 import (
 	"context"
@@ -987,6 +1603,34 @@ func VariantOF(ctx context.Context, c *openfeature.Client, key, tenant, user str
 	return out
 }
 </code></pre>
+  <pre data-only="java"><code class="lang-java">package course.m09prod.llmmw;
+
+import course.m09prod.llmmw.Flags.Variant;
+import dev.openfeature.sdk.Client;
+import dev.openfeature.sdk.MutableContext;
+import dev.openfeature.sdk.Value;
+
+public final class OpenFeatureFlags {
+    private OpenFeatureFlags() {}
+
+    /**
+     * Тот же выбор варианта через OpenFeature: процент, таргетинг и kill switch живут в сервисе
+     * флагов (flagd, Unleash, LaunchDarkly и др.), код от вендора не зависит.
+     */
+    public static Variant variant(Client c, String key, String tenant, String user, Variant def) {
+        try {
+            var d = c.getObjectDetails(key, new Value(), new MutableContext(user).add("tenant", tenant));
+            if (d.getErrorCode() != null || !d.getValue().isStructure()) {
+                return def; // флага нет или сервис флагов недоступен — работаем на проверенном варианте
+            }
+            // Провайдеры отдают объект как Structure из JSON.
+            Variant out = Flags.JSON.convertValue(d.getValue().asStructure().asObjectMap(), Variant.class);
+            return out.model() == null || out.model().isEmpty() ? def : out;
+        } catch (RuntimeException e) {
+            return def;
+        }
+    }
+}</code></pre>
   <div class="callout warn"><span class="title">Режим отказа: сервис флагов недоступен</span>
     <p>Флаг читается на каждом LLM-запросе, поэтому сервис флагов не должен стать точкой отказа: SDK сервисов флагов обычно держат локальную копию конфигурации, а при ошибке должен возвращаться default — проверенный вариант, а не «последний экспериментальный». В <code>Registry</code> выше то же правило: битый конфиг не применяется.</p>
   </div>
@@ -1001,12 +1645,12 @@ func VariantOF(ctx context.Context, c *openfeature.Client, key, tenant, user str
   <ul>
     <li><b>Чем проверять.</b> Регэкспы и правила быстрые, дешёвые и предсказуемые. Специализированные классификаторы — Llama Guard, модерационные эндпоинты провайдеров, свой fine-tuned маленький классификатор (модуль 10). LLM-as-judge на Haiku-классе гибкий, но добавляет 200–500 мс и стоит денег. На практике их комбинируют: сначала дешёвое, дорогое только при сомнении.</li>
     <li><b>Метрики guardrails.</b> У каждого есть precision и recall. False positive — это легитимный пользователь, которому отказали, и такие ошибки убивают продукт так же, как пропуски. Держите размеченный набор и считайте обе ошибки.</li>
-    <li><b>Fail-open или fail-closed.</b> Если классификатор недоступен, пропускаем или блокируем? Для модерации детского контента ответ «блокируем», для тематического фильтра внутреннего инструмента — «пропускаем и логируем». Это решение надо принять явно, а не получить случайно из-за <code>if err != nil { return true }</code>.</li>
+    <li><b>Fail-open или fail-closed.</b> Если классификатор недоступен, пропускаем или блокируем? Для модерации детского контента ответ «блокируем», для тематического фильтра внутреннего инструмента — «пропускаем и логируем». Это решение надо принять явно, а не получить случайно из-за <span data-only="go"><code>if err != nil { return true }</code></span><span data-only="java"><code>catch (Exception e) { return true; }</code></span>.</li>
     <li><b>Стриминг и выходные проверки конфликтуют.</b> Нельзя проверить ответ, пока он не сгенерирован. Варианты: проверять по предложениям с буфером в 1–2 предложения, стримить и «отзывать» сообщение (плохой UX), или не стримить там, где риск высокий.</li>
     <li><b>Политика отказов.</b> Единый тон и формат отказа, объяснение («не могу помочь с X, могу с Y»), метрика доли отказов по причинам. Отказ должен быть продуктовым сценарием, а не исключением.</li>
   </ul>
 
-  <pre><code class="lang-go">// Input guardrail параллельно с основным вызовом: латентность не растёт,
+  <pre data-only="go"><code class="lang-go">// Input guardrail параллельно с основным вызовом: латентность не растёт,
 // при блокировке основной вызов отменяется через общий ctx.
 var ErrBlocked = errors.New("guardrail: input blocked")
 
@@ -1034,10 +1678,44 @@ func GuardedComplete(ctx context.Context, llm LLM, req Request,
 	}
 	return resp, nil
 }</code></pre>
+  <pre data-only="java"><code class="lang-java">// Input guardrail параллельно с основным вызовом: латентность не растёт,
+// при блокировке основной вызов отменяется (interrupt его виртуального потока).
+public static final class BlockedException extends RuntimeException {
+    public BlockedException() {
+        super("guardrail: input blocked");
+    }
+}
+
+@FunctionalInterface
+public interface Guard {
+    boolean allowed(String text) throws Exception;
+}
+
+public static Response guardedComplete(LLM llm, Request req, Guard guard) throws Exception {
+    try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
+        Future&lt;Response&gt; main = exec.submit(() -&gt; llm.complete(req));
+        boolean ok;
+        try {
+            ok = guard.allowed(req.lastUserText());
+        } catch (Exception e) {
+            main.cancel(true);
+            throw new IllegalStateException("guardrail unavailable", e); // fail-closed: осознанный выбор
+        }
+        if (!ok) {
+            main.cancel(true);
+            throw new BlockedException();
+        }
+        try {
+            return main.get();
+        } catch (ExecutionException e) {
+            throw e.getCause() instanceof Exception c ? c : e;
+        }
+    }
+}</code></pre>
   <p class="muted">Полная цепочка guards с fail-closed по умолчанию, allowlist инструментов со scopes и red-team как gate — <a href="m07.html#middleware">модуль 7</a>.</p>
 
   <h2 id="selfhosted">Self-hosted инференс: коротко</h2>
-  <p>Свой инференс поднимают по четырём причинам: <b>приватность</b> (данные не покидают периметр), <b>стоимость</b> на большом и ровном объёме, <b>контроль</b> (своя fine-tuned модель, фиксированная версия, предсказуемая латентность) и <b>офлайн или edge</b>. Для этого модуля важно одно: self-hosted модель — ещё одно звено цепочки. Её подключают через тот же <code>OpenAICompat</code>-адаптер (vLLM, SGLang и Ollama отдают OpenAI-совместимый API), закрывают breaker'ом и прогоняют по тем же evals.</p>
+  <p>Свой инференс поднимают по четырём причинам: <b>приватность</b> (данные не покидают периметр), <b>стоимость</b> на большом и ровном объёме, <b>контроль</b> (своя fine-tuned модель, фиксированная версия, предсказуемая латентность) и <b>офлайн или edge</b>. Для этого модуля важно одно: self-hosted модель — ещё одно звено цепочки. Её подключают <span data-only="go">через тот же <code>OpenAICompat</code>-адаптер</span><span data-only="java">через тот же <code>OpenAiCompat</code>-адаптер</span> (vLLM, SGLang и Ollama отдают OpenAI-совместимый API), закрывают breaker'ом и прогоняют по тем же evals.</p>
   <ul>
     <li><b>Сравнивайте $ за 1M токенов при реальной утилизации</b>, а не цену GPU-часа: <code>$/1M = GPU $/ч ÷ (tok/s × утилизация × 3600) × 10⁶</code>. GPU, простаивающий ночью, стоит как днём; API ночью не стоит ничего.</li>
     <li><b>Ограничивает конкурентность KV-cache, а не веса.</b> 8B в bf16 занимает 16 ГБ, а одна последовательность на 32K токенов у Llama-3-8B — ещё около 4 ГБ KV-cache.</li>
@@ -1046,13 +1724,14 @@ func GuardedComplete(ctx context.Context, llm LLM, req Request,
   </ul>
   <p>Подробно — движки (vLLM, SGLang, TGI, Ollama), PagedAttention и continuous batching, расчёт VRAM, калькулятор «self-hosted против API» и нагрузочный тест — в <a href="m10.html#selfhosted">модуле 10</a>.</p>
 
-  <h2 id="code">Сборка: middleware LLM-клиента на Go</h2>
+  <h2 id="code" data-only="go">Сборка: middleware LLM-клиента на Go</h2>
+  <h2 id="code" data-only="java">Сборка: middleware LLM-клиента на Java</h2>
   <p>Собираем всё в одну обёртку. Интерфейс один, реализаций-декораторов несколько, и порядок оборачивания задаёт семантику:</p>
   <pre><code>Traced → SemCache → Metered(квоты, $) → [Router] → Fallback[ для каждого звена: Breaker → Retry → Limiter → клиент провайдера ]</code></pre>
-  <p>Трейс снаружи видит всё, включая попадания в кэш. Кэш стоит до квот, потому что попадание квоту не тратит. Роутер по сложности (<a href="#routing">урок про шлюз</a>) — необязательный слой между квотами и fallback, у каждой его ветви своя цепочка. Ретраи и лимитер живут внутри звена: у каждого провайдера свои лимиты, и ретраить A, когда есть B, долго не нужно. Всё ниже, вместе с роутером, адаптером, флагами, SLO и PSI, собирается и проходит <code>go vet</code> и <code>go test -race</code> в <code>examples/m09-prod</code> репозитория курса.</p>
+  <p>Трейс снаружи видит всё, включая попадания в кэш. Кэш стоит до квот, потому что попадание квоту не тратит. Роутер по сложности (<a href="#routing">урок про шлюз</a>) — необязательный слой между квотами и fallback, у каждой его ветви своя цепочка. Ретраи и лимитер живут внутри звена: у каждого провайдера свои лимиты, и ретраить A, когда есть B, долго не нужно. Всё ниже, вместе с роутером, адаптером, флагами, SLO и PSI, <span data-only="go">собирается и проходит <code>go vet</code> и <code>go test -race</code> в <code>examples/m09-prod</code> репозитория курса.</span><span data-only="java">собирается и проходит <code>mvn verify</code> в <code>examples/java/m09-prod</code> репозитория курса (Java 21, OpenTelemetry API, Jackson, OpenFeature SDK).</span></p>
 
   <div class="tabs">
-    <div class="tab-panel" data-tab="1. Контракт + ретраи"><pre><code class="lang-go">package llmmw
+    <div class="tab-panel" data-tab="1. Контракт + ретраи" data-only="go"><pre><code class="lang-go">package llmmw
 
 import (
 	"context"
@@ -1167,7 +1846,180 @@ func (r *Retry) Complete(ctx context.Context, req Request) (*Response, error) {
 		}
 	}
 }</code></pre></div>
-    <div class="tab-panel" data-tab="2. Breaker + fallback"><pre><code class="lang-go">package llmmw
+    <div class="tab-panel" data-tab="1. Контракт + ретраи" data-only="java"><pre><code class="lang-java">// ===== LLM.java =====
+package course.m09prod.llmmw;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
+import java.util.Optional;
+
+/** Звено цепочки. Каждый слой (retry, breaker, limiter, trace) — декоратор над LLM. */
+@FunctionalInterface
+public interface LLM {
+    Response complete(Request req) throws Exception;
+
+    /** Текстовое сообщение диалога: role — "user" или "assistant". */
+    record Msg(String role, String text) {
+        public static Msg user(String text) {
+            return new Msg("user", text);
+        }
+    }
+
+    /**
+     * deadline — бюджет всего пользовательского запроса: ретраи, лимитер и fallback
+     * укладываются внутрь него. null — без дедлайна.
+     */
+    record Request(String tenant, String model, String system, List&lt;Msg&gt; messages,
+                   long maxTokens, int estInputTokens, Instant deadline) {
+
+        public Request withModel(String m) {
+            return new Request(tenant, m, system, messages, maxTokens, estInputTokens, deadline);
+        }
+
+        public Request withSystem(String s) {
+            return new Request(tenant, model, s, messages, maxTokens, estInputTokens, deadline);
+        }
+
+        /** Сколько осталось до дедлайна; пусто — дедлайна нет. */
+        public Optional&lt;Duration&gt; timeLeft() {
+            return Optional.ofNullable(deadline).map(d -&gt; Duration.between(Instant.now(), d));
+        }
+
+        public boolean expired() {
+            return timeLeft().map(d -&gt; !d.isPositive()).orElse(false);
+        }
+
+        /** Текст последнего user-сообщения. */
+        public String lastUserText() {
+            for (int i = messages.size() - 1; i &gt;= 0; i--) {
+                if (messages.get(i).role().equals("user")) {
+                    return messages.get(i).text();
+                }
+            }
+            return "";
+        }
+    }
+
+    record Response(String text, String model, String stopReason, String route,
+                    long inputTokens, long outputTokens, long cacheReadTokens, long cacheWriteTokens) {
+
+        public static Response of(String text, String model, String stopReason) {
+            return new Response(text, model, stopReason, "", 0, 0, 0, 0);
+        }
+
+        public Response withRoute(String r) {
+            return new Response(text, model, stopReason, r, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens);
+        }
+    }
+}
+
+// ===== Retry.java =====
+package course.m09prod.llmmw;
+
+import com.anthropic.errors.AnthropicIoException;
+import com.anthropic.errors.AnthropicServiceException;
+import java.io.IOException;
+import java.time.Duration;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeoutException;
+
+/** Ретраи с full jitter, уважением retry-after, retry budget и проверкой дедлайна. */
+public record Retry(LLM next, int maxRetries, Duration base, Duration cap, Budget budget) implements LLM {
+
+    /** retry — повтор может закончиться иначе; retryAfter — подсказка сервера. */
+    public record Verdict(boolean retry, Duration retryAfter) {}
+
+    record Status(int code, Duration retryAfter) {}
+
+    public static Verdict retryable(Throwable e) {
+        Status s = httpStatus(e);
+        if (s != null) {
+            int c = s.code();
+            boolean ok = c == 408 || c == 409 || c == 429 || c &gt;= 500; // 529 overloaded входит сюда
+            return new Verdict(ok, ok ? s.retryAfter() : Duration.ZERO); // 400/401/403/404/413: повтор даст то же самое
+        }
+        boolean network = e instanceof IOException || e instanceof AnthropicIoException
+                || e instanceof TimeoutException; // сеть или таймаут попытки
+        return new Verdict(network, Duration.ZERO);
+    }
+
+    /** HTTP-статус из ошибки любого провайдера: Anthropic SDK или своего адаптера. null — не HTTP-ошибка. */
+    static Status httpStatus(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof AnthropicServiceException a) {
+                var ra = a.headers().values("retry-after");
+                return new Status(a.statusCode(), retryAfter(ra.isEmpty() ? null : ra.getFirst()));
+            }
+            if (t instanceof OpenAiCompat.HttpError h) {
+                return new Status(h.statusCode(), h.retryAfter());
+            }
+        }
+        return null;
+    }
+
+    static boolean isRateLimit(Throwable e) {
+        Status s = httpStatus(e);
+        return s != null &amp;&amp; s.code() == 429;
+    }
+
+    static Duration retryAfter(String header) {
+        try {
+            return header == null ? Duration.ZERO : Duration.ofSeconds(Long.parseLong(header.trim()));
+        } catch (NumberFormatException e) {
+            return Duration.ZERO; // HTTP-date и мусор не разбираем
+        }
+    }
+
+    /** Ретраев не больше ratio от числа запросов (как retry budget в Finagle/gRPC). */
+    public static final class Budget {
+        private final double ratio, max;
+        private double tokens;
+
+        public Budget(double ratio, double max) {
+            this.ratio = ratio;
+            this.max = max;
+        }
+
+        synchronized void onRequest() {
+            tokens = Math.min(max, tokens + ratio);
+        }
+
+        synchronized boolean tryRetry() {
+            if (tokens &lt; 1) {
+                return false;
+            }
+            tokens--;
+            return true;
+        }
+    }
+
+    @Override
+    public Response complete(Request req) throws Exception {
+        budget.onRequest();
+        for (int attempt = 0; ; attempt++) {
+            try {
+                return next.complete(req);
+            } catch (Exception e) {
+                if (req.expired()) {
+                    throw e; // дедлайн запроса истёк: не ретраим
+                }
+                Verdict v = retryable(e);
+                if (!v.retry() || attempt == maxRetries || !budget.tryRetry()) {
+                    throw e;
+                }
+                long ceil = Math.min(cap.toNanos(), base.toNanos() &lt;&lt; attempt);
+                Duration jitter = Duration.ofNanos(ThreadLocalRandom.current().nextLong(ceil + 1));
+                Duration d = jitter.compareTo(v.retryAfter()) &lt; 0 ? v.retryAfter() : jitter; // full jitter, но не раньше retry-after
+                if (req.timeLeft().map(left -&gt; left.compareTo(d) &lt; 0).orElse(false)) {
+                    throw e; // не успеем: пусть решает fallback выше
+                }
+                Thread.sleep(d); // interrupt потока = отмена запроса
+            }
+        }
+    }
+}</code></pre></div>
+    <div class="tab-panel" data-tab="2. Breaker + fallback" data-only="go"><pre><code class="lang-go">package llmmw
 
 import (
 	"context"
@@ -1257,7 +2109,103 @@ func (f *Fallback) Complete(ctx context.Context, req Request) (*Response, error)
 	}
 	return nil, errors.Join(errs...)
 }</code></pre></div>
-    <div class="tab-panel" data-tab="3. Лимиты + стоимость"><pre><code class="lang-go">package llmmw
+    <div class="tab-panel" data-tab="2. Breaker + fallback" data-only="java"><pre><code class="lang-java">package course.m09prod.llmmw;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.Predicate;
+import java.util.function.UnaryOperator;
+
+/** Цепочка звеньев: первое здоровое и подходящее отвечает. */
+public record Fallback(List&lt;Route&gt; routes) implements LLM {
+
+    /**
+     * closed → (threshold ошибок подряд) → open → (cooldown) → half-open (1 проба).
+     * В проде можно взять Resilience4j CircuitBreaker; логика та же.
+     */
+    public static final class Breaker {
+        private final int threshold;
+        private final Duration cooldown;
+        private int fails;
+        private Instant openUntil = Instant.MIN;
+        private boolean probing;
+
+        public Breaker(int threshold, Duration cooldown) {
+            this.threshold = threshold;
+            this.cooldown = cooldown;
+        }
+
+        public synchronized boolean allow() {
+            if (fails &lt; threshold) {
+                return true; // closed
+            }
+            if (Instant.now().isBefore(openUntil) || probing) {
+                return false; // open, или проба уже в полёте
+            }
+            probing = true; // half-open: пропускаем ровно один запрос
+            return true;
+        }
+
+        public synchronized void report(boolean failed) {
+            probing = false;
+            if (!failed) {
+                fails = 0;
+                return;
+            }
+            if (++fails &gt;= threshold) {
+                openUntil = Instant.now().plus(cooldown);
+            }
+        }
+    }
+
+    /**
+     * llm уже обёрнут в Retry и Limiter; fits — влезет ли контекст, есть ли нужные фичи;
+     * adapt — свой промпт и параметры под модель.
+     */
+    public record Route(String name, String model, LLM llm, Breaker breaker,
+                        Predicate&lt;Request&gt; fits, UnaryOperator&lt;Request&gt; adapt) {
+        public Route(String name, String model, LLM llm, Breaker breaker) {
+            this(name, model, llm, breaker, r -&gt; true, UnaryOperator.identity());
+        }
+    }
+
+    @Override
+    public Response complete(Request req) throws Exception {
+        List&lt;Exception&gt; errs = new ArrayList&lt;&gt;();
+        for (Route rt : routes) {
+            if (!rt.fits().test(req)) {
+                continue;
+            }
+            if (!rt.breaker().allow()) {
+                errs.add(new Exception(rt.name() + ": circuit open"));
+                continue;
+            }
+            Request r = rt.adapt().apply(req.withModel(rt.model()));
+            try {
+                Response resp = rt.llm().complete(r);
+                rt.breaker().report(false);
+                return resp.withRoute(rt.name());
+            } catch (Exception e) {
+                boolean retryable = Retry.retryable(e).retry();
+                rt.breaker().report(retryable &amp;&amp; !Retry.isRateLimit(e)); // 429 — наша квота, не авария
+                if (!retryable) {
+                    throw e; // 400 на A будет 400 и на B: не маскируем баг перебором
+                }
+                errs.add(new Exception(rt.name() + ": " + e.getMessage(), e));
+                if (req.expired()) {
+                    break;
+                }
+            }
+        }
+        // cause — последняя ошибка: по ней retryable и error.type видят HTTP-статус.
+        var all = new Exception("fallback: all routes failed", errs.isEmpty() ? null : errs.getLast());
+        errs.forEach(all::addSuppressed);
+        throw all;
+    }
+}</code></pre></div>
+    <div class="tab-panel" data-tab="3. Лимиты + стоимость" data-only="go"><pre><code class="lang-go">package llmmw
 
 import (
 	"context"
@@ -1329,7 +2277,131 @@ func (m *Metered) Complete(ctx context.Context, req Request) (*Response, error) 
 	_ = m.Add(ctx, req.Tenant, CostUSD(resp))
 	return resp, nil
 }</code></pre></div>
-    <div class="tab-panel" data-tab="4. OpenTelemetry"><pre><code class="lang-go">package llmmw
+    <div class="tab-panel" data-tab="3. Лимиты + стоимость" data-only="java"><pre><code class="lang-java">// ===== Limiter.java =====
+package course.m09prod.llmmw;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.util.concurrent.RejectedExecutionException;
+
+/** Три token bucket'а под RPM/ITPM/OTPM провайдера, выставленные на ~90% лимита. */
+public record Limiter(LLM next, TokenBucket rpm, TokenBucket itpm, TokenBucket otpm) implements LLM {
+
+    public Limiter(LLM next, double rpm, double itpm, double otpm) {
+        this(next, per(rpm), per(itpm), per(otpm));
+    }
+
+    private static TokenBucket per(double perMinute) {
+        return new TokenBucket(perMinute * 0.9 / 60, perMinute * 0.9 / 6);
+    }
+
+    @Override
+    public Response complete(Request req) throws Exception {
+        // acquire сразу бросит исключение, если дедлайн запроса не дождётся токенов: бесплатный load shedding.
+        rpm.acquire(1, req.deadline());
+        itpm.acquire(Math.min(req.estInputTokens(), itpm.burst()), req.deadline());
+        otpm.acquire(Math.min(req.maxTokens(), otpm.burst()), req.deadline());
+        return next.complete(req);
+    }
+
+    /** Token bucket с резервированием: токены можно «занять» вперёд и подождать их. */
+    public static final class TokenBucket {
+        private final double perSecond, burst;
+        private double tokens;
+        private long last = System.nanoTime();
+
+        public TokenBucket(double perSecond, double burst) {
+            this.perSecond = perSecond;
+            this.burst = burst;
+            this.tokens = burst;
+        }
+
+        public double burst() {
+            return burst;
+        }
+
+        public void acquire(double n, Instant deadline) throws InterruptedException {
+            Duration wait;
+            synchronized (this) {
+                long now = System.nanoTime();
+                tokens = Math.min(burst, tokens + (now - last) / 1e9 * perSecond);
+                last = now;
+                wait = tokens &gt;= n ? Duration.ZERO : Duration.ofNanos((long) ((n - tokens) / perSecond * 1e9));
+                if (deadline != null &amp;&amp; Instant.now().plus(wait).isAfter(deadline)) {
+                    throw new RejectedExecutionException("limiter: wait would exceed deadline");
+                }
+                tokens -= n;
+            }
+            if (wait.isPositive()) {
+                Thread.sleep(wait);
+            }
+        }
+    }
+}
+
+// ===== Metered.java =====
+package course.m09prod.llmmw;
+
+import java.util.Map;
+import java.util.function.ToDoubleFunction;
+
+/** Проверка квоты тенанта до вызова и учёт фактической стоимости после. */
+public record Metered(LLM next, Spent spent, Add add, ToDoubleFunction&lt;String&gt; limit) implements LLM {
+
+    @FunctionalInterface
+    public interface Spent {
+        double get(String tenant) throws Exception; // напр. Redis GET
+    }
+
+    @FunctionalInterface
+    public interface Add {
+        void add(String tenant, double usd) throws Exception; // INCRBYFLOAT + EXPIRE
+    }
+
+    public static final class QuotaExceededException extends RuntimeException {
+        public QuotaExceededException() {
+            super("llm: tenant budget exceeded");
+        }
+    }
+
+    record Price(double in, double out) {}
+
+    // Цены $ за 1M токенов на момент написания (сентябрь 2026).
+    static final Map&lt;String, Price&gt; PRICES = Map.of(
+            "claude-opus-5", new Price(5, 25),
+            "claude-sonnet-5", new Price(2, 10),
+            "claude-haiku-4-5", new Price(1, 5));
+
+    public static double costUsd(Response r) {
+        Price p = PRICES.get(r.model());
+        if (p == null) {
+            return 0; // неизвестная модель: алертим отдельно, а не падаем
+        }
+        double in = r.inputTokens() + 0.1 * r.cacheReadTokens() + 1.25 * r.cacheWriteTokens();
+        return (in * p.in() + r.outputTokens() * p.out()) / 1e6;
+    }
+
+    @Override
+    public Response complete(Request req) throws Exception {
+        double used;
+        try {
+            used = spent.get(req.tenant());
+        } catch (Exception e) {
+            used = 0; // при ошибке Redis — fail-open: квота мягкая, логируем
+        }
+        if (used &gt;= limit.applyAsDouble(req.tenant())) {
+            throw new QuotaExceededException();
+        }
+        Response resp = next.complete(req);
+        try {
+            add.add(req.tenant(), costUsd(resp));
+        } catch (Exception ignored) {
+            // учёт не должен ронять уже оплаченный ответ
+        }
+        return resp;
+    }
+}</code></pre></div>
+    <div class="tab-panel" data-tab="4. OpenTelemetry" data-only="go"><pre><code class="lang-go">package llmmw
 
 import (
 	"context"
@@ -1409,7 +2481,68 @@ func errorType(err error) string {
 	}
 	return "_OTHER" // значение по конвенции OTel для неклассифицированных ошибок
 }</code></pre></div>
-    <div class="tab-panel" data-tab="5. Семантический кэш"><pre><code class="lang-go">package llmmw
+    <div class="tab-panel" data-tab="4. OpenTelemetry" data-only="java"><pre><code class="lang-java">// GenAi (трейсер и гистограммы gen_ai.client.*) — в уроке «Спаны агента и TTFT в коде».
+package course.m09prod.llmmw;
+
+import io.opentelemetry.api.common.AttributeKey;
+import io.opentelemetry.api.common.Attributes;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanKind;
+import io.opentelemetry.context.Scope;
+import java.util.List;
+import java.util.Objects;
+
+/** Спан chat {model} и метрики gen_ai.client.* вокруг всей цепочки. provider — "anthropic". */
+public record Traced(LLM next, String provider, GenAi otel) implements LLM {
+
+    @Override
+    public Response complete(Request req) throws Exception {
+        long start = System.nanoTime();
+        Span span = otel.tracer.spanBuilder("chat " + req.model())
+                .setSpanKind(SpanKind.CLIENT)
+                .setAttribute("gen_ai.operation.name", "chat")
+                .setAttribute("gen_ai.provider.name", provider)
+                .setAttribute("gen_ai.request.model", req.model())
+                .setAttribute("gen_ai.request.max_tokens", req.maxTokens())
+                .setAttribute("app.tenant", req.tenant()) // свой namespace для не-конвенционных полей
+                .startSpan();
+        var common = Attributes.builder()
+                .put("gen_ai.operation.name", "chat")
+                .put("gen_ai.provider.name", provider)
+                .put("gen_ai.request.model", req.model());
+        try (Scope ignored = span.makeCurrent()) {
+            Response resp = next.complete(req);
+            span.setAllAttributes(Attributes.builder()
+                    .put("gen_ai.response.model", resp.model())
+                    .put(AttributeKey.stringArrayKey("gen_ai.response.finish_reasons"),
+                            List.of(Objects.toString(resp.stopReason(), "")))
+                    .put("gen_ai.usage.input_tokens", resp.inputTokens())
+                    .put("gen_ai.usage.output_tokens", resp.outputTokens())
+                    .put("gen_ai.usage.cache_read.input_tokens", resp.cacheReadTokens())
+                    .put("gen_ai.usage.cache_creation.input_tokens", resp.cacheWriteTokens())
+                    .put("app.llm.route", resp.route())
+                    .put("app.llm.cost_usd", Metered.costUsd(resp))
+                    .build());
+            Attributes attrs = common.put("gen_ai.response.model", resp.model()).build();
+            otel.opDuration.record(seconds(start), attrs);
+            otel.tokenUsage.record(resp.inputTokens(), attrs.toBuilder().put("gen_ai.token.type", "input").build());
+            otel.tokenUsage.record(resp.outputTokens(), attrs.toBuilder().put("gen_ai.token.type", "output").build());
+            // Текст промпта и ответа в атрибуты НЕ пишем: только opt-in, с маскированием и сэмплированием.
+            return resp;
+        } catch (Exception e) {
+            GenAi.fail(span, e, "llm call failed");
+            otel.opDuration.record(seconds(start), common.put("error.type", GenAi.errorType(e)).build());
+            throw e;
+        } finally {
+            span.end();
+        }
+    }
+
+    private static double seconds(long startNanos) {
+        return (System.nanoTime() - startNanos) / 1e9;
+    }
+}</code></pre></div>
+    <div class="tab-panel" data-tab="5. Семантический кэш" data-only="go"><pre><code class="lang-go">package llmmw
 
 // CREATE EXTENSION IF NOT EXISTS vector;
 // CREATE TABLE llm_cache (
@@ -1486,7 +2619,103 @@ func scopeKey(r Request) string {
 	h := sha256.Sum256([]byte(r.Tenant + "\x00" + r.Model + "\x00" + r.System))
 	return hex.EncodeToString(h[:])
 }</code></pre></div>
-    <div class="tab-panel" data-tab="6. Провайдер + сборка"><pre><code class="lang-go">package llmmw
+    <div class="tab-panel" data-tab="5. Семантический кэш" data-only="java"><pre><code class="lang-java">package course.m09prod.llmmw;
+
+// CREATE EXTENSION IF NOT EXISTS vector;
+// CREATE TABLE llm_cache (
+//   id bigserial PRIMARY KEY,
+//   scope text NOT NULL,              -- hash(tenant, model, system prompt, версия промпта)
+//   query text NOT NULL,
+//   embedding vector(1024) NOT NULL,
+//   response text NOT NULL,
+//   created_at timestamptz NOT NULL DEFAULT now());
+// CREATE INDEX ON llm_cache USING hnsw (embedding vector_cosine_ops);
+// CREATE INDEX ON llm_cache (scope, created_at);
+// Фильтр по scope + HNSW: в pgvector ≥ 0.8 включите SET hnsw.iterative_scan = relaxed_order,
+// иначе после фильтрации может не остаться кандидатов. Вектор передаём текстом '[...]'::vector,
+// чтобы не тянуть зависимость; с com.pgvector:pgvector — setObject(i, new PGvector(emb)).
+
+import java.lang.System.Logger;
+import java.lang.System.Logger.Level;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.sql.SQLException;
+import java.time.Duration;
+import java.util.HexFormat;
+import javax.sql.DataSource;
+
+/** threshold — cosine similarity, калибруется на размеченных парах. */
+public record SemCache(LLM next, DataSource db, Embedder embed, double threshold, Duration ttl) implements LLM {
+
+    @FunctionalInterface
+    public interface Embedder {
+        float[] embed(String text) throws Exception;
+    }
+
+    private static final Logger LOG = System.getLogger(SemCache.class.getName());
+
+    @Override
+    public Response complete(Request req) throws Exception {
+        String q = req.lastUserText();
+        if (q.isEmpty() || req.messages().size() &gt; 1) { // кэшируем только первый вопрос без истории
+            return next.complete(req);
+        }
+        float[] emb;
+        try {
+            emb = embed.embed(q);
+        } catch (Exception e) {
+            return next.complete(req); // кэш — оптимизация, а не точка отказа
+        }
+        String vec = pgVector(emb), scope = scopeKey(req);
+
+        try (var c = db.getConnection(); var st = c.prepareStatement("""
+                SELECT response, 1 - (embedding &lt;=&gt; ?::vector) FROM llm_cache
+                WHERE scope = ? AND created_at &gt; now() - make_interval(secs =&gt; ?)
+                ORDER BY embedding &lt;=&gt; ?::vector LIMIT 1""")) {
+            st.setString(1, vec);
+            st.setString(2, scope);
+            st.setDouble(3, ttl.toSeconds());
+            st.setString(4, vec);
+            try (var rs = st.executeQuery()) {
+                if (rs.next() &amp;&amp; rs.getDouble(2) &gt;= threshold) {
+                    return Response.of(rs.getString(1), req.model(), "end_turn").withRoute("semcache");
+                }
+            }
+        } catch (SQLException e) {
+            LOG.log(Level.WARNING, "semcache lookup", e);
+        }
+
+        Response resp = next.complete(req);
+        if ("end_turn".equals(resp.stopReason())) { // не кэшируем обрезанные ответы и refusal
+            try (var c = db.getConnection(); var st = c.prepareStatement(
+                    "INSERT INTO llm_cache (scope, query, embedding, response) VALUES (?, ?, ?::vector, ?)")) {
+                st.setString(1, scope);
+                st.setString(2, q);
+                st.setString(3, vec);
+                st.setString(4, resp.text());
+                st.executeUpdate();
+            } catch (SQLException e) {
+                LOG.log(Level.WARNING, "semcache store", e);
+            }
+        }
+        return resp;
+    }
+
+    static String pgVector(float[] v) {
+        var sb = new StringBuilder("[");
+        for (int i = 0; i &lt; v.length; i++) {
+            sb.append(i == 0 ? "" : ",").append(v[i]);
+        }
+        return sb.append(']').toString();
+    }
+
+    static String scopeKey(Request r) throws Exception {
+        byte[] h = MessageDigest.getInstance("SHA-256")
+                .digest((r.tenant() + "\0" + r.model() + "\0" + r.system()).getBytes(StandardCharsets.UTF_8));
+        return HexFormat.of().formatHex(h);
+    }
+}</code></pre></div>
+    <div class="tab-panel" data-tab="6. Провайдер + сборка" data-only="go"><pre><code class="lang-go">package llmmw
 
 import (
 	"context"
@@ -1575,16 +2804,80 @@ func New(selfHosted LLM, cache *SemCache, meter *Metered) LLM {
 	cache.Next = meter
 	return &amp;Traced{Provider: "anthropic", Next: cache}
 }</code></pre></div>
+    <div class="tab-panel" data-tab="6. Провайдер + сборка" data-only="java"><pre><code class="lang-java">package course.m09prod.llmmw;
+
+import com.anthropic.client.AnthropicClient;
+import com.anthropic.client.okhttp.AnthropicOkHttpClient;
+import com.anthropic.core.RequestOptions;
+import com.anthropic.models.messages.Message;
+import com.anthropic.models.messages.MessageCreateParams;
+import com.anthropic.models.messages.StopReason;
+import java.time.Duration;
+import java.util.List;
+import java.util.function.UnaryOperator;
+
+public final class Providers {
+    private Providers() {}
+
+    /** Нижний слой. Ретраи SDK выключены: они живут в нашем Retry. */
+    public static LLM anthropic() {
+        AnthropicClient c = AnthropicOkHttpClient.builder().fromEnv().maxRetries(0).build();
+        return req -&gt; {
+            var p = MessageCreateParams.builder()
+                    .model(req.model())
+                    .maxTokens(req.maxTokens())
+                    .system(req.system());
+            for (LLM.Msg m : req.messages()) {
+                if (m.role().equals("assistant")) {
+                    p.addAssistantMessage(m.text());
+                } else {
+                    p.addUserMessage(m.text());
+                }
+            }
+            var opts = RequestOptions.builder();
+            req.timeLeft().ifPresent(opts::timeout); // дедлайн запроса — таймаут HTTP-вызова
+            Message msg = c.messages().create(p.build(), opts.build());
+            var text = new StringBuilder();
+            msg.content().forEach(b -&gt; b.text().ifPresent(t -&gt; text.append(t.text())));
+            var u = msg.usage();
+            return new LLM.Response(text.toString(), msg.model().asString(),
+                    msg.stopReason().map(StopReason::asString).orElse(""), "",
+                    u.inputTokens(), u.outputTokens(),
+                    u.cacheReadInputTokens().orElse(0L), u.cacheCreationInputTokens().orElse(0L));
+        };
+    }
+
+    /**
+     * Сборка: Traced → SemCache → Metered → Fallback[Breaker → Retry → Limiter → провайдер].
+     * cache и meter получают следующее звено: next -&gt; new SemCache(next, ds, embed, 0.92, ttl).
+     */
+    public static LLM chain(LLM selfHosted, UnaryOperator&lt;LLM&gt; cache, UnaryOperator&lt;LLM&gt; meter, GenAi otel) {
+        LLM api = anthropic();
+        var budget = new Retry.Budget(0.2, 50);
+        var fb = new Fallback(List.of(
+                route("primary", "claude-opus-5", api, 4000, 2_000_000, 400_000, budget),
+                route("smaller", "claude-sonnet-5", api, 4000, 2_000_000, 400_000, budget),
+                route("self-hosted", "qwen3-8b", selfHosted, 600, 1_000_000, 200_000, budget)));
+        return new Traced(cache.apply(meter.apply(fb)), "anthropic", otel);
+    }
+
+    private static Fallback.Route route(String name, String model, LLM base,
+                                        double rpm, double itpm, double otpm, Retry.Budget budget) {
+        return new Fallback.Route(name, model,
+                new Retry(new Limiter(base, rpm, itpm, otpm), 2, Duration.ofMillis(250), Duration.ofSeconds(4), budget),
+                new Fallback.Breaker(5, Duration.ofSeconds(30)));
+    }
+}</code></pre></div>
   </div>
   <div class="callout tip"><span class="title">Что упрощено</span>
-    <p>Метрика <code>gen_ai.provider.name</code> в <code>Traced</code> фиксированная, хотя при fallback фактический провайдер другой. В проде трейсить лучше ещё и на уровне звена (спан на каждую попытку), тогда в трейсе видны ретраи и переключения. Лимиты в <code>New</code> условные: берите их со страницы лимитов в консоли. Семантический кэш на Redis (модуль RediSearch с KNN или vector sets) устроен так же: key = scope, поиск KNN с фильтром по тегу.</p>
+    <p>Метрика <code>gen_ai.provider.name</code> в <code>Traced</code> фиксированная, хотя при fallback фактический провайдер другой. В проде трейсить лучше ещё и на уровне звена (спан на каждую попытку), тогда в трейсе видны ретраи и переключения. <span data-only="go">Лимиты в <code>New</code> условные</span><span data-only="java">Лимиты в <code>Providers.chain</code> условные</span>: берите их со страницы лимитов в консоли. Семантический кэш на Redis (модуль RediSearch с KNN или vector sets) устроен так же: key = scope, поиск KNN с фильтром по тегу.</p>
   </div>
 
   <h2 id="practice">Практика</h2>
   <div class="task">
     <h3>Задание 1. Надёжный LLM-клиент</h3>
-    <p>Соберите пакет <code>llmmw</code> из примеров выше для своего RAG-сервиса из модуля 5. Напишите fake-провайдера, <code>Func</code>, который по сценарию отдаёт 529, 429 с <code>retry-after</code>, зависает до TTFT-дедлайна или отвечает нормально.</p>
-    <p><b>Готово, когда:</b> табличный тест показывает, что 400 не ретраится; 429 ждёт не меньше <code>retry-after</code>; после 5 ошибок breaker открывается и запрос идёт на второе звено быстрее 50 мс; retry budget не даёт суммарной нагрузке вырасти больше чем на 20% при 100% ошибок; <code>go test -race</code> проходит чисто.</p>
+    <p>Соберите пакет <code>llmmw</code> из примеров выше для своего RAG-сервиса из модуля 5. <span data-only="go">Напишите fake-провайдера, <code>Func</code>, который</span><span data-only="java">Напишите fake-провайдера — лямбду <code>LLM</code>, которая</span> по сценарию отдаёт 529, 429 с <code>retry-after</code>, зависает до TTFT-дедлайна или отвечает нормально.</p>
+    <p><span data-only="go"><b>Готово, когда:</b> табличный тест показывает</span><span data-only="java"><b>Готово, когда:</b> параметризованный тест (<code>@ParameterizedTest</code>) показывает</span>, что 400 не ретраится; 429 ждёт не меньше <code>retry-after</code>; после 5 ошибок breaker открывается и запрос идёт на второе звено быстрее 50 мс; retry budget не даёт суммарной нагрузке вырасти больше чем на 20% при 100% ошибок; <span data-only="go"><code>go test -race</code> проходит чисто.</span><span data-only="java">тесты стабильно зелёные при параллельном запуске JUnit (<code>junit.jupiter.execution.parallel.enabled=true</code>).</span></p>
     <label class="check"><input type="checkbox" data-save="m09-t1"> Сделал</label>
   </div>
   <div class="task">
@@ -1649,7 +2942,7 @@ func New(selfHosted LLM, cache *SemCache, meter *Metered) LLM {
   <details class="q interview"><summary>Как вы спроектируете rate limiting для мультитенантного LLM-сервиса поверх провайдера с лимитами RPM/ITPM/OTPM?</summary><div class="a">
     <p>Два уровня. <b>Нижний</b> — защита квоты провайдера: token bucket по трём измерениям на модель, выставленный на ~90% лимита. Input оценивается через count_tokens или эвристику, output резервируется по <code>max_tokens</code>. При нескольких репликах лимит либо делится поровну, либо хранится в Redis (GCRA), и я объясню компромисс: точность против лишнего hop и точки отказа.</p>
     <p><b>Верхний</b> — справедливость: per-tenant лимиты по тарифу, взвешенная очередь (WFQ), приоритет интерактивного трафика над фоновым, бюджеты в долларах на тенанта.</p>
-    <p>Перегрузка обрабатывается ожиданием с дедлайном (<code>WaitN</code> с <code>ctx</code>), а при невозможности уложиться — быстрым 429 со своим <code>retry-after</code> клиенту. Мониторинг: заголовки <code>anthropic-ratelimit-*-remaining</code> и доля 429 от провайдера, которая при правильном лимитере близка к нулю. Отдельно упомяну, что prompt caching снижает давление на ITPM, а Batch API уводит офлайн-нагрузку из общей ёмкости.</p>
+    <p>Перегрузка обрабатывается ожиданием с дедлайном <span data-only="go">(<code>WaitN</code> с <code>ctx</code>)</span><span data-only="java">(<code>acquire</code> с дедлайном запроса)</span>, а при невозможности уложиться — быстрым 429 со своим <code>retry-after</code> клиенту. Мониторинг: заголовки <code>anthropic-ratelimit-*-remaining</code> и доля 429 от провайдера, которая при правильном лимитере близка к нулю. Отдельно упомяну, что prompt caching снижает давление на ITPM, а Batch API уводит офлайн-нагрузку из общей ёмкости.</p>
   </div></details>
   <details class="q interview"><summary>Латентность RAG-чата p50 = 9 секунд. Как будете ускорять?</summary><div class="a">
     <p>Сначала измерить: трейс с разбивкой по этапам и отдельно TTFT и общее время. Почти всегда окажется, что LLM-генерация занимает 70–90%.</p>
@@ -1667,7 +2960,7 @@ func New(selfHosted LLM, cache *SemCache, meter *Metered) LLM {
     <p>Содержимое промптов и ответов пишется по opt-in, с маскированием PII в коллекторе, сэмплированием (100% метаданных, 1–5% текста и все ошибки), retention 30 дней, отдельными правами доступа и процедурой удаления. <code>user_id</code> хэшируется через HMAC.</p>
   </div></details>
   <details class="q interview"><summary>Как вы строите guardrails и как понимаете, что они работают?</summary><div class="a">
-    <p>Слои: вход (размер, injection или jailbreak-классификатор, тематический фильтр, PII), выход (structured outputs плюс проверка бизнес-правил, утечки, groundedness для RAG), инструменты (allowlist, валидация аргументов, human-in-the-loop на необратимое). Сначала дешёвые проверки (правила), дорогие LLM-судьи только по сигналу. Input guardrail запускается параллельно с основным вызовом с отменой через ctx.</p>
+    <p>Слои: вход (размер, injection или jailbreak-классификатор, тематический фильтр, PII), выход (structured outputs плюс проверка бизнес-правил, утечки, groundedness для RAG), инструменты (allowlist, валидация аргументов, human-in-the-loop на необратимое). Сначала дешёвые проверки (правила), дорогие LLM-судьи только по сигналу. Input guardrail запускается параллельно с основным вызовом <span data-only="go">с отменой через ctx.</span><span data-only="java">с отменой основного вызова через <code>Future.cancel(true)</code>.</span></p>
     <p>«Работают» — это измеряемо: у каждого guardrail есть размеченный набор и precision и recall, а в проде отслеживаются доля срабатываний и выборочная ручная проверка. False positive считается продуктовой ошибкой, over-refusal убивает конверсию. Для каждого guardrail явно выбран fail-open или fail-closed при недоступности. И я говорю, что system prompt — не guardrail: гарантии дают только проверки вне модели.</p>
   </div></details>
   <details class="q interview"><summary>Агент в проде иногда тратит $40 на одну задачу. Что делать?</summary><div class="a">
@@ -1697,7 +2990,7 @@ func New(selfHosted LLM, cache *SemCache, meter *Metered) LLM {
     <p><b>На что смотрит интервьюер:</b> начинаете ли вы с измерения; порядок рычагов по риску; количественная оценка эффекта; как гарантируете «без потери качества» — разметка, кривая, eval, откат флагом.</p>
   </div></details>
   <details class="q interview"><summary>Свой LLM-шлюз или готовый (LiteLLM, Kong, Agent Router)?</summary><div class="a">
-    <p>Сначала требования: сколько команд и языков, нужны ли централизованные ключи, квоты в $ на команду, аудит и политика данных, бюджет на overhead, нужны ли нативные функции провайдеров (явные breakpoint'ы prompt caching, thinking, citations). Для одного-двух сервисов на Go достаточно библиотеки middleware. Для многих команд — сервис.</p>
+    <p>Сначала требования: сколько команд и языков, нужны ли централизованные ключи, квоты в $ на команду, аудит и политика данных, бюджет на overhead, нужны ли нативные функции провайдеров (явные breakpoint'ы prompt caching, thinking, citations). <span data-only="go">Для одного-двух сервисов на Go достаточно</span><span data-only="java">Для одного-двух сервисов на Java достаточно</span> библиотеки middleware. Для многих команд — сервис.</p>
     <p>Готовые решения (LiteLLM Proxy, Agent Router на Envoy, Kong AI Gateway, Bifrost, облачные шлюзы) дают ключи, бюджеты, fallback и кэш за дни. Своё пишу, если нужны особые политики данных, аудит и резидентность, минимальный overhead или прозрачное проксирование нативных API. Часто разумен гибрид: open-source шлюз плюс свои плагины. В любом случае держу шлюз за своим интерфейсом в коде: в 2026 году один из популярных шлюзов купили, другой заархивировали, третий ушёл в режим поддержки, и миграция должна быть конфигом.</p>
     <p><b>На что смотрит интервьюер:</b> выводите ли решение из требований, а не из вкуса; знаете ли актуальный ландшафт и что теряется при унификации API; думаете ли о шлюзе как о точке отказа и о риске вендора.</p>
   </div></details>
@@ -1707,14 +3000,18 @@ func New(selfHosted LLM, cache *SemCache, meter *Metered) LLM {
     <li><a href="https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/" target="_blank" rel="noopener">AWS Architecture Blog: Exponential Backoff and Jitter</a></li>
     <li><a href="https://sre.google/sre-book/handling-overload/" target="_blank" rel="noopener">Google SRE Book: Handling Overload</a> и <a href="https://sre.google/sre-book/addressing-cascading-failures/" target="_blank" rel="noopener">Addressing Cascading Failures</a> (retry budget, load shedding)</li>
     <li><a href="https://docs.claude.com/en/api/errors" target="_blank" rel="noopener">Anthropic: Errors</a>, <a href="https://docs.claude.com/en/api/rate-limits" target="_blank" rel="noopener">Rate limits</a>, <a href="https://docs.claude.com/en/docs/build-with-claude/prompt-caching" target="_blank" rel="noopener">Prompt caching</a></li>
-    <li><a href="https://github.com/anthropics/anthropic-sdk-go" target="_blank" rel="noopener">anthropic-sdk-go</a></li>
+    <li data-only="go"><a href="https://github.com/anthropics/anthropic-sdk-go" target="_blank" rel="noopener">anthropic-sdk-go</a></li>
+    <li data-only="java"><a href="https://github.com/anthropics/anthropic-sdk-java" target="_blank" rel="noopener">anthropic-sdk-java</a></li>
     <li>OpenTelemetry GenAI semantic conventions v1.41.1: <a href="https://github.com/open-telemetry/semantic-conventions/blob/v1.41.1/docs/gen-ai/gen-ai-spans.md" target="_blank" rel="noopener">спаны</a>, <a href="https://github.com/open-telemetry/semantic-conventions/blob/v1.41.1/docs/gen-ai/gen-ai-agent-spans.md" target="_blank" rel="noopener">спаны агентов</a>, <a href="https://github.com/open-telemetry/semantic-conventions/blob/v1.41.1/docs/gen-ai/gen-ai-metrics.md" target="_blank" rel="noopener">метрики</a>; новый репозиторий <a href="https://github.com/open-telemetry/semantic-conventions-genai" target="_blank" rel="noopener">semantic-conventions-genai</a></li>
     <li><a href="https://sre.google/workbook/alerting-on-slos/" target="_blank" rel="noopener">Google SRE Workbook: Alerting on SLOs</a> (burn rate, multiwindow multi-burn-rate алерты); генераторы правил <a href="https://github.com/slok/sloth" target="_blank" rel="noopener">Sloth</a> и <a href="https://github.com/pyrra-dev/pyrra" target="_blank" rel="noopener">Pyrra</a></li>
-    <li><a href="https://openfeature.dev/docs/reference/sdks/server/go/" target="_blank" rel="noopener">OpenFeature Go SDK</a> и <a href="https://pkg.go.dev/github.com/open-feature/go-sdk/openfeature" target="_blank" rel="noopener">справочник API</a></li>
+    <li data-only="go"><a href="https://openfeature.dev/docs/reference/sdks/server/go/" target="_blank" rel="noopener">OpenFeature Go SDK</a> и <a href="https://pkg.go.dev/github.com/open-feature/go-sdk/openfeature" target="_blank" rel="noopener">справочник API</a></li>
+    <li data-only="java"><a href="https://openfeature.dev/docs/reference/sdks/server/java/" target="_blank" rel="noopener">OpenFeature Java SDK</a></li>
     <li>Шлюзы: <a href="https://docs.litellm.ai/docs/simple_proxy" target="_blank" rel="noopener">LiteLLM Proxy</a>, <a href="https://github.com/theagentrouter/agent-router" target="_blank" rel="noopener">Agent Router (бывший Envoy AI Gateway)</a>, <a href="https://developer.konghq.com/ai-gateway/" target="_blank" rel="noopener">Kong AI Gateway</a>, <a href="https://github.com/maximhq/bifrost" target="_blank" rel="noopener">Bifrost</a>, <a href="https://apisix.apache.org/docs/apisix/plugins/ai-proxy-multi/" target="_blank" rel="noopener">APISIX ai-proxy-multi</a>, <a href="https://github.com/Portkey-AI/gateway" target="_blank" rel="noopener">Portkey Gateway</a>, <a href="https://developers.cloudflare.com/ai-gateway/" target="_blank" rel="noopener">Cloudflare AI Gateway</a>, <a href="https://openrouter.ai/docs/guides/routing/model-fallbacks" target="_blank" rel="noopener">OpenRouter: fallback-модели</a></li>
     <li>Prompt caching у других провайдеров: <a href="https://developers.openai.com/api/docs/guides/prompt-caching" target="_blank" rel="noopener">OpenAI</a>, <a href="https://ai.google.dev/gemini-api/docs/generate-content/caching" target="_blank" rel="noopener">Gemini API</a></li>
-    <li><a href="https://pkg.go.dev/golang.org/x/time/rate" target="_blank" rel="noopener">golang.org/x/time/rate</a>, <a href="https://github.com/sony/gobreaker" target="_blank" rel="noopener">sony/gobreaker</a></li>
-    <li><a href="https://github.com/pgvector/pgvector" target="_blank" rel="noopener">pgvector</a> и <a href="https://github.com/pgvector/pgvector-go" target="_blank" rel="noopener">pgvector-go</a></li>
+    <li data-only="go"><a href="https://pkg.go.dev/golang.org/x/time/rate" target="_blank" rel="noopener">golang.org/x/time/rate</a>, <a href="https://github.com/sony/gobreaker" target="_blank" rel="noopener">sony/gobreaker</a></li>
+    <li data-only="java"><a href="https://resilience4j.readme.io/docs" target="_blank" rel="noopener">Resilience4j</a> (CircuitBreaker, Retry, RateLimiter), <a href="https://github.com/bucket4j/bucket4j" target="_blank" rel="noopener">Bucket4j</a></li>
+    <li data-only="go"><a href="https://github.com/pgvector/pgvector" target="_blank" rel="noopener">pgvector</a> и <a href="https://github.com/pgvector/pgvector-go" target="_blank" rel="noopener">pgvector-go</a></li>
+    <li data-only="java"><a href="https://github.com/pgvector/pgvector" target="_blank" rel="noopener">pgvector</a> и <a href="https://github.com/pgvector/pgvector-java" target="_blank" rel="noopener">pgvector-java</a></li>
     <li><a href="https://langfuse.com/docs" target="_blank" rel="noopener">Langfuse docs</a>, <a href="https://docs.smith.langchain.com/" target="_blank" rel="noopener">LangSmith docs</a></li>
     <li><a href="https://genai.owasp.org/llm-top-10/" target="_blank" rel="noopener">OWASP Top 10 for LLM Applications</a></li>
     <li><a href="https://arxiv.org/abs/2312.06674" target="_blank" rel="noopener">Inan et al., 2023. Llama Guard</a>, <a href="https://data-privacy-stack.github.io/presidio/" target="_blank" rel="noopener">Presidio</a> (PII)</li>

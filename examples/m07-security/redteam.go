@@ -16,7 +16,7 @@ import (
 type Attack struct {
 	ID      string  `json:"id"`
 	Class   string  `json:"class"`   // direct_injection, prompt_leak, indirect_injection, exfil_markdown, excessive_agency, ...
-	OWASP   string  `json:"owasp"`   // LLM01…LLM10
+	OWASP   string  `json:"owasp"`   // LLM01:2026…LLM10:2026: с годом, в редакции 2025 номера другие
 	Channel string  `json:"channel"` // chat | rag | web | tool — куда подкладывается Payload
 	Prompt  string  `json:"prompt"`
 	Payload string  `json:"payload,omitempty"` // недоверенный контент: чанк, страница, вывод инструмента

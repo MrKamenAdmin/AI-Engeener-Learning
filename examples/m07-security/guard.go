@@ -168,7 +168,7 @@ func (g ClassifierGuard) Check(ctx context.Context, text string) (string, error)
 }
 
 // Canary — уникальный токен в system prompt. Его появление в ответе означает дословную утечку промпта.
-// Пересказ своими словами canary не ловит: секретов в system prompt быть не должно (LLM07).
+// Пересказ своими словами canary не ловит: секретов в system prompt быть не должно (LLM08:2026).
 type Canary struct{ Token string }
 
 func (Canary) Name() string { return "canary" }

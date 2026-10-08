@@ -1,0 +1,1265 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>11 · Данные и governance</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+.pii-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; margin-top: 10px; }
+@media (max-width: 760px) { .pii-grid { grid-template-columns: 1fr; } }
+.pii-box { font: 12.5px/1.6 var(--mono); background: var(--bg-soft); border: 1px solid var(--border); border-radius: 6px; padding: 10px; white-space: pre-wrap; word-break: break-word; margin: 0; min-height: 120px; }
+.pii-box h5 { margin: 0 0 6px; font: 600 11px var(--sans); text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.pii-m { background: color-mix(in srgb, var(--c) 18%, transparent); color: inherit; border-bottom: 2px solid var(--c); border-radius: 3px; padding: 0 1px; }
+.pii-m sup, .pii-rej sup { font: 600 9px var(--sans); margin-left: 2px; color: var(--muted); }
+.pii-rej { background: none; color: inherit; border-bottom: 2px dotted var(--muted); }
+.pii-kinds { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 14px; }
+.pii-kinds label { display: flex; gap: 6px; align-items: center; }
+.ai-q { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px 18px; font-size: 14px; }
+@media (max-width: 760px) { .ai-q { grid-template-columns: 1fr; } }
+.ai-q fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; margin: 0; }
+.ai-q legend { font-weight: 600; font-size: 13px; color: var(--muted); padding: 0 4px; }
+.ai-q label { display: flex; gap: 8px; align-items: flex-start; margin: 3px 0; }
+.ai-q select { width: 100%; }
+.ai-q label.sel { flex-direction: column; align-items: stretch; gap: 3px; }
+#ai-svg { max-width: 300px; margin: 0 auto; }
+#pii-svg { max-width: 440px; margin-top: 10px; }
+.ai-out { display: grid; grid-template-columns: minmax(0, 260px) minmax(0, 1fr); gap: 14px; margin-top: 12px; align-items: start; }
+@media (max-width: 760px) { .ai-out { grid-template-columns: 1fr; } }
+.ai-list { list-style: none; padding: 0; margin: 0; font-size: 14px; }
+.ai-list li { padding: 5px 9px; border-radius: 6px; margin: 4px 0; border-left: 3px solid var(--border); background: var(--bg-soft); }
+.ai-list li.bad { border-left-color: var(--bad); background: var(--bad-soft); }
+.ai-list li.warn { border-left-color: var(--warn); background: var(--warn-soft); }
+.ai-list li.ok { border-left-color: var(--ok); background: var(--ok-soft); }
+.ai-list li.info { border-left-color: var(--accent); background: var(--accent-soft); }
+</style>
+</head>
+<body data-module="m11">
+<main class="content">
+  <div class="module-hero">
+    <div class="eyebrow">Модуль 11</div>
+    <h1>Данные и governance</h1>
+    <p class="lead">Качество LLM-продукта упирается в данные: что вы распарсили и проиндексировали, что вычистили, что разметили, что храните в логах и кто имеет к этому доступ. Разбираем ingestion документов с сохранением структуры, дедупликацию, PII-редакцию, версии датасетов и разметку, data flywheel, хранение диалогов по GDPR и 152-ФЗ, EU AI Act и документацию системы. Регуляторика здесь — на уровне инженерных решений: применимость к конкретной системе определяет юрист.</p>
+    <div class="meta-row"><span class="chip">≈ 8 часов</span><span class="chip">Go + Python</span><span class="chip">3 визуализации</span><span class="chip">на момент написания: октябрь 2026</span></div>
+  </div>
+
+  <h2 id="ingestion">Ingestion: от PDF до чанка с метаданными</h2>
+  <p><b>Ingestion</b> (загрузка и подготовка данных) — всё, что происходит с документом до попадания его чанков в индекс. Многие «галлюцинации RAG» из модуля 5 начинаются здесь: таблица превратилась в кашу из чисел, скан стал пустой страницей, футер «Конфиденциально, стр. 3 из 40» попал в каждый чанк, старая версия политики лежит рядом с новой. Модель честно отвечает по тому, что ей дали.</p>
+  <p>Пайплайн: <b>сбор</b> (коннекторы к Confluence, Drive, S3, тикетам) → <b>парсинг</b> (текстовый слой, OCR или VLM) → <b>нормализация</b> в структуру (markdown или JSON с заголовками, таблицами, списками и порядком чтения) → <b>очистка</b> → <b>PII-редакция</b> → <b>дедупликация</b> → <b>чанкинг по структуре</b> → <b>метаданные и ACL</b> → эмбеддинги и индекс (модуль 5) → <b>отчёт о качестве</b>. Каждый шаг идемпотентен: повторный запуск на тех же байтах ничего не меняет.</p>
+
+  <h3>Почему PDF — худший формат для RAG</h3>
+  <p>PDF описывает страницу, а не документ: это глифы по координатам, без абзацев, порядка чтения и таблиц. Типовые поломки:</p>
+  <ul>
+    <li><b>Порядок чтения</b>: две колонки читаются построчно поперёк, сноски вклиниваются в абзац.</li>
+    <li><b>Таблицы</b>: ячейки склеиваются в строку «План Срок Комиссия Месяц 3 дня 0%», связь «значение ↔ колонка» теряется, и вопрос «какая комиссия на годовом плане» уже не решается никаким промптом.</li>
+    <li><b>Сканы</b>: текстового слоя нет, парсер возвращает пустую строку, документ молча выпадает из индекса.</li>
+    <li><b>Битые шрифты</b>: без корректной таблицы ToUnicode извлекается мусор вроде «Ïîëèòèêà», хотя визуально PDF идеален.</li>
+    <li><b>Колонтитулы и переносы</b>: «стр. 3 из 40» в каждом чанке, «воз-\nврат» вместо «возврат» ломает и BM25, и эмбеддинги.</li>
+  </ul>
+
+  <h3>Подходы: качество, стоимость, скорость</h3>
+  <table>
+    <tr><th>Подход</th><th>Что даёт</th><th>Стоимость и скорость</th><th>Где ломается</th></tr>
+    <tr><td><b>Текстовый слой</b> (pypdf, pdfminer, PyMuPDF)</td><td>Текст без понимания структуры</td><td>Дёшево, быстро, без GPU</td><td>Таблицы, колонки, сканы, битые шрифты</td></tr>
+    <tr><td><b>Layout-модели</b> (Docling, Unstructured <code>hi_res</code>, MinerU, Marker)</td><td>Заголовки, списки, таблицы со структурой ячеек, порядок чтения, OCR растровых областей</td><td>На порядок медленнее текстового слоя, на CPU — секунды на страницу; модели в сотни МБ</td><td>Нестандартные макеты, «нарисованные» таблицы, рукописный текст</td></tr>
+    <tr><td><b>OCR</b> (Tesseract; облачные AWS Textract, Google Document AI, Azure Document Intelligence, Mistral OCR)</td><td>Текст из сканов; облачные сервисы извлекают ещё таблицы и формы</td><td>Tesseract бесплатен, но чувствителен к качеству скана; облако — плата за страницу, документы уходят провайдеру</td><td>Путает 0/O, 1/l, кириллицу и латиницу; наклон и низкое разрешение</td></tr>
+    <tr><td><b>VLM-парсинг</b> (Claude с PDF-блоками, document-VLM вроде granite-docling-258M)</td><td>Лучшее понимание сложных макетов, графиков, форм</td><td>Самый дорогой: у Claude страница PDF — это текст плюс изображение, тысячи токенов (<a href="m02.html#multimodal">модуль 2</a>)</td><td>Модель может «додумать» цифру в таблице, и эту галлюцинацию не отличить от правды</td></tr>
+  </table>
+  <p>Рабочая схема для большого корпуса — <b>маршрутизация по страницам</b>. Страница с нормальным текстовым слоем идёт в layout-парсер. Страница без текста или с мусором (мало букв, много символов вне алфавита) — в OCR. Сложная таблица или график, где важны цифры, — в VLM со сверкой по текстовому слою, если он есть. Когда VLM-парсинг лучше OCR-пайплайна — <a href="m16.html#vision">модуль 16</a> (факультатив).</p>
+  <h3>Инструменты (по состоянию на октябрь 2026)</h3>
+  <table>
+    <tr><th>Инструмент</th><th>Что делает</th><th>Лицензия и особенности</th></tr>
+    <tr><td><b>Docling</b> 2.135</td><td>Layout-модели, таблицы (TableFormer), OCR (RapidOCR, EasyOCR, Tesseract), экспорт в markdown и JSON; проект LF AI &amp; Data</td><td>MIT для кода, у моделей свои лицензии. Тянет torch и скачивает модели при первом запуске</td></tr>
+    <tr><td><b>Unstructured</b> 0.27</td><td><code>partition_*</code> для десятков форматов, стратегии <code>fast</code>, <code>hi_res</code>, <code>ocr_only</code>, <code>auto</code></td><td>Apache-2.0. VLM-разбор и продвинутый чанкинг — только в коммерческой платформе</td></tr>
+    <tr><td><b>pymupdf4llm</b> 1.28</td><td>Быстрый PDF → markdown без torch, layout на onnxruntime</td><td>AGPL-3.0 или коммерческая лицензия Artifex: AGPL в сетевом сервисе обязывает открыть его исходники</td></tr>
+    <tr><td><b>Marker</b> 2.0</td><td>PDF → markdown или JSON, опционально с LLM</td><td>Код Apache-2.0 (до 2.0 — GPL-3.0); веса под модифицированной OpenRAIL-M, коммерческое использование выше порога выручки платное</td></tr>
+    <tr><td><b>MinerU</b> 4.0</td><td>PDF → markdown или JSON, силён на статьях и формулах</td><td>«MinerU Open Source License» на базе Apache-2.0 с условиями (до весны 2026 — AGPL-3.0)</td></tr>
+    <tr><td><b>Tesseract</b> 5.5</td><td>Классический OCR, есть русская модель</td><td>Apache-2.0</td></tr>
+  </table>
+  <div class="callout warn"><span class="title">Лицензия — часть выбора парсера</span>За 2026 год лицензии сменили Marker, MinerU и lakeFS (урок про версии датасетов). Код и веса моделей часто лицензируются по-разному. Проверяйте лицензию той версии, которую ставите, и всё, что не MIT, Apache-2.0 или BSD, проводите через юриста.</div>
+
+  <h3>Таблицы в индексе</h3>
+  <p>Маленькую таблицу кладите целиком одним чанком в markdown. Большую — группами строк с <b>шапкой в каждом чанке</b> или построчно в виде «План: Год; Срок на возврат: 14 дней; Комиссия: 0%». Справочник с точными значениями (прайс, коды ошибок) лучше положить в SQL и дать модели инструмент поиска (модуль 6): точный ответ не должен зависеть от удачи retrieval.</p>
+
+  <h3>Парсинг на Python: Docling</h3>
+  <p>Парсеры живут в Python, поэтому это обычно отдельный воркер: Go-сервис кладёт файл в очередь, Python-воркер возвращает markdown и отчёт. Скрипт генерирует тестовый PDF с заголовками, списком и таблицей, разбирает его и проверяет, что структура пережила парсинг.</p>
+  <pre><code class="lang-python">"""PDF → markdown + таблицы + отчёт о парсинге через Docling (модуль 11, урок «Ingestion»).
+
+Запуск без аргументов генерирует тестовый sample.pdf (заголовки, список, таблица) и разбирает его:
+    uv run --with docling==2.135.0 --with pymupdf==1.28.2 python pdf_to_md.py
+Свой файл:
+    uv run --with docling==2.135.0 python pdf_to_md.py path/to/file.pdf
+
+Первый запуск ставит torch и скачивает модели layout и TableFormer с Hugging Face (сотни МБ, минуты).
+PyMuPDF нужен только для генерации тестового PDF; его лицензия AGPL-3.0 — см. урок, прежде чем брать его в продукт.
+"""
+import hashlib
+import json
+import sys
+import time
+from pathlib import Path
+
+# SAMPLE_HTML и make_sample() — генерация тестового PDF через PyMuPDF, см. файл в examples/m11-data
+
+
+def parse(path: Path) -&gt; tuple[str, dict]:
+    from docling.document_converter import DocumentConverter
+
+    t0 = time.perf_counter()
+    res = DocumentConverter().convert(path)  # OCR растровых областей включён по умолчанию
+    doc = res.document
+    md = doc.export_to_markdown()
+    pages = doc.num_pages()
+    report = {
+        "file": path.name,
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest()[:16],  # версия источника
+        "status": str(res.status),
+        "pages": pages,
+        "chars_per_page": round(len(md) / max(pages, 1)),
+        "headings": [t.text for t in doc.texts if t.label == "section_header"],
+        "tables": [t.export_to_dataframe(doc=doc).to_dict(orient="records") for t in doc.tables],
+        "seconds": round(time.perf_counter() - t0, 1),
+    }
+    # Дешёвые проверки качества: пустой текст почти всегда значит скан без OCR или битые шрифты.
+    report["warnings"] = [w for w, bad in [
+        ("мало текста на страницу: скан или битый ToUnicode", report["chars_per_page"] &lt; 200),
+        ("нет заголовков: структура потеряна, чанкинг по секциям не сработает", not report["headings"]),
+    ] if bad]
+    return md, report
+
+
+if __name__ == "__main__":
+    src = Path(sys.argv[1]) if len(sys.argv) &gt; 1 else Path(__file__).with_name("sample.pdf")
+    if len(sys.argv) == 1:
+        make_sample(src)
+    md, report = parse(src)
+    print(md)
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    if len(sys.argv) == 1:  # самопроверка на тестовом PDF
+        assert "Политика возвратов" in report["headings"], report["headings"]
+        assert len(report["tables"]) == 1 and len(report["tables"][0]) == 2, report["tables"]
+        assert "| Год" in md, "таблица должна остаться таблицей в markdown"
+        print("OK: заголовки и таблица сохранены")</code></pre>
+  <div class="callout warn"><span class="title">Что показал прогон</span>Проверено 8 октября 2026 (macOS arm64, Python 3.14, docling 2.135.0). Первая установка с torch и загрузкой моделей на медленном канале заняла около получаса, повторный запуск — секунды, страница разобрана за 10–25 с вместе с загрузкой моделей в память. Таблица с рамками распознана как таблица 2×3. В первой версии теста таблица была <b>без рамок</b>, и Docling превратил её шапку в заголовок «План Срок возврата Комиссия», а строки — в абзац с цифрами. Ошибки при этом не было, поймала её только проверка структуры. Маркированный список слился в один абзац с «·». Ещё было предупреждение «No OCR engine found»: для сканов OCR-движок нужно настроить отдельно.</div>
+
+  <h3>Чанкинг по структуре</h3>
+  <p>Стратегии чанкинга и подбор размера по recall@k — в <a href="m05.html#chunking">модуле 5</a>, там же <code>ChunkSection</code> для прозы. Здесь недостающий кусок для проекта A: нарезать markdown после парсера по заголовкам так, чтобы <b>путь заголовков</b> ехал с каждым чанком, а <b>код-блоки и таблицы не резались</b>. Только стандартная библиотека.</p>
+  <pre><code class="lang-go">// Chunk — кусок markdown с путём заголовков. Эмбеддим Heading + "\n\n" + Text:
+// путь заголовков даёт чанку контекст, которого нет в самом тексте.
+type Chunk struct {
+	Heading string // "Тарифы › Возвраты › Сроки"
+	Text    string
+}
+
+// SplitMarkdown режет markdown по ATX-заголовкам (# … ######), затем пакует блоки
+// секции (абзацы, списки, таблицы, код) в чанки до maxRunes. Блок не режется никогда:
+// код-блок и таблица уходят целиком, даже если длиннее maxRunes.
+// ponytail: блок длиннее maxRunes остаётся одним чанком; прозу дорезайте ChunkSection из модуля 5.
+func SplitMarkdown(md string, maxRunes int) []Chunk {
+	var (
+		out    []Chunk
+		path   []string // текущий путь заголовков по уровням
+		blocks []string // блоки текущей секции
+		cur    []string // строки текущего блока
+		fence  string   // открытый ``` или ~~~
+	)
+	endBlock := func() {
+		if t := strings.TrimSpace(strings.Join(cur, "\n")); t != "" {
+			blocks = append(blocks, t)
+		}
+		cur = nil
+	}
+	endSection := func() {
+		endBlock()
+		heading := strings.Join(nonEmpty(path), " › ")
+		var buf []string
+		size := 0
+		for _, b := range blocks {
+			n := utf8.RuneCountInString(b)
+			if size &gt; 0 &amp;&amp; size+n &gt; maxRunes {
+				out = append(out, Chunk{heading, strings.Join(buf, "\n\n")})
+				buf, size = nil, 0
+			}
+			buf = append(buf, b)
+			size += n
+		}
+		if len(buf) &gt; 0 {
+			out = append(out, Chunk{heading, strings.Join(buf, "\n\n")})
+		}
+		blocks = nil
+	}
+	for _, line := range strings.Split(md, "\n") {
+		trim := strings.TrimSpace(line)
+		switch {
+		case fence != "": // внутри код-блока: ни заголовков, ни разрывов
+			cur = append(cur, line)
+			if strings.HasPrefix(trim, fence) {
+				fence = ""
+				endBlock()
+			}
+		case strings.HasPrefix(trim, "```") || strings.HasPrefix(trim, "~~~"):
+			endBlock()
+			fence = trim[:3]
+			cur = append(cur, line)
+		case headingLevel(trim) &gt; 0:
+			endSection()
+			lvl := headingLevel(trim)
+			for len(path) &lt; lvl {
+				path = append(path, "")
+			}
+			path = append(path[:lvl-1], strings.TrimSpace(trim[lvl:]))
+		case trim == "":
+			endBlock()
+		default:
+			cur = append(cur, line)
+		}
+	}
+	endSection()
+	return out
+}
+
+// headingLevel: "## Title" → 2; "#hashtag" и "####### x" — не заголовки.
+func headingLevel(s string) int {
+	n := 0
+	for n &lt; len(s) &amp;&amp; s[n] == '#' {
+		n++
+	}
+	if n == 0 || n &gt; 6 || (n &lt; len(s) &amp;&amp; s[n] != ' ') {
+		return 0
+	}
+	return n
+}
+
+func nonEmpty(ss []string) []string {
+	var out []string
+	for _, s := range ss {
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}</code></pre>
+  <div class="callout go"><span class="title">Аналогия из Go</span>Парсинг в структуру — это <code>json.Unmarshal</code> в типизированный struct вместо регулярок по сырым байтам. А документ, который парсер вернул пустым, — проглоченный <code>err</code>: пайплайн «успешно» отработал, данных нет. Пустой результат парсинга должен быть ошибкой с алертом, а не пустым списком чанков.</div>
+
+  <h3>Метаданные и ACL</h3>
+  <p>Чанк без метаданных нельзя отфильтровать, обновить, удалить по запросу и процитировать. Минимум поверх таблицы <code>chunks</code> из модуля 5 (там уже есть <code>tenant_id</code>, <code>acl</code>, <code>embed_model</code>):</p>
+  <pre><code class="lang-sql">ALTER TABLE chunks
+    ADD COLUMN source_uri   text    NOT NULL DEFAULT '',  -- откуда: для цитаты и удаления
+    ADD COLUMN doc_version  text    NOT NULL DEFAULT '',  -- etag или ревизия источника
+    ADD COLUMN content_hash text    NOT NULL DEFAULT '',  -- sha256 нормализованного текста: дедуп и «не эмбеддить повторно»
+    ADD COLUMN pages        int4range,                     -- страницы PDF для цитаты «стр. 12–13»
+    ADD COLUMN lang         text    NOT NULL DEFAULT 'ru',
+    ADD COLUMN parser       text    NOT NULL DEFAULT '',  -- "docling 2.135.0": сменили парсер — пересобрали индекс
+    ADD COLUMN is_current   boolean NOT NULL DEFAULT true, -- старые версии документа не ищутся
+    ADD COLUMN data_class   text    NOT NULL DEFAULT 'internal'; -- public / internal / confidential
+
+-- ACL проверяется в запросе retrieval, а не в промпте.
+-- $1 — эмбеддинг запроса, $2 — tenant, $3 — группы пользователя из IdP.
+SELECT id, heading, content, source_uri
+FROM chunks
+WHERE tenant_id = $2 AND acl &amp;&amp; $3 AND is_current
+ORDER BY embedding &lt;=&gt; $1
+LIMIT 20;</code></pre>
+  <ul>
+    <li><b>ACL копируется из источника</b> (группы пространства Confluence или папки Drive). Права меняются чаще текста, поэтому их синхронизация — отдельная, более частая задача.</li>
+    <li><b>Deny by default</b>: документ, права которого не прочитались, не индексируется. Проблемы фильтрованного ANN (post-filtering, iterative scan, партиции) — в <a href="m05.html#vectordb">модуле 5</a>.</li>
+  </ul>
+  <div class="callout warn"><span class="title">Как это ломается в проде</span>Тихие поломки ingestion не видны в логах ошибок: скан дал 0 чанков, таблица стала строкой чисел, документ со сменившимися правами остался виден старой группе. Защита — <b>отчёт парсинга на каждый документ</b> (страницы, символов на страницу, доля OCR, число таблиц и заголовков) с алертами на аномалии и по 2–3 вопроса golden set (проект B) на каждый тип документа: если после смены парсера упал recall@5 на «табличных» вопросах, вы узнаете это раньше пользователей.</div>
+
+  <h2 id="dedup">Качество данных и дедупликация</h2>
+  <p>Дубли в RAG-индексе занимают места в top-k (пять копий абзаца вытесняют четыре полезных чанка), смещают ответ к версии, у которой больше копий (часто к старой), и стоят денег на эмбеддинги. В датасетах для evals и обучения дубли дают утечку теста в трейн — это и групповое разбиение разобраны в <a href="m10.html#dataset">модуле 10</a>. Здесь фокус на корпусе для RAG.</p>
+  <table>
+    <tr><th>Уровень</th><th>Как ищем</th><th>Что ловит</th><th>Подвох</th></tr>
+    <tr><td><b>Точные</b></td><td>sha256 нормализованного текста</td><td>Копии файлов, повторные выгрузки, чанки-колонтитулы</td><td>Изменённая дата — уже другой хэш</td></tr>
+    <tr><td><b>MinHash + LSH</b></td><td>Сходство Жаккара по шинглам; LSH-корзины из b полос по r хэшей</td><td>Версии документа, шаблонные письма, копипаста с правками</td><td>Порог задаётся через b и r: перегиб ≈ (1/b)<sup>1/r</sup>; память на сигнатуры</td></tr>
+    <tr><td><b>SimHash</b></td><td>64-битный отпечаток, расстояние Хэмминга ≤ k</td><td>То же, 8 байт на документ</td><td>Нестабилен на коротких текстах; k = 3 подобран для веб-страниц</td></tr>
+    <tr><td><b>Семантические</b></td><td>Косинус эмбеддингов &gt; 0.95</td><td>Пересказ тем же смыслом</td><td>Дорого; склеивает близкие, но разные факты («возврат за месяц» и «за год»)</td></tr>
+  </table>
+  <p>SimHash (Charikar, 2002): каждый шингл хэшируется в 64 бита, по каждому биту голосуют все шинглы (+1 за единицу, −1 за ноль), знак суммы даёт бит отпечатка. У похожих текстов почти все шинглы общие, и голосование почти совпадает. Чтобы не сравнивать документ со всем корпусом, Manku и соавторы (Google, 2007) режут отпечаток на блоки: при расстоянии ≤ 3 хотя бы один из четырёх 16-битных блоков совпадает целиком, поэтому сравниваем только с кандидатами из тех же корзин. В их работе на 8 млрд веб-страниц разумными оказались 64 бита и k = 3.</p>
+  <pre><code class="lang-go">// Normalize — общий шаг для точных и нечётких дублей: нижний регистр,
+// только буквы и цифры, пробелы схлопнуты. Даты, id и подписи вырезайте до этого.
+func Normalize(s string) []string {
+	return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+		return !unicode.IsLetter(r) &amp;&amp; !unicode.IsDigit(r)
+	})
+}
+
+// SimHash — 64-битный отпечаток по шинглам из 3 слов (Charikar, 2002).
+// Похожие тексты дают отпечатки с малым расстоянием Хэмминга.
+func SimHash(words []string) uint64 {
+	const k = 3
+	var acc [64]int
+	add := func(shingle string) {
+		h := fnv.New64a()
+		h.Write([]byte(shingle))
+		x := h.Sum64()
+		for i := 0; i &lt; 64; i++ {
+			if x&amp;(1&lt;&lt;i) != 0 {
+				acc[i]++
+			} else {
+				acc[i]--
+			}
+		}
+	}
+	if len(words) &lt; k {
+		add(strings.Join(words, " "))
+	}
+	for i := 0; i+k &lt;= len(words); i++ {
+		add(strings.Join(words[i:i+k], " "))
+	}
+	var out uint64
+	for i, v := range acc {
+		if v &gt; 0 {
+			out |= 1 &lt;&lt; i
+		}
+	}
+	return out
+}
+
+func Hamming(a, b uint64) int { return bits.OnesCount64(a ^ b) }
+
+// Dedup ищет точные (sha256 нормализованного текста) и почти-дубли (SimHash ≤ MaxDist бит).
+// Индекс — 4 таблицы по 16-битным блокам отпечатка: при расстоянии ≤ 3 хотя бы один блок
+// совпадает целиком (принцип Дирихле), поэтому сравниваем только с кандидатами из корзин,
+// а не со всем корпусом (Manku et al., 2007).
+type Dedup struct {
+	MaxDist int // 3 для 64 бит — значение из статьи Manku et al.; подбирайте на своей разметке
+	exact   map[[32]byte]string
+	bands   [4]map[uint16][]entry
+}
+
+type entry struct {
+	id   string
+	hash uint64
+}
+
+func NewDedup(maxDist int) *Dedup {
+	d := &amp;Dedup{MaxDist: maxDist, exact: map[[32]byte]string{}}
+	for i := range d.bands {
+		d.bands[i] = map[uint16][]entry{}
+	}
+	return d
+}
+
+// Add возвращает id найденного дубля и расстояние (0 — точная копия).
+// Если дубля нет, документ добавляется в индекс и возвращается "".
+// ponytail: корректно только для MaxDist ≤ 3 (4 блока); для большего порога — больше таблиц с перестановками битов.
+func (d *Dedup) Add(id, text string) (dupOf string, dist int) {
+	words := Normalize(text)
+	key := sha256.Sum256([]byte(strings.Join(words, " ")))
+	if prev, ok := d.exact[key]; ok {
+		return prev, 0
+	}
+	h := SimHash(words)
+	for i := range d.bands {
+		for _, e := range d.bands[i][uint16(h&gt;&gt;(16*i))] {
+			if dist := Hamming(h, e.hash); dist &lt;= d.MaxDist {
+				return e.id, dist
+			}
+		}
+	}
+	d.exact[key] = id
+	for i := range d.bands {
+		b := uint16(h &gt;&gt; (16 * i))
+		d.bands[i][b] = append(d.bands[i][b], entry{id, h})
+	}
+	return "", 0
+}</code></pre>
+  <p>В тесте <code>examples/m11-data</code> замена одного слова в абзаце из ~60 слов дала расстояние ровно 3, то есть на самом пороге. Порог подбирают на своей разметке (100–200 пар «дубль / не дубль»), а не берут из статьи. Для Python есть MinHash LSH в библиотеке <code>datasketch</code>.</p>
+  <div class="callout danger"><span class="title">Дедупликация только внутри области доступа</span>Два тенанта загрузили почти одинаковые договоры-шаблоны. Глобальная дедупликация оставит чанк с ACL первого, и второй потеряет документ; склейка ACL покажет второму чужие правки. Ключ дедупликации — <code>(tenant_id, acl, content)</code>.</div>
+  <h3>Шум, языки, устаревшие версии</h3>
+  <ul>
+    <li><b>Boilerplate</b> (колонтитулы, меню и cookie-баннеры из HTML, подписи писем) лучше всего находится по частоте: строка, которая встречается на 30% страниц документа или в 1000 писем, — шаблон. Удаляйте до чанкинга. Мусорные чанки (слишком короткие, без букв, mojibake) отсекаются простыми эвристиками.</li>
+    <li><b>Язык</b> чанка (fastText <code>lid.176</code>, lingua) пишите в метаданные вместе с уверенностью: от него зависят конфигурация полнотекстового поиска (<code>'russian'</code> или <code>'english'</code>), выбор эмбеддинг-модели и фильтр по языку пользователя.</li>
+    <li><b>Устаревшие версии</b> — главный источник ответов «по прошлогодней политике». Новая ревизия документа ставит старой <code>is_current = false</code> в той же транзакции; удалённый в источнике документ удаляется из индекса (tombstone), иначе данные, удалённые по требованию, продолжают жить в индексе; дата обновления едет в <code>&lt;source&gt;</code> промпта (модуль 3). Почти-дубли с разными id («копия политики в чужом пространстве») показывайте владельцу корпуса, а не удаляйте автоматически.</li>
+  </ul>
+
+  <h2 id="pii">PII-редакция</h2>
+  <p><b>PII</b> (personally identifiable information, персональные данные) приходит в LLM-продукт тремя путями: в документах корпуса (HR-политики, договоры, тикеты), в сообщениях пользователей (в чат вставляют всё: номер карты, паспорт, переписку) и в ответах модели, которая пересказывает контекст. Редактировать нужно там, где данные пересекают границу: индекс, логи, внешний провайдер, разметчики, обучающий датасет.</p>
+  <ul>
+    <li><b>Прямые идентификаторы</b>: ФИО, телефон, email, карта, паспорт, СНИЛС, ИНН, адрес.</li>
+    <li><b>Косвенные</b>: дата рождения, город, должность, «дочь учится в 5 «Б» школы № 1234». По отдельности безобидны, вместе указывают на человека: по работе Суини (2000), почтовый индекс, пол и дата рождения уникально определяют 87% жителей США.</li>
+    <li><b>Особые категории</b> (здоровье, биометрия, убеждения) — по GDPR и 152-ФЗ под более жёсткими правилами.</li>
+  </ul>
+  <h3>Детекторы</h3>
+  <table>
+    <tr><th>Детектор</th><th>Ловит</th><th>Плюсы</th><th>Минусы</th></tr>
+    <tr><td><b>Регэкспы + контрольные суммы</b></td><td>Карты (алгоритм Луна), ИНН, СНИЛС, телефоны, email, паспорт</td><td>Детерминированно, микросекунды, легко тестировать</td><td>Не видят имён и адресов; паспорт и телефон — только по формату</td></tr>
+    <tr><td><b>NER</b> (Presidio, Natasha, spaCy)</td><td>Имена, организации, адреса, даты</td><td>Видит то, у чего нет формата</td><td>Зависит от языка и домена; на чатах без заглавных букв и с опечатками заметно хуже</td></tr>
+    <tr><td><b>LLM-детектор</b></td><td>Косвенные идентификаторы, PII словами («восемь девятьсот…»)</td><td>Понимает контекст</td><td>Дорого и недетерминированно; слать PII внешнему провайдеру, чтобы найти PII, — порочный круг, годится self-hosted модель (модуль 10)</td></tr>
+  </table>
+  <p><b>Presidio</b>: <code>presidio-analyzer</code> находит сущности (регэкспы с контекстными словами, валидаторы, NER через spaCy, Stanza или transformers), <code>presidio-anonymizer</code> применяет операторы <code>replace</code>, <code>redact</code>, <code>mask</code>, <code>hash</code>, <code>encrypt</code>; обратим только <code>encrypt</code> (через <code>decrypt</code>). Лицензия MIT. Проект перешёл от Microsoft к независимому сообществу (GitHub-организация data-privacy-stack), API не изменился. Из коробки Presidio настроен на английский: встроенных распознавателей российских документов нет. Для русского нужны NER-модель (spaCy, Stanza или transformers через <code>NlpEngineProvider</code>), свои распознаватели ИНН и СНИЛС и русские контекстные слова. Для русского NER есть и отдельные библиотеки, например Natasha.</p>
+  <div class="callout warn"><span class="title">Регэкспы — не NER</span>Регэксп отвечает на вопрос «похоже ли на формат», а не «персональные ли это данные». «Анна Смирнова живёт на Садовой, 5» — PII без формата. И наоборот: десятизначный номер заказа проходит проверку ИНН примерно в одном случае из десяти, потому что у ИНН одна контрольная цифра. Контрольная сумма снижает ложные срабатывания, контекстные слова («ИНН» рядом) снижают их дальше — так устроены распознаватели Presidio. Полноту редакции измеряют на размеченной выборке.</div>
+  <h3>Код: детекторы, контрольные суммы, псевдонимы</h3>
+  <p>Пересечения решаются приоритетом: сначала то, что подтверждено контрольной суммой, потом форматные детекторы. Так СНИЛС без дефисов не станет «телефоном». Это развитие <code>MaskPII</code> из <a href="m09.html#observability">модуля 9</a>, где регэксп карты маскирует любые 13–19 цифр подряд, включая номера заказов.</p>
+  <div class="tabs">
+    <div class="tab-panel" data-tab="Go: детекторы"><pre><code class="lang-go">// Finding — найденный фрагмент PII: байтовые границы в исходном тексте.
+type Finding struct {
+	Kind       string // EMAIL, PHONE, CARD, INN, SNILS, PASSPORT
+	Start, End int
+	Value      string
+}
+
+type detector struct {
+	kind  string
+	re    *regexp.Regexp
+	valid func(digits string) bool // nil — проверки нет, только формат
+}
+
+// Порядок = приоритет при пересечениях: сначала то, что подтверждено контрольной суммой.
+var detectors = []detector{
+	{"CARD", regexp.MustCompile(`\b(?:\d{4}[ -]){3}\d{4}\b|\b\d{13,19}\b`), luhn},
+	{"SNILS", regexp.MustCompile(`\b\d{3}-?\d{3}-?\d{3}[ -]?\d{2}\b`), snils},
+	{"INN", regexp.MustCompile(`\b\d{12}\b|\b\d{10}\b`), inn},
+	{"EMAIL", regexp.MustCompile(`[\w.+-]+@[\w-]+(?:\.[\w-]+)+`), nil},
+	{"PHONE", regexp.MustCompile(`(?:\+7|\b8)[ (-]*\d{3}[ )-]*\d{3}[ -]?\d{2}[ -]?\d{2}\b`), nil},
+	// Паспорт РФ: 4 цифры серии + 6 цифр номера. Контрольной суммы нет — без пробела
+	// перед номером не ловим, иначе каждое 10-значное число станет «паспортом».
+	{"PASSPORT", regexp.MustCompile(`\b\d{2} ?\d{2} \d{6}\b`), nil},
+}
+
+// Find возвращает непересекающиеся находки, отсортированные по позиции.
+func Find(text string) []Finding {
+	var all []Finding
+	for _, d := range detectors {
+		for _, m := range d.re.FindAllStringIndex(text, -1) {
+			v := text[m[0]:m[1]]
+			if d.valid != nil &amp;&amp; !d.valid(digitsOnly(v)) {
+				continue
+			}
+			all = append(all, Finding{Kind: d.kind, Start: m[0], End: m[1], Value: v})
+		}
+	}
+	// all уже упорядочен по приоритету детектора; берём находку, если она не пересекается с принятыми.
+	// ponytail: O(n²) по числу находок — для сообщений и документов хватает, для гигабайтных дампов нужен interval tree.
+	var out []Finding
+	for _, f := range all {
+		overlap := false
+		for _, o := range out {
+			if f.Start &lt; o.End &amp;&amp; o.Start &lt; f.End {
+				overlap = true
+				break
+			}
+		}
+		if !overlap {
+			out = append(out, f)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Start &lt; out[j].Start })
+	return out
+}</code></pre></div>
+    <div class="tab-panel" data-tab="Go: контрольные суммы"><pre><code class="lang-go">func digitsOnly(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r &gt;= '0' &amp;&amp; r &lt;= '9' {
+			return r
+		}
+		return -1
+	}, s)
+}
+
+// luhn — контрольная сумма номеров карт (ISO/IEC 7812).
+func luhn(d string) bool {
+	sum := 0
+	for i := len(d) - 1; i &gt;= 0; i-- {
+		n := int(d[i] - '0')
+		if (len(d)-1-i)%2 == 1 {
+			n *= 2
+			if n &gt; 9 {
+				n -= 9
+			}
+		}
+		sum += n
+	}
+	return sum%10 == 0
+}
+
+// inn — контрольные цифры ИНН: 10 знаков (организация) или 12 (физлицо, ИП).
+func inn(d string) bool {
+	check := func(w []int) int {
+		s := 0
+		for i, k := range w {
+			s += k * int(d[i]-'0')
+		}
+		return s % 11 % 10
+	}
+	switch len(d) {
+	case 10:
+		return check([]int{2, 4, 10, 3, 5, 9, 4, 6, 8}) == int(d[9]-'0')
+	case 12:
+		return check([]int{7, 2, 4, 10, 3, 5, 9, 4, 6, 8}) == int(d[10]-'0') &amp;&amp;
+			check([]int{3, 7, 2, 4, 10, 3, 5, 9, 4, 6, 8}) == int(d[11]-'0')
+	}
+	return false
+}
+
+// snils — контрольное число СНИЛС: веса 9…1 по первым 9 цифрам, затем mod 101 (100 и 101 → 00).
+// Номера не больше 001-001-998 не проверяются — для детектора считаем их невалидными.
+func snils(d string) bool {
+	if len(d) != 11 || d[:9] &lt;= "001001998" {
+		return false
+	}
+	s := 0
+	for i := 0; i &lt; 9; i++ {
+		s += int(d[i]-'0') * (9 - i)
+	}
+	s %= 101
+	if s == 100 {
+		s = 0
+	}
+	return s == int(d[9]-'0')*10+int(d[10]-'0')
+}</code></pre></div>
+    <div class="tab-panel" data-tab="Go: маска и псевдонимы"><pre><code class="lang-go">// Redactor заменяет PII. Key == nil — маскирование ([CARD]); иначе — псевдонимизация:
+// [CARD:3f9a1c2b] = HMAC(key, тип+нормализованное значение). Одно и то же значение даёт
+// один и тот же токен во всех документах — можно считать, джойнить и искать по нему, не видя PII.
+type Redactor struct {
+	Key []byte
+}
+
+// Redact возвращает текст без PII и словарь токен → исходное значение.
+// Словарь (vault) нужен только для обратной подстановки: храните его отдельно,
+// с отдельными правами и сроком жизни, или не храните вовсе, если восстановление не нужно.
+func (r Redactor) Redact(text string) (string, map[string]string) {
+	var b strings.Builder
+	vault := map[string]string{}
+	last := 0
+	for _, f := range Find(text) {
+		b.WriteString(text[last:f.Start])
+		tok := "[" + f.Kind + "]"
+		if r.Key != nil {
+			tok = "[" + f.Kind + ":" + r.pseudonym(f) + "]"
+			vault[tok] = f.Value
+		}
+		b.WriteString(tok)
+		last = f.End
+	}
+	b.WriteString(text[last:])
+	return b.String(), vault
+}
+
+func (r Redactor) pseudonym(f Finding) string {
+	norm := strings.ToLower(f.Value)
+	if f.Kind != "EMAIL" {
+		norm = digitsOnly(f.Value)
+		if f.Kind == "PHONE" &amp;&amp; strings.HasPrefix(norm, "8") {
+			norm = "7" + norm[1:] // 8 912… и +7 912… — один и тот же номер
+		}
+	}
+	m := hmac.New(sha256.New, r.Key)
+	m.Write([]byte(f.Kind + ":" + norm))
+	return hex.EncodeToString(m.Sum(nil)[:4]) // 32 бита: читаемо; для больших баз берите 8+ байт
+}
+
+// Restore — обратная подстановка, например в ответе модели перед показом пользователю.
+func Restore(text string, vault map[string]string) string {
+	pairs := make([]string, 0, 2*len(vault))
+	for tok, v := range vault {
+		pairs = append(pairs, tok, v)
+	}
+	return strings.NewReplacer(pairs...).Replace(text)
+}</code></pre></div>
+  </div>
+  <h3>Маскирование или псевдонимизация</h3>
+  <table>
+    <tr><th>Способ</th><th>Пример</th><th>Свойства</th><th>Когда</th></tr>
+    <tr><td><b>Маскирование</b></td><td><code>[PHONE]</code></td><td>Необратимо; все телефоны одинаковы, связность теряется</td><td>Логи, трейсы, данные для разметки</td></tr>
+    <tr><td><b>Детерминированная псевдонимизация</b> (HMAC с секретным ключом)</td><td><code>[PHONE:7fa340c5]</code></td><td>Одно значение → один токен: можно считать обращения клиента и связывать сессии, не видя PII</td><td>Аналитика, поиск обращений одного человека</td></tr>
+    <tr><td><b>Обратимая псевдонимизация</b> (vault «токен → значение» или шифрование)</td><td><code>[NAME:1a2b]</code> → в ответе снова «Анна»</td><td>Обратима для того, у кого доступ к vault или ключу</td><td>Отправка внешнему провайдеру: модель видит токены, приложение подставляет значения</td></tr>
+    <tr><td><b>Обобщение, синтетическая замена</b></td><td>34 года → 30–39; «Анна» → «Мария»</td><td>Необратимо, текст остаётся естественным</td><td>Обучение и few-shot, где <code>[NAME]</code> мешал бы модели</td></tr>
+  </table>
+  <ul>
+    <li><b>Псевдонимизированные данные остаются персональными</b> (GDPR, recital 26): это мера безопасности (ст. 32), а не выход из-под закона. Анонимизация для свободного текста почти недостижима. Как это устроено в 152-ФЗ — в уроке про логи.</li>
+    <li><b>Ключ HMAC — секрет</b> в KMS с ротацией; ротация рвёт связность, планируйте её как миграцию. Короткий токен на десятках миллионов значений даёт коллизии: для джойнов берите 8+ байт.</li>
+    <li><b>Модель портит токены</b>: перефразирует «[NAME:1a2b]» в «клиент 1a2b». Проверяйте, что все токены ответа восстановлены и неизвестных нет.</li>
+  </ul>
+  <h3>Где редактировать</h3>
+  <table>
+    <tr><th>Точка</th><th>Что делать</th><th>Почему</th></tr>
+    <tr><td><b>До индексации</b></td><td>По классу документа: редактировать, сузить ACL или не индексировать</td><td>Из индекса PII уходит в ответ любому, кто прошёл ACL; удалить человека из индекса сложнее, чем не положить</td></tr>
+    <tr><td><b>До логов и трейсов</b></td><td>Маскировать в приложении или в OTel Collector до выхода из периметра</td><td>Логи читает больше людей, и хранятся они дольше</td></tr>
+    <tr><td><b>До провайдера</b></td><td>Обратимая псевдонимизация, если передача не разрешена; zero data retention и регион, если разрешена</td><td>Передача третьему лицу, возможно трансграничная</td></tr>
+    <tr><td><b>До разметки и evals</b></td><td>Маскирование или синтетика, доступ по ролям</td><td>Разметчики — часто подрядчики; golden set живёт годами в git</td></tr>
+    <tr><td><b>До обучения</b></td><td>Удалить PII</td><td>Модель запоминает редкие строки; «забыть» человека дообученная модель не умеет</td></tr>
+    <tr><td><b>На выходе</b></td><td>Детектор PII в ответе (<a href="m07.html">модуль 7</a>)</td><td>Модель может пересказать чужие данные из контекста</td></tr>
+  </table>
+
+  <div class="viz" id="viz-pii">
+    <p class="viz-title">Песочница PII-редакции</p>
+    <p class="viz-sub">Те же регэкспы и контрольные суммы, что в Go-коде. Редактируйте текст, переключайте режим и детекторы, выключите проверку контрольных сумм и посмотрите, что станет с номером заказа. Пунктиром подчёркнуто то, что похоже на формат, но не прошло проверку. Псевдонимы в демо считаются FNV-хэшем с ключом, в Go — HMAC-SHA256.</p>
+    <textarea id="pii-in" rows="6" aria-label="Текст диалога">Клиент: Здравствуйте, я Анна Смирнова. Списали дважды по карте 4111 1111 1111 1111, а старая карта 4111 1111 1111 1112 заблокирована.
+Клиент: Почта anna.smirnova@mail.example, телефон +7 (912) 345-67-89, можно и 8 912 345 67 89.
+Бот: Уточните ИНН для чека.
+Клиент: ИНН 500100732259, СНИЛС 112-233-445 95, номер заказа 7707083894.
+Клиент: Паспорт 45 12 345678, живу на ул. Садовой, д. 5, кв. 12, дочь учится в 5 «Б» школы № 1234.</textarea>
+    <div class="controls">
+      <label>режим <select id="pii-mode" style="width:auto"><option value="mask">маскирование</option><option value="pseudo">псевдонимизация</option></select></label>
+      <label>ключ <input type="text" id="pii-key" value="k-2026-10" style="width:120px"></label>
+      <label><input type="checkbox" id="pii-chk" checked> проверять контрольные суммы</label>
+    </div>
+    <div class="pii-kinds" id="pii-kinds"></div>
+    <div class="pii-grid">
+      <div class="pii-box"><h5>Что нашли</h5><div id="pii-hl"></div></div>
+      <div class="pii-box"><h5>Что уйдёт дальше</h5><div id="pii-red"></div></div>
+    </div>
+    <svg id="pii-svg" viewBox="0 0 400 140" role="img" aria-label="Счётчики находок по типам"></svg>
+    <div class="readout" id="pii-readout"></div>
+  </div>
+
+  <h2 id="versioning">Версии датасетов и разметка</h2>
+  <p>Чтобы ответить, почему вчера recall@5 был 0.82, а сегодня 0.77, нужно знать, что изменилось. Кроме кода, промпта и модели это корпус, парсер, эмбеддинг-модель и golden set. Версионировать нужно всё, от чего зависит метрика: <b>сырой корпус</b> (ревизии и хэши источников), <b>результат парсинга</b> (версия парсера — часть версии данных: обновили Docling — прогоняйте evals), <b>индекс</b> (корпус × чанкер × эмбеддинг-модель), <b>golden set, обучающие наборы и гайдлайн разметки</b>. Отчёт прогона evals хранит версии всех частей (<a href="m08.html#dataset">модуль 8</a>), а цепочка «ответ → индекс → парсер → ревизия документа» восстанавливается по трейсу.</p>
+  <table>
+    <tr><th>Инструмент</th><th>Как устроен</th><th>Когда брать</th><th>Ограничения</th></tr>
+    <tr><td><b>git + JSONL</b></td><td>Файлы в репозитории</td><td>Golden set до десятков МБ, дифф кейсов в PR</td><td>Большие файлы раздувают репозиторий навсегда</td></tr>
+    <tr><td><b>git-lfs</b> 3.8</td><td>В git указатели, файлы на LFS-сервере</td><td>Средние файлы рядом с кодом</td><td>Квоты хостинга, версия хранится целиком, нет пайплайнов</td></tr>
+    <tr><td><b>DVC</b> 3.67</td><td>Метафайлы <code>.dvc</code> в git, данные в S3, GCS, Azure; пайплайны <code>dvc.yaml</code> с кэшем по хэшу</td><td>«Git для данных» без сервера</td><td>Apache-2.0; в ноябре 2025 проект перешёл к lakeFS (Treeverse)</td></tr>
+    <tr><td><b>lakeFS</b> 1.88</td><td>Сервер над объектным хранилищем: ветки, коммиты, merge без копирования</td><td>Data lake на терабайтах, атомарная публикация снапшота</td><td>Нужен сервер; с 1.87.0 (сентябрь 2026) BUSL-1.1: немодифицированный код бесплатен внутри компании, версия через 4 года становится Apache-2.0</td></tr>
+    <tr><td><b>Hugging Face Hub + <code>datasets</code></b></td><td>Git-репозиторий датасета, хранилище Xet; <code>load_dataset(…, revision="&lt;commit&gt;")</code></td><td>Обмен датасетами, обучение</td><td>Внешняя платформа: PII и закрытые корпуса — только после решения безопасности и юриста</td></tr>
+  </table>
+  <div class="callout go"><span class="title">Аналогия из Go</span>Версия датасета — это <code>go.sum</code> для данных: хэш фиксирует ровно те байты, на которых посчитана метрика. Манифест «файл → sha256» в git плюс сами файлы в объектном хранилище — минимальный рабочий вариант, и DVC, по сути, автоматизирует именно его.</div>
+  <pre><code class="lang-yaml"># datasets/golden/manifest.yaml — коммитится вместе с кодом evals
+name: docrag-golden
+version: 2026-10-01.3
+guideline: docs/labeling/golden-v4.md      # по какой версии гайдлайна размечено
+files:
+  - path: golden.jsonl
+    sha256: 9f2c…e41a
+    rows: 186
+    slices: {table_questions: 31, no_answer: 24, en: 18}
+source:
+  corpus_snapshot: s3://docrag-corpus/snapshots/2026-09-28/
+  parser: docling 2.135.0
+changes: "+12 кейсов из прод-фидбека, 3 эталона обновлены после смены политики возвратов"</code></pre>
+
+  <h3>Разметка: гайдлайн важнее инструмента</h3>
+  <p>Согласие разметчиков (Cohen's κ) и error analysis разобраны в <a href="m08.html#humans">модуле 8</a>. Низкое согласие почти всегда означает плохой гайдлайн, а не плохих разметчиков. В гайдлайне должны быть: задача и что будет с меткой дальше; метки с определениями и примерами «да» и «нет»; дерево решений для пограничных случаев («ответ верный, но без цитаты → FAIL»; «по устаревшей версии документа → FAIL, тег <code>stale</code>»); выход «не могу оценить»; версия и changelog — изменили определение, перечитайте затронутые метки.</p>
+  <ul>
+    <li><b>Контроль качества</b>: контрольные задания с известным ответом вперемешку с обычными, перекрёстная разметка 10–20% и арбитраж эксперта.</li>
+    <li><b>Инструменты</b>: Label Studio (Apache-2.0) активно развивается; Argilla (Apache-2.0) после перехода в Hugging Face в 2024 году находится в режиме поддержки: только исправления ошибок, без новых функций; doccano (MIT) развивается медленно. Для старта хватает внутренней страницы с трассой целиком и горячими клавишами PASS/FAIL.</li>
+    <li><b>PII и доступ</b>: редакция до разметки, роли, договор с подрядчиком, запрет выгрузки.</li>
+  </ul>
+  <h3>Active learning: что размечать первым</h3>
+  <p><b>Active learning</b> — выбирать для разметки примеры, которые сильнее всего улучшат систему. Для LLM-продукта это неуверенные случаи (низкий скор retrieval, judge и эвристики разошлись, разные прогоны дали разные ответы), новые кластеры запросов, которых нет в golden set, высокая цена ошибки (деньги, право, безопасность) и сигналы из прода. Активная выборка смещена к трудным случаям, поэтому для честной оценки держите отдельную <b>случайную</b> выборку.</p>
+
+  <h2 id="flywheel">Фидбек и data flywheel</h2>
+  <p><b>Data flywheel</b> (маховик данных) — замкнутый цикл: прод поставляет примеры ошибок, из них получаются кейсы для evals и данные для улучшений, улучшения через eval-гейт возвращаются в прод. Без маховика golden set застывает на дне запуска, а прод уходит вперёд.</p>
+  <ul>
+    <li><b>Явный фидбек</b> (👍/👎, комментарий, исправление оператором) точный, но редкий (обычно меньше процента ответов) и смещённый: его чаще оставляют недовольные.</li>
+    <li><b>Неявный</b> (регенерация, переформулирование, эскалация, копирование, правка черновика) — подробно в <a href="m08.html#online">модуле 8</a>.</li>
+    <li><b>Привязка к трассе</b>: фидбек без <code>trace_id</code> бесполезен — нужны запрос, найденные чанки и версии.</li>
+  </ul>
+  <pre><code class="lang-sql">CREATE TABLE feedback (
+    id          bigserial   PRIMARY KEY,
+    trace_id    text        NOT NULL,              -- запрос, чанки, версии
+    user_hmac   text        NOT NULL,              -- HMAC(user_id), не сам id (модуль 9)
+    kind        text        NOT NULL CHECK (kind IN ('thumb', 'regenerate', 'copy', 'escalate', 'edit')),
+    value       smallint,                          -- +1 / -1 для thumb
+    comment     text,                              -- PII редактируется до записи
+    prompt_ver  text        NOT NULL,
+    index_ver   text        NOT NULL,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    triaged_at  timestamptz,                       -- когда разобрали: скорость маховика
+    outcome     text                               -- golden_case / doc_fix / prompt_fix / not_a_bug
+);
+CREATE INDEX feedback_untriaged ON feedback (created_at) WHERE triaged_at IS NULL;</code></pre>
+  <p>Путь сигнала: <b>отбор</b> (все 👎 и эскалации, случайная выборка 0.5–2% трафика, активная выборка) → <b>PII-редакция</b> → <b>разбор</b> (error analysis: сломались retrieval, документ, промпт, модель или ожидания) → <b>исход</b> (кейс в golden set, задача владельцу документа, правка промпта, пример для обучения в <a href="m10.html">модуле 10</a>, «не баг») → <b>релиз</b> через eval-гейт, где новый кейс сначала падает, потом проходит. Брать логи пользователей для evals и обучения можно не всегда: нужны правовое основание и совместимость с целью сбора (следующий урок), а также условия договора с провайдером.</p>
+  <p><b>Метрики маховика</b>: время цикла от 👎 до кейса в CI (медиана в днях — самая честная метрика того, учится ли система); доля разобранных сигналов и бэклог; прирост golden set и покрытие прод-кластеров; доля повторяющихся ошибок (высокая — фиксы не доезжают или кейс не ловит регрессию); тренд качества по релизам на фиксированном срезе; стоимость размеченного кейса.</p>
+
+  <div class="viz" id="viz-fly">
+    <p class="viz-title">Маховик данных: где узкое место</p>
+    <p class="viz-sub">Двигайте трафик, долю фидбека, выборку и бюджет разметки. Схема считает недельный поток и подсвечивает узкое место: мало сигналов, не хватает разметки или разобранное не становится кейсами. Модель упрощённая: она показывает баланс, а не прогнозирует ваши цифры.</p>
+    <div class="controls">
+      <label>запросов в день <input type="range" id="fw-rq" min="1000" max="100000" step="1000" value="20000"> <output></output></label>
+      <label>явный фидбек <input type="range" id="fw-fb" min="0.2" max="5" step="0.1" value="0.8"> <output></output></label>
+      <label>из них 👎 <input type="range" id="fw-neg" min="10" max="70" step="5" value="35"> <output></output></label>
+      <label>случайная выборка <input type="range" id="fw-smp" min="0" max="1" step="0.05" value="0.1"> <output></output></label>
+      <label>разметка <input type="range" id="fw-cap" min="0" max="40" step="2" value="8"> <output></output></label>
+      <label>скорость разбора <input type="range" id="fw-rate" min="10" max="60" step="5" value="25"> <output></output></label>
+      <label>разобранное → кейс <input type="range" id="fw-conv" min="5" max="40" step="5" value="15"> <output></output></label>
+    </div>
+    <svg id="fw-svg" viewBox="0 0 640 270" role="img" aria-label="Маховик данных"></svg>
+    <div class="readout" id="fw-readout"></div>
+  </div>
+
+  <h2 id="logs">Логи диалогов: что хранить, сколько и кому показывать</h2>
+  <p>Логи диалогов нужны для отладки, evals, маховика данных и расследования инцидентов. Это же самое опасное хранилище PII в системе: тексты, которые пользователи писали, не думая, где они окажутся. Задача — хранить достаточно для качества и аудита и не больше. Ниже — инженерные следствия GDPR и 152-ФЗ. <b>Применимость к вашей системе и правовые основания определяет юрист</b>.</p>
+  <table>
+    <tr><th>Класс</th><th>Что внутри</th><th>Типичный срок</th><th>Доступ</th></tr>
+    <tr><td><b>Метаданные</b></td><td><code>trace_id</code>, HMAC пользователя, модель, версии промпта и индекса, токены, стоимость, латентность, id чанков</td><td>Месяцы — год: тренды, биллинг, SLO</td><td>Инженеры, аналитики</td></tr>
+    <tr><td><b>Содержимое</b></td><td>Запросы, ответы, найденные фрагменты</td><td>Дни — недели (модуль 9: 14–30 дней), сэмпл 1–5% плюс ошибки и 👎, маскированные</td><td>Дежурные и AI-команда, с аудитом</td></tr>
+    <tr><td><b>Фидбек и кейсы</b></td><td>Оценки, комментарии, трассы-кейсы</td><td>Пока кейс нужен; в golden set — после редакции</td><td>AI-команда, разметчики по ролям</td></tr>
+    <tr><td><b>Аудит действий</b></td><td>Вызовы инструментов с побочными эффектами, решения человека</td><td>По требованиям безопасности и отрасли; для high-risk по AI Act — не меньше 6 месяцев</td><td>Безопасность, комплаенс</td></tr>
+  </table>
+  <ul>
+    <li><b>Срок реализуется механизмом</b>: TTL в ClickHouse, lifecycle-правила S3, партиции по дням с <code>DROP PARTITION</code>. Срок, который соблюдают «вручную раз в квартал», не соблюдается.</li>
+    <li><b>Анонимизация логов</b>: HMAC вместо <code>user_id</code>, редакция до записи, тексты в отдельном хранилище, в трейсах только ссылки (модуль 9), доступ к сырым данным по заявке с аудитом.</li>
+    <li><b>Логи провайдера</b>: у внешнего API свои сроки хранения. Zero data retention, регион обработки и договор — часть архитектуры.</li>
+  </ul>
+  <h3>Удаление по запросу</h3>
+  <p>Нужен <b>реестр мест хранения</b> с ключом поиска по пользователю: прод-БД, логи, трейсы и фидбек (по HMAC); векторный индекс, если индексируется пользовательский контент (по <code>owner_id</code> чанка); golden set, очереди разметки и выгрузки подрядчикам (по ссылке на трассу); кэши ответов; бэкапы — через <b>crypto-shredding</b> (данные пользователя шифруются его ключом, удаление ключа делает недоступными и копии); провайдер — по договору. Дообученную модель «разучить» человека нельзя, поэтому сырые персональные данные в обучение не берут. Удаление — скрипт с тестом на синтетическом пользователе и отчётом о выполнении, а не инструкция в wiki.</p>
+
+  <h3>GDPR: что следует для инженера</h3>
+  <table>
+    <tr><th>Норма</th><th>Решение в системе</th></tr>
+    <tr><td>Ст. 5(1)(a) законность, справедливость, прозрачность; ст. 6 правовые основания</td><td>Политика описывает логи и использование для улучшений; в UI видно, что отвечает ИИ</td></tr>
+    <tr><td>Ст. 5(1)(b) ограничение цели</td><td>Флаг «можно использовать для evals и обучения» на трассе; маховик берёт только помеченное</td></tr>
+    <tr><td>Ст. 5(1)(c) минимизация; (e) ограничение хранения</td><td>Сэмплирование и маскирование текстов, TTL по классам данных</td></tr>
+    <tr><td>Ст. 5(1)(d) точность; (f) целостность и конфиденциальность; ст. 32</td><td>Редактируемая память ассистента, <code>is_current</code> для документов; шифрование, роли, аудит, псевдонимизация</td></tr>
+    <tr><td>Ст. 5(2) подотчётность; ст. 30 реестр обработки</td><td>Журналы удаления, реестр мест хранения, system card</td></tr>
+    <tr><td>Ст. 15–22 права субъекта: доступ, удаление (17), переносимость (20), возражение (21), полностью автоматизированные решения (22)</td><td>Выгрузка и удаление скриптом; человек в контуре для значимых решений</td></tr>
+    <tr><td>Ст. 25 privacy by design; ст. 28 обработчик</td><td>Редакция по умолчанию, opt-in для хранения текстов; DPA с LLM-провайдером</td></tr>
+    <tr><td>Ст. 33 утечка — уведомить в течение 72 часов; ст. 35 DPIA</td><td>Алерты и runbook; для LLM-фич с персональными данными в масштабе DPIA ожидаема, её выводы — требования к архитектуре</td></tr>
+    <tr><td>Ст. 44–49 передача за пределы ЕС</td><td>Регион обработки у провайдера, договорные гарантии</td></tr>
+  </table>
+  <p>Псевдонимизированные данные по общему правилу персональные (recital 26). Суд ЕС в деле C-413/23 P (EDPS v SRB, 4 сентября 2025) уточнил, что для получателя, который не может вернуть личность, они могут не быть персональными; для вас, у кого ключ, — персональные. Поправки к определению персональных данных в Digital Omnibus по GDPR (COM(2025) 837) на октябрь 2026 года не приняты.</p>
+
+  <h3>152-ФЗ: что следует для инженера (по состоянию на октябрь 2026)</h3>
+  <table>
+    <tr><th>Норма</th><th>Суть</th><th>Решение в системе</th></tr>
+    <tr><td>Локализация, ч. 5 ст. 18 (с 1 июля 2025, 23-ФЗ)</td><td>При сборе персональных данных граждан РФ запись, хранение, уточнение и извлечение с использованием баз данных за пределами РФ не допускаются</td><td>Первичная БД пользователей и логов — в России; зарубежные LLM API, аналитика и SaaS-трейсинг — только после записи в неё и по ст. 12</td></tr>
+    <tr><td>Согласие, ст. 9 (с 1 сентября 2025, 156-ФЗ)</td><td>Согласие оформляется отдельно от иных документов, которые подписывает или подтверждает субъект</td><td>Отдельная форма, а не пункт оферты; в БД — версия текста и время; отзыв запускает уничтожение (30 дней, ч. 5 ст. 21)</td></tr>
+    <tr><td>Трансграничная передача, ст. 12</td><td>Уведомить РКН до начала передачи; в страны из перечня РКН — сразу, в остальные — не раньше чем через 10 рабочих дней; РКН может запретить передачу. С 26 июля 2026 (265-ФЗ) «адекватность» страны определяет перечень РКН, а не членство в Конвенции 108</td><td>Зарубежный LLM API с персональными данными — трансграничная передача: минимизация и псевдонимизация до отправки, провайдер за интерфейсом, чтобы переключиться на российского или self-hosted (модуль 10)</td></tr>
+    <tr><td>Уведомление об обработке, ст. 22</td><td>До начала обработки, включая место нахождения баз данных; с 30 мая 2025 штраф за неуведомление 100–300 тыс. ₽</td><td>Реестр мест хранения — и для уведомления, и для удаления</td></tr>
+    <tr><td>Утечка, ч. 3.1 ст. 21</td><td>В РКН за 24 часа (факт, причины, меры) и за 72 часа (итоги расследования)</td><td>Детект аномального доступа и runbook на часы, а не дни</td></tr>
+    <tr><td>Права субъекта, ст. 14, 16, 20, 21</td><td>Сведения об обработке — 10 рабочих дней (+5), исправление или уничтожение — 7; решения только на основе автоматизированной обработки — с письменного согласия или по закону (ст. 16)</td><td>Выгрузка и удаление скриптом; человек в контуре</td></tr>
+    <tr><td>Обезличивание, приказ РКН № 140 (с 1 сентября 2025)</td><td>Обезличенные данные остаются персональными. Методы: введение идентификаторов, изменение состава или семантики, перемешивание, декомпозиция; исходные данные, результат и ключ — раздельно</td><td>HMAC-псевдонимизация — по сути «введение идентификаторов»; ключ и vault в отдельном контуре</td></tr>
+  </table>
+  <p><b>Ответственность</b> с 30 мая 2025 (420-ФЗ): штрафы для юрлиц за утечку зависят от объёма — до 15 млн ₽, за биометрию до 20 млн ₽; за повторную утечку — 1–3% выручки, но не меньше 20–25 млн и не больше 500 млн ₽. За нарушение локализации — 1–6 млн ₽, повторно 6–18 млн ₽. С 11 декабря 2024 действует ст. 272.1 УК о незаконном использовании и передаче персональных данных, полученных незаконно. Отдельно: 26 июля 2026 принят Федеральный закон № 243-ФЗ о поддержке развития технологий ИИ (вступает в силу поэтапно с 1 сентября 2026). 152-ФЗ он не меняет, но вводит требования к «суверенным» и «национальным» моделям и позволяет правительству определить сферы, где допускаются только они. Если ваш продукт может оказаться в такой сфере, это ограничение на выбор модели.</p>
+  <div class="callout danger"><span class="title">Не юридическая консультация</span>Таблицы — карта инженерных последствий, а не толкование закона. Правовое основание, нужна ли DPIA, допустима ли передача провайдеру, что считается обезличиванием — решает юрист. Задача инженера — чтобы любое его решение реализовывалось конфигурацией: регион, срок хранения, редакция, отключение провайдера.</div>
+
+  <h2 id="eu-ai-act">EU AI Act</h2>
+  <p><b>EU AI Act</b> (Regulation (EU) 2024/1689) регулирует ИИ по уровням риска и действует экстерриториально: на всех, кто выводит AI-системы на рынок ЕС, и на провайдеров и эксплуатантов из третьих стран, если результат работы системы используется в ЕС (ст. 2). Российская компания с клиентами в ЕС под него попадает. Ниже — что закон требует и как это меняет архитектуру. <b>Применимость к конкретной системе определяет юрист</b>, урок не является юридической консультацией.</p>
+  <ul>
+    <li><b>Провайдер GPAI-модели</b> (general-purpose AI) — Anthropic, OpenAI, Mistral. Глава V: техническая документация, информация для интеграторов, политика по авторскому праву, публичное описание обучающих данных, для моделей с системным риском — оценка и снижение рисков. Вы становитесь провайдером GPAI, только если выпускаете свою модель общего назначения или значительно модифицируете чужую; по руководству Еврокомиссии обычный LoRA-тюнинг под узкую задачу к этому, как правило, не относится.</li>
+    <li><b>Провайдер AI-системы</b> (provider) разрабатывает систему и выводит её на рынок под своим именем: чат-бот поддержки на Claude, который вы даёте клиентам, — ваша AI-система.</li>
+    <li><b>Эксплуатант</b> (deployer) применяет систему под своей ответственностью: банк, внедривший чужой скоринг, или ваша компания со внутренним инструментом.</li>
+  </ul>
+
+  <h3>Даты (по состоянию на октябрь 2026)</h3>
+  <p>Сроки для high-risk систем перенёс <b>Digital Omnibus on AI</b>. Его предложили 19 ноября 2025 года (COM(2025) 836), политическое соглашение достигнуто 7 мая 2026 года. Итоговый текст — <b>Regulation (EU) 2026/1744 от 8 июля 2026 года</b>, опубликован в Official Journal 24 июля 2026 года, вступил в силу 27 июля 2026 года. В предложении начало high-risk требований зависело от готовности стандартов и имело крайние даты. В принятом тексте даты фиксированные: 2 декабря 2027 года для приложения III и 2 августа 2028 года для приложения I.</p>
+  <table>
+    <tr><th>Дата</th><th>Что применяется</th></tr>
+    <tr><td>1 августа 2024</td><td>Регламент вступил в силу</td></tr>
+    <tr><td>2 февраля 2025</td><td>Определения, AI literacy (ст. 4), запрещённые практики (ст. 5)</td></tr>
+    <tr><td>2 августа 2025</td><td>Обязательства провайдеров GPAI (глава V), органы надзора, санкции. Code of Practice для GPAI опубликован 10 июля 2025</td></tr>
+    <tr><td>2 августа 2026</td><td>Большая часть регламента, включая прозрачность по ст. 50; начало правоприменения; полномочия Еврокомиссии по GPAI и штрафы по ст. 101</td></tr>
+    <tr><td>2 декабря 2026</td><td>Новые запреты Omnibus: генерация интимных изображений людей без согласия и материалов сексуального насилия над детьми. Системы генерации, выпущенные до 2 августа 2026, выполняют ст. 50(2) к этой дате</td></tr>
+    <tr><td>2 августа 2027</td><td>GPAI-модели, выпущенные до 2 августа 2025, соответствуют главе V (ст. 111(3))</td></tr>
+    <tr><td>2 декабря 2027</td><td>High-risk системы из приложения III</td></tr>
+    <tr><td>2 августа 2028</td><td>High-risk системы из приложения I (компоненты безопасности продуктов под отраслевым регулированием)</td></tr>
+  </table>
+  <p>Ещё в Omnibus: обязанность по AI literacy (ст. 4) смягчена до «принимать меры для поддержки» грамотности персонала без гарантии уровня; новая ст. 4a разрешает обрабатывать особые категории данных для поиска смещений только при строгой необходимости; упрощения распространены на small mid-caps. Отдельный пакет поправок к GDPR (COM(2025) 837) на октябрь 2026 года не принят.</p>
+
+  <h3>Категории риска</h3>
+  <table>
+    <tr><th>Категория</th><th>Что это</th><th>Последствия</th></tr>
+    <tr><td><b>Запрещённые</b> (ст. 5)</td><td>Вредоносная манипуляция и эксплуатация уязвимостей; социальный скоринг; прогноз преступлений только по профилированию; массовый сбор изображений лиц; распознавание эмоций на работе и в учёбе (кроме медицины и безопасности); биометрическая категоризация по чувствительным признакам; удалённая биометрическая идентификация в реальном времени для правоохранительных целей (с узкими исключениями); со 2 декабря 2026 — интимный контент без согласия и CSAM</td><td>Выпускать нельзя; штраф до 35 млн € или 7% мирового оборота</td></tr>
+    <tr><td><b>Высокий риск</b> (ст. 6)</td><td>Компонент безопасности продукта (приложение I) или одна из 8 областей приложения III: биометрия, критическая инфраструктура, образование, занятость, доступ к важным услугам (кредитный скоринг, страхование жизни и здоровья, льготы, экстренные вызовы), правоохрана, миграция, правосудие и выборы</td><td>Требования ниже, оценка соответствия, регистрация в базе ЕС; штраф до 15 млн € или 3%</td></tr>
+    <tr><td><b>Прозрачность</b> (ст. 50)</td><td>(1) общение с людьми; (2) генерация синтетического контента; (3) распознавание эмоций, биометрическая категоризация; (4) дипфейки и сгенерированный текст на общественно значимые темы без редактора</td><td>(1) сообщить, что это ИИ, если неочевидно; (2) машиночитаемая маркировка — обязанности провайдера; (3), (4) уведомлять и раскрывать — обязанности эксплуатанта</td></tr>
+    <tr><td><b>Минимальный</b></td><td>Кодинг-ассистент, внутренний поиск, спам-фильтр</td><td>Меры по AI literacy (ст. 4), добровольные кодексы</td></tr>
+  </table>
+  <p>Категории совмещаются: high-risk система, которая общается с людьми, выполняет и ст. 50. Для приложения III есть исключение <b>ст. 6(3)</b>: система не high-risk, если не создаёт значительного риска и выполняет узкую процедурную или подготовительную задачу, улучшает результат уже завершённой работы человека или ищет отклонения от прежних решений, не заменяя оценку человека. Исключение не работает при профилировании людей. Провайдер, который на него опирается, документирует оценку (ст. 6(4)) и регистрирует систему.</p>
+  <h3>Как определить категорию своей фичи</h3>
+  <ol>
+    <li><b>Сфера</b>: есть ли пользователи или результаты работы системы в ЕС?</li>
+    <li><b>Роль</b>: провайдер системы, эксплуатант или провайдер GPAI-модели?</li>
+    <li><b>Ст. 5</b>: нет ли запрещённой практики в назначении или в разумно предсказуемом злоупотреблении?</li>
+    <li><b>High-risk</b>: относится ли назначение (intended purpose) к пункту приложения III или к приложению I? Если да — работает ли ст. 6(3), нет ли профилирования?</li>
+    <li><b>Ст. 50</b>: общение с людьми, генерация контента, эмоции, дипфейки?</li>
+    <li><b>Запишите</b> вывод со ссылками на статьи и отдайте юристу. Пересматривайте при смене назначения: «добавим скоринг кандидатов» делает HR-чат-бот high-risk.</li>
+  </ol>
+
+  <div class="viz" id="viz-aiact">
+    <p class="viz-title">Классификатор категории по EU AI Act</p>
+    <p class="viz-sub">Опишите фичу, и схема покажет вероятную категорию, статьи и инженерные последствия. Учебная эвристика по тексту регламента с поправками Regulation (EU) 2026/1744, по состоянию на октябрь 2026. <b>Не юридическая консультация</b>: окончательный вывод делает юрист.</p>
+    <div class="ai-q" id="ai-q">
+      <fieldset><legend>Контекст</legend>
+        <label class="sel">Связь с ЕС <select id="ai-eu"><option value="eu">есть пользователи или результаты в ЕС</option><option value="no">нет: ни пользователей, ни результатов в ЕС</option></select></label>
+        <label class="sel">Ваша роль <select id="ai-role"><option value="provider">выпускаем систему под своим именем (на чужой модели)</option><option value="deployer">используем чужую систему в своей организации</option><option value="gpai">обучаем или существенно меняем модель общего назначения</option></select></label>
+        <label class="sel">Область применения <select id="ai-area">
+          <option value="support">поддержка клиентов, поиск по документации</option>
+          <option value="content">генерация маркетингового контента</option>
+          <option value="code">ассистент разработчика</option>
+          <option value="hr">найм и управление персоналом</option>
+          <option value="credit">кредитоспособность физлиц, скоринг</option>
+          <option value="insurance">страхование жизни и здоровья: риск и цена</option>
+          <option value="edu">образование: зачисление, оценки, прокторинг</option>
+          <option value="public">доступ к госуслугам и социальным льготам</option>
+          <option value="emergency">сортировка экстренных вызовов</option>
+          <option value="infra">критическая инфраструктура</option>
+          <option value="law">правоохранительные органы, миграция, правосудие, выборы</option>
+          <option value="biometric">удалённая биометрическая идентификация</option>
+          <option value="product">компонент безопасности продукта (медизделие, машина, игрушка)</option>
+        </select></label>
+        <label class="sel">Роль в решениях о людях <select id="ai-dec">
+          <option value="none">не участвует в решениях о людях</option>
+          <option value="prep">подготовительная или узкая процедурная задача</option>
+          <option value="improve">улучшает уже готовый результат человека</option>
+          <option value="patterns">ищет отклонения от прежних решений, не заменяя человека</option>
+          <option value="recommend">рекомендует, решение принимает человек</option>
+          <option value="auto">решает автоматически</option>
+        </select></label>
+      </fieldset>
+      <fieldset><legend>Что делает система</legend>
+        <label><input type="checkbox" data-f="chat" checked> общается с людьми напрямую (чат, голос)</label>
+        <label><input type="checkbox" data-f="gen"> генерирует текст, изображения, аудио или видео</label>
+        <label><input type="checkbox" data-f="deepfake"> создаёт реалистичные изображения, видео или голос реальных людей</label>
+        <label><input type="checkbox" data-f="pubtext"> публикует сгенерированные тексты на общественно значимые темы без редактора</label>
+        <label><input type="checkbox" data-f="emotion"> распознаёт эмоции</label>
+        <label><input type="checkbox" data-f="profiling"> профилирует людей: оценивает личность, поведение, надёжность</label>
+        <label><input type="checkbox" data-f="manip"> использует манипулятивные техники или уязвимости, ведёт социальный скоринг</label>
+        <label><input type="checkbox" data-f="intimate"> может без надёжных защит генерировать интимные изображения реальных людей</label>
+      </fieldset>
+    </div>
+    <div class="ai-out">
+      <svg id="ai-svg" viewBox="0 0 260 230" role="img" aria-label="Пирамида рисков EU AI Act"></svg>
+      <ul class="ai-list" id="ai-list"></ul>
+    </div>
+    <div class="readout" id="ai-readout"></div>
+  </div>
+
+  <h3>Что меняется в архитектуре</h3>
+  <table>
+    <tr><th>Требование</th><th>Статья</th><th>Инженерное решение</th></tr>
+    <tr><td><b>Логирование</b></td><td>12; хранение не меньше 6 месяцев — 19 (провайдер), 26(6) (эксплуатант)</td><td>Append-only журнал событий: время, ссылка на вход, версии модели, промпта и индекса, выход, действие человека, <code>trace_id</code>. Тексты — редактированные, чтобы не спорить с ограничением хранения по GDPR</td></tr>
+    <tr><td><b>Документация</b></td><td>11, приложение IV</td><td>System card, журнал изменений, отчёты evals и red-team (урок «Документация системы»)</td></tr>
+    <tr><td><b>Human oversight</b></td><td>14</td><td>Человек видит источники и уверенность, может отклонить или переопределить результат и остановить систему (kill switch, фича-флаг); UI против automation bias</td></tr>
+    <tr><td><b>Точность и устойчивость</b></td><td>15</td><td>Заявленные метрики из evals (модуль 8), red-team и защита от инъекций и отравления (<a href="m07.html#redteam">модуль 7</a>), fallback (модуль 9)</td></tr>
+    <tr><td><b>Data governance</b></td><td>10, 4a</td><td>Datasheet, происхождение и версии данных, проверка смещений по группам</td></tr>
+    <tr><td><b>Риски и качество</b></td><td>9, 17</td><td>Реестр рисков; eval-гейт и ADR с документированием</td></tr>
+    <tr><td><b>Мониторинг и инциденты</b></td><td>72, 73</td><td>Дашборд качества и дрейфа (модуль 9), маховик фидбека, уведомление о серьёзном инциденте не позднее 15 дней</td></tr>
+    <tr><td><b>Прозрачность</b></td><td>50</td><td>«Вы общаетесь с ИИ-ассистентом» в UI и в начале звонка; машиночитаемая маркировка контента. Детали — в итоговом Code of Practice по маркировке (июнь 2026) и руководстве Еврокомиссии по ст. 50 (июль 2026)</td></tr>
+  </table>
+  <div class="callout go"><span class="title">Аналогия из Go</span>Классификация по AI Act похожа на выбор уровня изоляции транзакций: решение принимается по требованиям до кода, а менять его потом дорого. Если фича потенциально high-risk, закладывайте журнал событий, точки human oversight и версии данных с первого дня. Переделка готовой системы под ст. 12 и 14 — это миграция схемы на живом трафике.</div>
+
+  <h2 id="docs">Документация системы</h2>
+  <p>Документация AI-системы отвечает на вопросы аудитора, юриста, дежурного и enterprise-клиента: что система делает и чего не делает, на каких данных и моделях работает, как её проверяли и с каким результатом, кто и как может её остановить. Если ответы собирают по Slack, документации нет.</p>
+  <table>
+    <tr><th>Документ</th><th>О чём</th><th>Кто пишет и когда обновляет</th></tr>
+    <tr><td><b>Model card</b> (Mitchell et al., 2019)</td><td>Модель: назначение, данные обучения, метрики по срезам и группам, ограничения</td><td>Кто обучает или дообучает модель (<a href="m10.html">модуль 10</a>); для API-модели — ссылка на карточку провайдера</td></tr>
+    <tr><td><b>System card</b></td><td>Система целиком: назначение, пользователи, архитектура, модели, данные, evals и red-team, ограничения, guardrails, oversight, мониторинг</td><td>Команда фичи, с каждым релизом, меняющим модель, промпт, данные или назначение</td></tr>
+    <tr><td><b>Datasheet</b> для датасета (Gebru et al., 2018)</td><td>Мотивация, состав, сбор и согласие, предобработка (PII, дедуп), допустимое использование, сопровождение</td><td>Владелец golden set, обучающего набора или корпуса</td></tr>
+    <tr><td><b>Реестр промптов и моделей</b></td><td>Что активно в проде: версия и хэш, модель, параметры, владелец, прогон evals, дата вывода модели у провайдера</td><td>Генерируется из конфигурации (<a href="m03.html#versioning">модуль 3</a>)</td></tr>
+    <tr><td><b>Журнал изменений</b></td><td>Кто, когда, что и зачем поменял, со ссылкой на PR и evals</td><td>Из PR и деплоев; крупные решения — ADR (<a href="m13.html#adr">модуль 13</a>)</td></tr>
+  </table>
+  <p>Техническая документация high-risk системы по AI Act (ст. 11, приложение IV) — по сути подробная system card с журналом изменений; реестр обработки (ст. 30 GDPR) и DPIA ссылаются на datasheet; анкеты безопасности enterprise-клиентов спрашивают то же самое.</p>
+  <h3>Docs as code</h3>
+  <ul>
+    <li><b>В репозитории</b>, ревью в одном PR с изменением поведения.</li>
+    <li><b>Генерируемые поля не пишутся руками</b>: версии — из реестра, метрики — из прогона evals; CI падает, если system card расходится с конфигурацией деплоя.</li>
+    <li><b>Ограничения — конкретные</b>: не «модель может ошибаться», а «на вопросах по таблицам тарифов accuracy 81% против 93% в среднем; ответы без цитаты помечаются в UI».</li>
+  </ul>
+  <pre><code class="lang-yaml"># docs/system-card.yaml — система из проекта A; поля с пометкой generated заполняет CI
+system: docrag-ask
+version: 2026.10.2
+owner: team-support-ai (on-call: #support-ai-oncall)
+purpose: ответы на вопросы сотрудников поддержки по внутренней базе знаний, с цитатами
+users: сотрудники поддержки (≈ 300), не клиенты; ответ — подсказка, решение принимает оператор
+out_of_scope: юридические и медицинские консультации, решения о возвратах, ответы клиентам без проверки
+ai_act:                      # оценка команды, утверждена юристом 2026-09-20
+  category: transparency     # ст. 50(1): UI сообщает, что отвечает ИИ
+  annex_iii: none            # не HR, не кредит, не доступ к услугам
+  rationale: docs/compliance/ai-act-assessment.md
+models:                      # generated: из реестра
+  answer: {model: claude-sonnet-5, prompt: answer@v7+3f9a1c2b, effort: low}
+  rerank: {model: claude-haiku-4-5, prompt: rerank@v2+9e01d4aa}
+data:
+  corpus: confluence:SUPPORT, confluence:BILLING; snapshot 2026-09-28; parser docling 2.135.0
+  pii: редакция до индексации и логов (examples/m11-data); vault не используется
+  datasheet: docs/datasheets/corpus.md
+evals:                       # generated: последний прогон CI
+  golden: docrag-golden@2026-10-01.3 (n=186)
+  recall_at_5: 0.86
+  faithfulness: 0.94
+  answer_accuracy: {overall: 0.91, table_questions: 0.81, no_answer: 0.88}
+  red_team: 42 атаки, успешных 1 (ASR 2.4%), модуль 7
+limitations:
+  - вопросы по таблицам тарифов: accuracy 0.81, в UI пометка «проверьте по источнику»
+  - документы старше 2024 года не проиндексированы
+oversight: оператор видит источники и может пометить ответ; kill switch — флаг docrag.enabled
+monitoring: дашборд качества (judge на 2% трафика), 👎-очередь, SLO из модуля 9
+logs: метаданные 13 мес., тексты 30 дней (маскированные), удаление по запросу — runbook docs/dsar.md
+changelog: docs/changelog.md</code></pre>
+  <div class="callout tip"><span class="title">Как это звучит на собеседовании</span>«Документацию мы не пишем отдельно — она собирается из того, что уже есть: реестр промптов даёт версии, CI даёт метрики, ADR дают решения. Руками пишутся только назначение, ограничения и oversight, и они ревьюятся в том же PR, что и изменение поведения».</div>
+
+  <h2 id="practice">Практика</h2>
+  <p>Задания продолжают сквозные проекты: A — RAG по документации, B — eval-набор и CI. Вы улучшаете свою систему, а не решаете отдельные задачки.</p>
+  <div class="task">
+    <h3>Задание 1: ingestion-пайплайн проекта A с PII и дедупликацией</h3>
+    <p>Добавьте в <code>cmd/ingest</code> проекта A парсинг PDF (Python-воркер), структурный чанкинг, PII-редакцию, дедупликацию и метаданные из урока. Корпус: 5–10 PDF, среди них скан, документ с таблицей и две версии одного документа.</p>
+    <ul>
+      <li>Отчёт парсинга на каждый документ; скан без OCR даёт предупреждение, а не молча 0 чанков.</li>
+      <li>Табличный тест: ни одна таблица и ни один код-блок не разрезаны; у каждого чанка есть путь заголовков.</li>
+      <li>PII: на 30 синтетических сообщениях полнота редакции структурных PII ≥ 95%, ни одна валидная карта не попала в индекс и логи (проверка запросом к БД); посчитаны ложные срабатывания на номерах заказов.</li>
+      <li>Отчёт «точные / почти-дубли»; старая версия документа не находится поиском; чанки разных тенантов не склеиваются.</li>
+      <li>ACL: интеграционный тест — пользователь без группы не получает чанк документа ни в <code>/search</code>, ни в цитатах <code>/ask</code>.</li>
+      <li>Recall@5 на golden set проекта B не хуже, чем до; табличные вопросы — отдельным срезом.</li>
+    </ul>
+    <label class="check"><input type="checkbox" data-save="m11-t1"> Сделал, отчёт парсинга и тесты в репозитории</label>
+  </div>
+  <div class="task">
+    <h3>Задание 2: версии корпуса и golden set</h3>
+    <p>Заведите манифест golden set проекта B (как в уроке) и снапшот корпуса: git + манифест с sha256 или DVC. Прогон evals пишет в отчёт версии golden set, корпуса, парсера, эмбеддинг-модели и промпта.</p>
+    <ul>
+      <li>По тегу трёхнедельной давности можно воспроизвести тот прогон и получить те же метрики (с допуском на недетерминизм модели).</li>
+      <li>CI падает, если файл golden set изменён без обновления версии в манифесте (sha256 не совпадает).</li>
+      <li>Гайдлайн разметки лежит в репозитории с версией; κ на 30 перекрёстно размеченных кейсах посчитан (модуль 8).</li>
+    </ul>
+    <label class="check"><input type="checkbox" data-save="m11-t2"> Сделал, старый прогон воспроизводится</label>
+  </div>
+  <div class="task">
+    <h3>Задание 3: маховик — фидбек из прода в golden set</h3>
+    <p>Добавьте в <code>/ask</code> 👍/👎 с комментарием и таблицу <code>feedback</code>. Еженедельный скрипт: неразобранные 👎 и случайная выборка → PII-редакция → очередь разметки → кейсы golden set с тегом <code>source: prod</code>. Нет пользователей — 200 запросов от коллег или синтетики с вашими оценками.</p>
+    <ul>
+      <li>Минимум 10 новых кейсов в golden set пришли из «прода», и по каждому записан исход: golden_case, doc_fix, prompt_fix или not_a_bug.</li>
+      <li>Посчитаны время цикла (от 👎 до кейса в CI) и бэклог разбора; в README есть мини-дашборд или таблица.</li>
+      <li>Хотя бы один кейс сначала падал в CI, а после исправления (документа, промпта, чанкинга) стал проходить.</li>
+    </ul>
+    <label class="check"><input type="checkbox" data-save="m11-t3"> Сделал, маховик провернулся хотя бы один раз</label>
+  </div>
+  <div class="task">
+    <h3>Задание 4: EU AI Act, логи и system card</h3>
+    <p>Классифицируйте две фичи: <code>/ask</code> из проекта A и гипотетическую «оценку резюме кандидатов по базе вакансий». Для каждой пройдите классификатор из урока и выпишите статьи, на которые опирается вывод. Затем напишите для проекта A system card (YAML или markdown) и политику хранения логов.</p>
+    <ul>
+      <li>По каждой фиче: роль (provider или deployer), проверка запрещённых практик, приложение III (пункт или «нет»), ст. 6(3), обязательства ст. 50, перечень архитектурных последствий. В конце — пометка «требует проверки юристом».</li>
+      <li>System card: все поля из урока заполнены, метрики взяты из последнего прогона CI, ограничения сформулированы цифрами.</li>
+      <li>Политика логов: таблица «класс данных → что храним → срок → кто имеет доступ». Скрипт удаления по запросу пользователя чистит логи, трейсы, feedback и golden set, и это проверено на тестовом пользователе.</li>
+    </ul>
+    <label class="check"><input type="checkbox" data-save="m11-t4"> Сделал, system card и политика в репозитории</label>
+  </div>
+
+  <h2 id="selfcheck">Самопроверка</h2>
+  <details class="q"><summary>Почему документ-скан опасен для RAG, даже если парсер не выдал ошибку?</summary><div class="a"><p>Без текстового слоя парсер возвращает пустой текст, документ даёт 0 чанков и молча выпадает из индекса; ошибки в логах нет. Защита — OCR для страниц без текста и алерт отчёта парсинга на «мало символов на страницу».</p></div></details>
+  <details class="q"><summary>Как положить в индекс таблицу на 300 строк?</summary><div class="a"><p>Группами строк с шапкой в каждом чанке или построчно «колонка: значение». Справочник с точными значениями лучше положить в SQL и дать модели инструмент поиска.</p></div></details>
+  <details class="q"><summary>Чем SimHash отличается от MinHash и зачем SimHash режут на блоки?</summary><div class="a"><p>MinHash оценивает сходство Жаккара шинглов набором минимальных хэшей, кандидатов ищут LSH-корзинами. SimHash сжимает документ в 64-битный отпечаток, похожие тексты близки по Хэммингу. Блоки избавляют от полного перебора: при расстоянии ≤ 3 хотя бы один из четырёх 16-битных блоков совпадает.</p></div></details>
+  <details class="q"><summary>Почему дедупликацию нельзя делать глобально по всему индексу?</summary><div class="a"><p>Одинаковый текст у разных тенантов или групп доступа — это разные документы. Удалив «дубль», вы лишите второго тенанта документа, а склеив ACL — откроете ему чужие данные. Ключ дедупликации включает область доступа.</p></div></details>
+  <details class="q"><summary>Номер заказа из 10 цифр прошёл проверку ИНН. Это баг детектора?</summary><div class="a"><p>Нет, это ожидаемое свойство: у ИНН одна контрольная цифра, и случайное число проходит проверку примерно в одном случае из десяти. Контрольная сумма снижает ложные срабатывания, но не убирает их. Помогают контекстные слова («ИНН» рядом), знание формата ваших номеров заказов и измерение точности на размеченной выборке.</p></div></details>
+  <details class="q"><summary>Чем детерминированная псевдонимизация лучше маскирования и в чём её риск?</summary><div class="a"><p>Одно значение всегда даёт один токен, поэтому сохраняются связность и аналитика: можно посчитать обращения одного клиента, не видя его телефона. Риски: это всё ещё персональные данные (по GDPR псевдонимизированные данные остаются персональными), ключ HMAC — секрет, утечка которого позволяет перебором сопоставить токены с известными значениями, а ротация ключа рвёт связность.</p></div></details>
+  <details class="q"><summary>Где в LLM-системе нужно редактировать PII? Назовите минимум четыре точки.</summary><div class="a"><p>До индексации (или ACL и решение не индексировать), до логов и трейсов, до отправки внешнему провайдеру (если договор или закон не позволяют передачу), до разметки и evals, до обучения, на выходе модели.</p></div></details>
+  <details class="q"><summary>Что должно входить в версию данных, по которой посчитана метрика RAG?</summary><div class="a"><p>Ревизии исходных документов, версия парсера, чанкер и его параметры, эмбеддинг-модель, версия golden set и гайдлайна разметки. Обновление парсера — это новая версия корпуса и повод прогнать evals.</p></div></details>
+  <details class="q"><summary>Почему golden set нельзя пополнять только из 👎?</summary><div class="a"><p>Явный фидбек редкий и смещённый: оценки оставляют недовольные и определённые сегменты пользователей. Набор только из жалоб завышает долю трудных случаев и не отражает реальное распределение. Нужна случайная выборка трафика для честной оценки и активная — для поиска ошибок.</p></div></details>
+  <details class="q"><summary>Какая метрика лучше всего показывает, что маховик данных работает?</summary><div class="a"><p>Время цикла: сколько дней проходит от 👎 в проде до регрессионного кейса в CI. Дополнительно — бэклог разметки, прирост и покрытие golden set по кластерам прод-запросов, доля повторяющихся ошибок.</p></div></details>
+  <details class="q"><summary>Что изменил Digital Omnibus on AI в датах для high-risk систем и каков его статус?</summary><div class="a"><p>Принят: Regulation (EU) 2026/1744 от 8 июля 2026 года, в силе с 27 июля 2026 года. Требования к high-risk системам из приложения III применяются со 2 декабря 2027 года, из приложения I — со 2 августа 2028 года. В принятом тексте даты фиксированные, без привязки к готовности стандартов, как было в предложении. Прозрачность по ст. 50 — со 2 августа 2026 года, для систем генерации, выпущенных раньше, 50(2) — до 2 декабря 2026 года.</p></div></details>
+  <details class="q"><summary>Какие нормы 152-ФЗ затрагивает отправка запросов российских пользователей в зарубежный LLM API?</summary><div class="a"><p>Локализация (ч. 5 ст. 18): первичная запись и хранение — в базе в России. Трансграничная передача (ст. 12): уведомление Роскомнадзора до начала передачи и ожидание, если страна не в перечне. Правовое основание и согласие (ст. 6, 9), поручение обработки иностранному лицу (ст. 6). Инженерно: минимизация и псевдонимизация до отправки, провайдер за интерфейсом с возможностью переключения. Окончательно применимость оценивает юрист.</p></div></details>
+
+  <h2 id="interview">Вопросы с собеседований</h2>
+  <details class="q interview"><summary>Спроектируйте ingestion для 2 млн корпоративных PDF: сканы, таблицы, права доступа, документы обновляются.</summary><div class="a"><p>Очередь и идемпотентные воркеры с ключом <code>(doc_id, revision)</code>; неизменившийся по хэшу документ не обрабатывается повторно. Маршрутизация по страницам: текстовый слой → layout-парсер (self-hosted, если документы нельзя отдавать наружу), страницы без текста → OCR, сложные таблицы и графики → VLM только там, где важны цифры, со сверкой по текстовому слою. Выход — markdown или JSON со структурой, чанкинг по заголовкам, таблицы не режутся. Метаданные: источник, ревизия, страницы, язык, версия парсера, ACL из источника с отдельной частой синхронизацией и deny by default. PII-редакция и дедупликация внутри области доступа, старые версии <code>is_current = false</code>, удалённые в источнике — tombstone. Наблюдаемость: отчёт парсинга на документ, доля OCR, документы с нулём чанков, стоимость страницы; качество — golden-вопросы по типам документов и recall@k до и после смены парсера.</p><p><b>На что смотрит интервьюер:</b> маршрутизация по стоимости вместо «прогоним всё через самую сильную VLM», ACL и удаление как часть ingestion, наблюдаемость тихих поломок, инкрементальность.</p></div></details>
+  <details class="q interview"><summary>Банковский чат-бот на внешнем LLM API. Как организуете работу с PII?</summary><div class="a"><p>Сначала требования: что можно передавать провайдеру по договору и закону, регион, zero data retention. Детекторы на входе: регэкспы с контрольными суммами (карты, счета, ИНН, СНИЛС) и NER для имён и адресов. Для провайдера — обратимая псевдонимизация: модель видит токены, приложение подставляет значения в ответ, vault отдельно и с коротким сроком жизни. В логах — необратимое маскирование до выхода из периметра, HMAC вместо id. На выходе — детектор PII. Полноту детекторов меряю на синтетических диалогах в CI. Реквизиты для операций вообще не идут через LLM: инструмент берёт их из сессии, а не из промпта.</p><p><b>На что смотрит интервьюер:</b> различает маскирование и обратимую псевдонимизацию, меряет полноту, не шлёт PII провайдеру ради поиска PII, держит реквизиты вне промпта.</p></div></details>
+  <details class="q interview"><summary>Пользователь требует удалить все свои данные. Что это значит для LLM-системы?</summary><div class="a"><p>Нужен реестр мест хранения с ключом поиска: прод-БД, логи, трейсы и фидбек (HMAC), векторный индекс, если индексируется пользовательский контент (<code>owner_id</code>), кэши ответов, golden set и очереди разметки (ссылка на трассу), выгрузки подрядчикам, бэкапы (crypto-shredding), логи провайдера (договор). Дообученную модель точечно не почистить, поэтому сырые персональные данные в обучение не попадают — это решается заранее. Удаление — скрипт с тестом на синтетическом пользователе и отчётом; сроки задаёт закон, значит, процесс автоматизирован.</p><p><b>На что смотрит интервьюер:</b> неочевидные места (индекс, golden set, кэш, бэкапы, провайдер) и понимание, что модель нельзя «разучить».</p></div></details>
+  <details class="q interview"><summary>Как построить data flywheel для RAG-ассистента, который только что запустился?</summary><div class="a"><p>Инструментирование: трасса с версиями, найденные чанки, явный фидбек с комментарием и неявные сигналы. Отбор на разбор: все 👎 и эскалации, случайная выборка около 1% для честной оценки, активная — неуверенные ответы и новые кластеры. PII-редакция перед очередью. Еженедельный error analysis, у каждого исхода владелец: кейс в golden set, задача владельцу базы знаний, правка промпта. Релиз через eval-гейт, новый кейс сначала падает, потом проходит. Метрики: время цикла от 👎 до кейса в CI, бэклог, покрытие прод-кластеров, повторяемость ошибок. Узкое место почти всегда разметка: приоритизация по цене ошибки и первичная сортировка judge-моделью.</p><p><b>На что смотрит интервьюер:</b> замкнутость цикла, понимание смещения явного фидбека, метрика скорости, а не «собираем лайки».</p></div></details>
+  <details class="q interview"><summary>Как вы определите, подпадает ли фича под high-risk по EU AI Act, и что это изменит в архитектуре?</summary><div class="a"><p>Начинаю с назначения (intended purpose) и роли: провайдер системы или эксплуатант. Проверяю ст. 5, затем приложение III: важна не отрасль, а использование — отбор резюме (п. 4) да, FAQ-бот для кандидатов, скорее всего, нет. Если попадаем — исключение ст. 6(3) (узкая процедурная или подготовительная задача, без профилирования) с документированной оценкой. Параллельно ст. 50 с 2 августа 2026. High-risk из приложения III применяется со 2 декабря 2027 (Regulation (EU) 2026/1744). Архитектура: append-only журнал событий с версиями и решениями человека, хранение не меньше 6 месяцев; human oversight в UI (источники, отклонить, остановить); техническая документация; datasheet и проверка смещений; заявленная точность из evals и red-team; мониторинг и процесс уведомления об инцидентах. Окончательную классификацию подтверждает юрист.</p><p><b>На что смотрит интервьюер:</b> знает структуру закона и актуальные даты, разделяет роли, переводит статьи в компоненты системы, не выдаёт себя за юриста.</p></div></details>
+  <details class="q interview"><summary>Recall@5 упал с 0.86 до 0.79 после «обновления корпуса». Как найдёте причину?</summary><div class="a"><p>Проверяю сопоставимость: та же версия golden set, эмбеддинг-модель и код поиска. Затем дифф данных: какие документы добавились, исчезли, изменились; сменилась ли версия парсера; сколько документов дали 0 чанков; как изменились длины чанков и число таблиц. Срезы метрики: упали «табличные» вопросы — парсер или чанкинг таблиц; вопросы по конкретным документам — их выпадение или новые версии рядом со старыми; всё равномерно — эмбеддинги или дубли, вытесняющие полезное из top-k. По каждому упавшему кейсу смотрю, куда делся нужный чанк. Вывод для процесса: обновление корпуса — релиз с прогоном evals.</p><p><b>На что смотрит интервьюер:</b> версии и lineage данных как инструмент отладки, срезы, системный поиск причины вместо «поменяем размер чанка».</p></div></details>
+  <details class="q interview"><summary>Согласие разметчиков κ = 0.4. Что будете делать?</summary><div class="a"><p>На таких метках нельзя ни калибровать judge, ни обучать. Разбираю расхождения: где и почему спорят. Обычно виноват гайдлайн — размытое определение, нет правил для пограничных случаев, нет «не могу оценить». Переписываю с деревом решений и примерами, составной критерий дроблю на бинарные. Повторная перекрёстная разметка на 30–50 кейсах, арбитраж эксперта, контрольные задания в потоке. Гайдлайн версионирую и пересматриваю метки, затронутые изменением.</p><p><b>На что смотрит интервьюер:</b> лечит инструкцию, а не людей; знает, что judge не согласуется с людьми лучше, чем люди между собой (модуль 8).</p></div></details>
+  <details class="q interview"><summary>Российский продукт хочет перейти на зарубежный LLM API. Какие инженерные последствия по 152-ФЗ вы назовёте?</summary><div class="a"><p>Персональные данные в запросах — трансграничная передача (ст. 12): уведомление Роскомнадзора до начала, для стран вне перечня РКН — ожидание 10 рабочих дней, риск запрета. Локализация (ч. 5 ст. 18) — отдельное требование: первичная запись и хранение в базе в России, поэтому история диалогов и логи живут у нас, а провайдер получает только текущий запрос. Архитектурно: минимизация контекста и псевдонимизация перед отправкой, маршрутизация по классу данных (чувствительное — на self-hosted или российского провайдера), провайдер за интерфейсом шлюза для переключения конфигурацией, реестр мест хранения для уведомления по ст. 22 и удаления. Плюс проверить 243-ФЗ: не попадает ли продукт в сферы, где допустимы только российские модели. Правовую оценку делает юрист.</p><p><b>На что смотрит интервьюер:</b> различает локализацию и трансграничную передачу, предлагает переключаемого провайдера и минимизацию, а не «запретим всё» или «отправим как есть».</p></div></details>
+
+  <h2 id="links">Источники</h2>
+  <ul>
+    <li><a href="https://eur-lex.europa.eu/eli/reg/2024/1689/oj/eng" target="_blank" rel="noopener">EUR-Lex — Regulation (EU) 2024/1689 (AI Act)</a> (ст. 2–6, 9–15, 19, 26, 27, 49, 50, 72, 73, 99, 101, 113, приложения I, III, IV)</li>
+    <li><a href="https://eur-lex.europa.eu/eli/reg/2026/1744/oj/eng" target="_blank" rel="noopener">EUR-Lex — Regulation (EU) 2026/1744 (Digital Omnibus on AI)</a> (новые даты high-risk, запреты с 2 декабря 2026, ст. 4 и 4a) и <a href="https://digital-strategy.ec.europa.eu/en/news/ai-omnibus-enters-force" target="_blank" rel="noopener">новость Еврокомиссии о вступлении в силу</a></li>
+    <li><a href="https://ai-act-service-desk.ec.europa.eu/en/ai-act/timeline/timeline-implementation-eu-ai-act" target="_blank" rel="noopener">AI Act Service Desk — timeline of implementation</a> (сводный календарь с поправками Omnibus) и <a href="https://digital-strategy.ec.europa.eu/en/policies/regulatory-framework-ai" target="_blank" rel="noopener">страница Еврокомиссии об AI Act</a></li>
+    <li><a href="https://digital-strategy.ec.europa.eu/en/news/general-purpose-ai-code-practice-now-available" target="_blank" rel="noopener">European Commission — General-Purpose AI Code of Practice</a> и <a href="https://digital-strategy.ec.europa.eu/en/policies/guidelines-gpai-providers" target="_blank" rel="noopener">руководство для провайдеров GPAI</a></li>
+    <li><a href="https://digital-strategy.ec.europa.eu/en/policies/code-practice-ai-generated-content" target="_blank" rel="noopener">European Commission — Code of Practice on marking and labelling of AI-generated content</a> и <a href="https://digital-strategy.ec.europa.eu/en/news/commission-publishes-guidelines-transparency-obligations-providers-and-deployers-certain-ai-systems" target="_blank" rel="noopener">руководство по ст. 50</a></li>
+    <li><a href="https://eur-lex.europa.eu/eli/reg/2016/679/oj/eng" target="_blank" rel="noopener">EUR-Lex — Regulation (EU) 2016/679 (GDPR)</a> (ст. 4(5), 5, 6, 15–22, 25, 28, 30, 32, 33, 35, 44–49, recital 26)</li>
+    <li><a href="https://curia.europa.eu/jcms/upload/docs/application/pdf/2025-09/cp250107en.pdf" target="_blank" rel="noopener">Суд ЕС — C-413/23 P EDPS v SRB, пресс-релиз 107/25</a> (псевдонимизированные данные с точки зрения получателя)</li>
+    <li><a href="https://www.consultant.ru/document/cons_doc_LAW_61801/" target="_blank" rel="noopener">КонсультантПлюс — Федеральный закон от 27.07.2006 № 152-ФЗ «О персональных данных»</a> (ст. 3, 6, 9, 12, 14, 16, 18, 20–22, актуальная редакция) и <a href="https://www.consultant.ru/document/cons_doc_LAW_34661/1f421640c6775ff67079ebde06a7d2f6d17b96db/" target="_blank" rel="noopener">ст. 13.11 КоАП РФ</a> (штрафы)</li>
+    <li><a href="http://publication.pravo.gov.ru/document/0001202502280034" target="_blank" rel="noopener">Федеральный закон от 28.02.2025 № 23-ФЗ</a> (локализация), <a href="http://publication.pravo.gov.ru/document/0001202607260024" target="_blank" rel="noopener">от 26.07.2026 № 265-ФЗ</a> (трансграничная передача) и <a href="http://publication.pravo.gov.ru/document/0001202607260003" target="_blank" rel="noopener">от 26.07.2026 № 243-ФЗ</a> (технологии ИИ) — официальное опубликование</li>
+    <li><a href="https://github.com/docling-project/docling" target="_blank" rel="noopener">Docling</a> и <a href="https://arxiv.org/abs/2408.09869" target="_blank" rel="noopener">Docling Technical Report</a>; <a href="https://huggingface.co/ibm-granite/granite-docling-258M" target="_blank" rel="noopener">IBM — granite-docling-258M</a></li>
+    <li><a href="https://docs.unstructured.io/open-source/introduction/overview" target="_blank" rel="noopener">Unstructured — open source</a>, <a href="https://github.com/pymupdf/pymupdf4llm" target="_blank" rel="noopener">pymupdf4llm</a>, <a href="https://github.com/datalab-to/marker" target="_blank" rel="noopener">Marker</a>, <a href="https://github.com/opendatalab/MinerU" target="_blank" rel="noopener">MinerU</a>, <a href="https://github.com/tesseract-ocr/tesseract" target="_blank" rel="noopener">Tesseract</a> (лицензии и версии — в README и LICENSE)</li>
+    <li><a href="https://github.com/data-privacy-stack/presidio" target="_blank" rel="noopener">Presidio</a> и <a href="https://presidio.dataprivacystack.org/" target="_blank" rel="noopener">документация</a> (анализатор, операторы анонимизации, поддержка языков); <a href="https://github.com/natasha/natasha" target="_blank" rel="noopener">Natasha</a> (NER для русского)</li>
+    <li><a href="https://dataprivacylab.org/projects/identifiability/paper1.pdf" target="_blank" rel="noopener">Sweeney, 2000 — Simple Demographics Often Identify People Uniquely</a> (87% жителей США уникальны по индексу, полу и дате рождения)</li>
+    <li><a href="https://doi.org/10.1145/509907.509965" target="_blank" rel="noopener">Charikar, 2002 — Similarity estimation techniques from rounding algorithms</a> (SimHash); <a href="https://static.googleusercontent.com/media/research.google.com/en//pubs/archive/33026.pdf" target="_blank" rel="noopener">Manku, Jain, Das Sarma, 2007 — Detecting near-duplicates for web crawling</a> (64 бита, k = 3, поиск по блокам); <a href="https://doi.org/10.1109/SEQUEN.1997.666900" target="_blank" rel="noopener">Broder, 1997 — On the resemblance and containment of documents</a> (MinHash); <a href="https://github.com/ekzhu/datasketch" target="_blank" rel="noopener">datasketch</a></li>
+    <li><a href="https://dvc.org/" target="_blank" rel="noopener">DVC</a> и <a href="https://dvc.org/blog/dvc-joins-lakefs-your-questions-answered" target="_blank" rel="noopener">DVC joins lakeFS</a>; <a href="https://lakefs.io/blog/lakefs-business-source-license" target="_blank" rel="noopener">lakeFS — переход на BUSL</a>; <a href="https://git-lfs.com/" target="_blank" rel="noopener">Git LFS</a>; <a href="https://huggingface.co/docs/datasets/loading" target="_blank" rel="noopener">Hugging Face datasets — загрузка по ревизии</a></li>
+    <li><a href="https://github.com/HumanSignal/label-studio" target="_blank" rel="noopener">Label Studio</a>; <a href="https://burrsettles.com/pub/settles.activelearning.pdf" target="_blank" rel="noopener">Settles, 2009 — Active Learning Literature Survey</a></li>
+    <li><a href="https://arxiv.org/abs/1810.03993" target="_blank" rel="noopener">Mitchell et al., 2019 — Model Cards for Model Reporting</a>; <a href="https://arxiv.org/abs/1803.09010" target="_blank" rel="noopener">Gebru et al. — Datasheets for Datasets</a>; <a href="https://www.anthropic.com/system-cards" target="_blank" rel="noopener">Anthropic — system cards</a> (пример system card модели)</li>
+    <li><a href="https://github.com/chiphuyen/aie-book/blob/main/ToC.md" target="_blank" rel="noopener">Chip Huyen — AI Engineering</a> (глава 8 «Dataset Engineering», глава 10 о пользовательском фидбеке)</li>
+  </ul>
+</main>
+<script src="assets/course.js"></script>
+<script>
+/* ---------- 1. Песочница PII-редакции ---------- */
+(function () {
+  const S = (tag, a, p) => { if (tag === 'text' && a.fill) a.style = 'fill:' + a.fill; return Course.svg(tag, a, p); };
+  const $ = id => document.getElementById(id);
+  const ta = $('pii-in'), mode = $('pii-mode'), key = $('pii-key'), chk = $('pii-chk'), kindsBox = $('pii-kinds');
+  const hl = $('pii-hl'), red = $('pii-red'), svg = $('pii-svg'), ro = $('pii-readout');
+  const digits = s => s.replace(/\D/g, '');
+  // Те же проверки, что в examples/m11-data/pii.go.
+  function luhn(d) {
+    let sum = 0;
+    for (let i = d.length - 1; i >= 0; i--) {
+      let n = +d[i];
+      if ((d.length - 1 - i) % 2 === 1) { n *= 2; if (n > 9) n -= 9; }
+      sum += n;
+    }
+    return sum % 10 === 0;
+  }
+  function inn(d) {
+    const c = w => w.reduce((s, k, i) => s + k * +d[i], 0) % 11 % 10;
+    if (d.length === 10) return c([2, 4, 10, 3, 5, 9, 4, 6, 8]) === +d[9];
+    if (d.length === 12) return c([7, 2, 4, 10, 3, 5, 9, 4, 6, 8]) === +d[10] && c([3, 7, 2, 4, 10, 3, 5, 9, 4, 6, 8]) === +d[11];
+    return false;
+  }
+  function snils(d) {
+    if (d.length !== 11 || d.slice(0, 9) <= '001001998') return false;
+    let s = 0;
+    for (let i = 0; i < 9; i++) s += +d[i] * (9 - i);
+    s %= 101; if (s === 100) s = 0;
+    return s === +d.slice(9);
+  }
+  const DET = [
+    { k: 'CARD', name: 'карта', re: /\b(?:\d{4}[ -]){3}\d{4}\b|\b\d{13,19}\b/g, valid: luhn, why: 'Луна' },
+    { k: 'SNILS', name: 'СНИЛС', re: /\b\d{3}-?\d{3}-?\d{3}[ -]?\d{2}\b/g, valid: snils, why: 'СНИЛС' },
+    { k: 'INN', name: 'ИНН', re: /\b\d{12}\b|\b\d{10}\b/g, valid: inn, why: 'ИНН' },
+    { k: 'EMAIL', name: 'email', re: /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g },
+    { k: 'PHONE', name: 'телефон', re: /(?:\+7|\b8)[ (-]*\d{3}[ )-]*\d{3}[ -]?\d{2}[ -]?\d{2}\b/g },
+    { k: 'PASSPORT', name: 'паспорт', re: /\b\d{2} ?\d{2} \d{6}\b/g },
+  ];
+  const COL = { CARD: 'var(--bad)', SNILS: 'var(--violet)', INN: 'var(--teal)', EMAIL: 'var(--accent)', PHONE: 'var(--warn)', PASSPORT: 'var(--ok)' };
+  const UNSEEN = [['Анна Смирнова', 'имя'], ['ул. Садовой, д. 5, кв. 12', 'адрес'], ['5 «Б» школы № 1234', 'косвенный идентификатор']];
+  kindsBox.innerHTML = DET.map(d => '<label><input type="checkbox" data-k="' + d.k + '" checked> ' + d.name + '</label>').join('');
+  // Детерминированный псевдоним. В демо — FNV-1a с ключом (синхронно и без зависимостей); в Go — HMAC-SHA256.
+  function pseudo(kind, v) {
+    let norm = kind === 'EMAIL' ? v.toLowerCase() : digits(v);
+    if (kind === 'PHONE' && norm[0] === '8') norm = '7' + norm.slice(1);
+    let h = 0x811c9dc5;
+    for (const ch of key.value + '|' + kind + ':' + norm) { h ^= ch.codePointAt(0); h = Math.imul(h, 0x01000193) >>> 0; }
+    return h.toString(16).padStart(8, '0');
+  }
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  function draw() {
+    const text = ta.value, on = {};
+    kindsBox.querySelectorAll('[data-k]').forEach(c => on[c.dataset.k] = c.checked);
+    const all = [], rejected = [];
+    DET.filter(d => on[d.k]).forEach(d => {
+      for (const m of text.matchAll(d.re)) {
+        const f = { k: d.k, s: m.index, e: m.index + m[0].length, v: m[0] };
+        if (d.valid && chk.checked && !d.valid(digits(m[0]))) { f.why = d.why; rejected.push(f); continue; }
+        all.push(f);
+      }
+    });
+    const found = [];
+    all.forEach(f => { if (!found.some(o => f.s < o.e && o.s < f.e)) found.push(f); });
+    found.sort((a, b) => a.s - b.s);
+    // Подсветка: найденное — цветом детектора, отброшенное контрольной суммой — пунктиром.
+    const marks = found.map(f => ({ ...f, ok: true })).concat(rejected.filter(r => !found.some(o => r.s < o.e && o.s < r.e)).map(r => ({ ...r, ok: false })));
+    const rej = marks.filter(m => !m.ok);
+    marks.sort((a, b) => a.s - b.s);
+    let h = '', last = 0;
+    marks.forEach(m => {
+      if (m.s < last) return;
+      h += esc(text.slice(last, m.s));
+      h += m.ok
+        ? '<mark class="pii-m" style="--c:' + COL[m.k] + '" title="' + m.k + '">' + esc(m.v) + '<sup>' + m.k + '</sup></mark>'
+        : '<mark class="pii-rej" title="контрольная сумма не сошлась">' + esc(m.v) + '<sup>не ' + m.why + '</sup></mark>';
+      last = m.e;
+    });
+    hl.innerHTML = h + esc(text.slice(last));
+    let r = '', p = 0;
+    const vault = {};
+    found.forEach(f => {
+      const tok = mode.value === 'mask' ? '[' + f.k + ']' : '[' + f.k + ':' + pseudo(f.k, f.v) + ']';
+      if (mode.value !== 'mask') vault[tok] = f.v;
+      r += text.slice(p, f.s) + tok; p = f.e;
+    });
+    red.textContent = r + text.slice(p);
+
+    // Счётчики
+    svg.innerHTML = '';
+    const cnt = k => found.filter(f => f.k === k).length, cntR = k => rej.filter(f => f.k === k).length;
+    const max = Math.max(3, ...DET.map(d => cnt(d.k) + cntR(d.k)));
+    DET.forEach((d, i) => {
+      const y = 8 + i * 22, w = 200 / max;
+      S('text', { x: 0, y: y + 12, 'font-size': 11, fill: on[d.k] ? 'var(--text)' : 'var(--muted)' }, svg).textContent = d.name;
+      S('rect', { x: 70, y: y, width: 200, height: 15, rx: 3, fill: 'var(--bg-soft)' }, svg);
+      if (cnt(d.k)) S('rect', { x: 70, y: y, width: w * cnt(d.k), height: 15, rx: 3, fill: COL[d.k] }, svg);
+      if (cntR(d.k)) S('rect', { x: 70 + w * cnt(d.k), y: y, width: w * cntR(d.k), height: 15, rx: 3, fill: 'none', stroke: 'var(--muted)', 'stroke-dasharray': '3 2' }, svg);
+      S('text', { x: 278, y: y + 12, 'font-size': 11, fill: 'var(--muted)' }, svg).textContent = on[d.k] ? cnt(d.k) + (cntR(d.k) ? ' (+' + cntR(d.k) + ' отбр.)' : '') : 'выкл';
+    });
+
+    const byKind = DET.map(d => cnt(d.k) ? d.name + ' ' + cnt(d.k) : '').filter(Boolean).join(', ');
+    const lines = ['Найдено: ' + found.length + (byKind ? ' (' + byKind + ')' : '') + '.'];
+    if (rej.length) lines.push('Отброшено контрольной суммой: ' + rej.map(f => '«' + f.v + '» (' + f.why + ')').join(', ') + '.');
+    else if (!chk.checked) lines.push('Контрольные суммы выключены: любое число подходящей длины — PII. Номер заказа станет [INN], и отладка по логам сломается.');
+    if (mode.value !== 'mask') {
+      const uniq = new Set(Object.keys(vault)).size;
+      lines.push('Псевдонимизация: ' + found.length + ' находок → ' + uniq + ' уникальных токенов. Два написания одного телефона дают один токен, связность сохраняется. Смените ключ — токены изменятся. Обратная подстановка — только через отдельный vault.');
+    } else lines.push('Маскирование необратимо и рвёт связность: любые телефоны выглядят одинаково — [PHONE].');
+    const miss = UNSEEN.filter(([s]) => text.includes(s));
+    if (miss.length) lines.push('Регэкспы НЕ увидели: ' + miss.map(([s, t]) => t + ' «' + s + '»').join(', ') + '. Это работа NER или LLM-детектора, и даже они пропускают косвенные идентификаторы.');
+    ro.textContent = lines.join('\n');
+  }
+  [ta, key].forEach(el => el.addEventListener('input', draw));
+  [mode, chk].forEach(el => el.addEventListener('change', draw));
+  kindsBox.addEventListener('change', draw);
+  draw();
+})();
+
+/* ---------- 3. Data flywheel ---------- */
+(function () {
+  const S = (tag, a, p) => { if (tag === 'text' && a.fill) a.style = 'fill:' + a.fill; return Course.svg(tag, a, p); };
+  const $ = id => document.getElementById(id);
+  const svg = $('fw-svg'), ro = $('fw-readout');
+  const v = {};
+  const fmt = n => n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1).replace('.', ',') + ' тыс.' : String(Math.round(n));
+  function draw() {
+    if (!v.ready) return;
+    const week = v.rq * 7;
+    const neg = week * v.fb / 100 * v.neg / 100;
+    const smp = week * v.smp / 100;
+    const cand = neg + smp;
+    const cap = v.cap * v.rate;
+    const done = Math.min(cand, cap);
+    const backlog = cand - done;
+    const gold = done * v.conv / 100;
+    const weeks = gold > 0 ? 200 / gold : Infinity;
+    const share = cand > 0 ? done / cand : 0;
+    let bottleneck = null;
+    if (cand < 30) bottleneck = 1; else if (cap < cand) bottleneck = 2; else if (gold < 10) bottleneck = 3;
+
+    svg.innerHTML = '';
+    const cx = 320, cy = 150, R = 105;
+    const N = [
+      ['Прод', fmt(week) + ' запросов/нед'],
+      ['Сигналы', fmt(cand) + ' кандидатов'],
+      ['Разбор и разметка', fmt(done) + ' разобрано'],
+      ['Golden set и данные', '+' + fmt(gold) + ' кейсов'],
+      ['Релиз через eval-гейт', 'промпт, индекс, модель'],
+    ];
+    const pos = N.map((_, i) => { const a = -Math.PI / 2 + i * 2 * Math.PI / N.length; return [cx + R * 1.55 * Math.cos(a), cy + R * Math.sin(a)]; });
+    S('ellipse', { cx: cx, cy: cy, rx: R * 1.55, ry: R, fill: 'none', stroke: 'var(--border)', 'stroke-width': 2, 'stroke-dasharray': '6 5' }, svg);
+    for (let i = 0; i < N.length; i++) {
+      const a = -Math.PI / 2 + (i + 0.5) * 2 * Math.PI / N.length;
+      const x = cx + R * 1.55 * Math.cos(a), y = cy + R * Math.sin(a);
+      let tx = -R * 1.55 * Math.sin(a), ty = R * Math.cos(a);
+      const l = Math.hypot(tx, ty); tx /= l; ty /= l;
+      S('path', { d: 'M' + (x + tx * 8) + ' ' + (y + ty * 8) + ' L' + (x - tx * 6 - ty * 6) + ' ' + (y - ty * 6 + tx * 6) + ' L' + (x - tx * 6 + ty * 6) + ' ' + (y - ty * 6 - tx * 6) + ' Z', fill: 'var(--muted)' }, svg);
+    }
+    N.forEach(([t, sub], i) => {
+      const [x, y] = pos[i], bad = i === bottleneck;
+      S('rect', { x: x - 78, y: y - 22, width: 156, height: 44, rx: 8, fill: bad ? 'var(--bad-soft)' : 'var(--card)', stroke: bad ? 'var(--bad)' : 'var(--accent)', 'stroke-width': bad ? 2 : 1.2 }, svg);
+      S('text', { x: x, y: y - 4, 'font-size': 12, 'font-weight': 700, 'text-anchor': 'middle', fill: bad ? 'var(--bad)' : 'var(--text)' }, svg).textContent = t;
+      S('text', { x: x, y: y + 12, 'font-size': 10.5, 'text-anchor': 'middle', fill: 'var(--muted)' }, svg).textContent = sub;
+    });
+    S('text', { x: cx, y: cy - 6, 'font-size': 12, 'text-anchor': 'middle', 'font-weight': 700, fill: backlog > 0 ? 'var(--bad)' : 'var(--ok)' }, svg).textContent = backlog > 0 ? 'бэклог +' + fmt(backlog) + '/нед' : 'бэклога нет';
+    S('text', { x: cx, y: cy + 12, 'font-size': 11, 'text-anchor': 'middle', fill: 'var(--muted)' }, svg).textContent = 'разбирается ' + Math.round(share * 100) + '% сигналов';
+
+    const lines = [
+      'За неделю: ' + fmt(neg) + ' негативных оценок (👎) + ' + fmt(smp) + ' случайных трасс = ' + fmt(cand) + ' кандидатов на разбор.',
+      'Пропускная способность разметки: ' + fmt(cap) + ' трасс/нед → разобрано ' + fmt(done) + ', в golden set и обучающие данные уходит ' + fmt(gold) + ' кейсов.',
+      '+200 кейсов к golden set: ' + (isFinite(weeks) ? '≈ ' + Math.ceil(weeks) + ' нед.' : 'никогда при текущих параметрах.'),
+    ];
+    if (bottleneck === 1) lines.push('Узкое место — сигналы: кандидатов мало. Добавьте неявный фидбек и случайную выборку.');
+    else if (bottleneck === 2) lines.push('Узкое место — разметка: очередь растёт на ' + fmt(backlog) + ' трасс в неделю. Приоритизируйте по цене ошибки и новым темам, сортируйте judge-моделью, уменьшите случайную выборку до разбираемого объёма.');
+    else if (bottleneck === 3) lines.push('Узкое место — конверсия: разбор идёт, но кейсов мало. Проверьте гайдлайн и порог «что считаем ошибкой».');
+    else lines.push('Маховик сбалансирован: всё собранное разбирается. Следите, чтобы кейсы покрывали новые кластеры запросов.');
+    if (v.smp === 0) lines.push('Случайной выборки нет: в разбор попадают только 👎, и оценка качества смещена.');
+    ro.textContent = lines.join('\n');
+  }
+  Course.bindRange($('fw-rq'), x => fmt(x) + '/день', x => { v.rq = x; draw(); });
+  Course.bindRange($('fw-fb'), x => x.toFixed(1).replace('.', ',') + '%', x => { v.fb = x; draw(); });
+  Course.bindRange($('fw-neg'), x => x + '%', x => { v.neg = x; draw(); });
+  Course.bindRange($('fw-smp'), x => x.toFixed(2).replace('.', ',') + '%', x => { v.smp = x; draw(); });
+  Course.bindRange($('fw-cap'), x => x + ' ч/нед', x => { v.cap = x; draw(); });
+  Course.bindRange($('fw-rate'), x => x + '/ч', x => { v.rate = x; draw(); });
+  Course.bindRange($('fw-conv'), x => x + '%', x => { v.conv = x; draw(); });
+  v.ready = true;
+  draw();
+})();
+
+/* ---------- 2. Классификатор по EU AI Act ---------- */
+(function () {
+  const S = (tag, a, p) => { if (tag === 'text' && a.fill) a.style = 'fill:' + a.fill; return Course.svg(tag, a, p); };
+  const $ = id => document.getElementById(id);
+  const box = $('ai-q'), svg = $('ai-svg'), list = $('ai-list'), ro = $('ai-readout');
+  const ANNEX = {
+    hr: 'приложение III, п. 4 (занятость)', credit: 'приложение III, п. 5(b) (кредитоспособность)',
+    insurance: 'приложение III, п. 5(c) (страхование жизни и здоровья)', edu: 'приложение III, п. 3 (образование)',
+    public: 'приложение III, п. 5(a) (госуслуги и льготы)', emergency: 'приложение III, п. 5(d) (экстренные вызовы)',
+    infra: 'приложение III, п. 2 (критическая инфраструктура)', law: 'приложение III, пп. 6–8 (правоохрана, миграция, правосудие)',
+    biometric: 'приложение III, п. 1 (биометрия)', product: 'приложение I, ст. 6(1) (компонент безопасности продукта)',
+  };
+  function state() {
+    const f = {};
+    box.querySelectorAll('[data-f]').forEach(c => f[c.dataset.f] = c.checked);
+    return { eu: $('ai-eu').value, role: $('ai-role').value, area: $('ai-area').value, dec: $('ai-dec').value, f };
+  }
+  function classify(s) {
+    const r = { prohibited: [], high: null, derog: false, transp: [], items: [] };
+    const f = s.f, add = (cls, t) => r.items.push([cls, t]);
+    if (f.manip) r.prohibited.push('ст. 5(1)(a)–(c): манипуляция, эксплуатация уязвимостей, социальный скоринг');
+    if (f.intimate) r.prohibited.push('ст. 5(1)(ba)–(bb): генерация интимного контента без согласия и CSAM, с 2 декабря 2026');
+    if (f.emotion && (s.area === 'hr' || s.area === 'edu')) r.prohibited.push('ст. 5(1)(f): распознавание эмоций на работе и в учёбе');
+    if (ANNEX[s.area]) {
+      if (s.dec === 'none' && s.area !== 'product' && s.area !== 'biometric') {
+        add('info', 'Область из приложения III, но система не участвует в решениях о людях: скорее всего, не high-risk. Пункт приложения описывает назначение (например, отбор резюме), а не отрасль.');
+      } else {
+        r.high = ANNEX[s.area];
+        if (s.area !== 'product' && ['prep', 'improve', 'patterns'].includes(s.dec)) {
+          if (f.profiling) add('bad', 'Исключение ст. 6(3) не работает: при профилировании система из приложения III всегда high-risk.');
+          else r.derog = true;
+        }
+      }
+    }
+    if (f.emotion && !r.prohibited.length) { r.high = r.high || 'приложение III, п. 1(c) (распознавание эмоций)'; r.transp.push('50(3): уведомлять людей о распознавании эмоций (эксплуатант)'); }
+    if (f.chat) r.transp.push('50(1): сообщить, что человек общается с ИИ, если это не очевидно (провайдер)');
+    if (f.gen) r.transp.push('50(2): машиночитаемая маркировка сгенерированного контента (провайдер); исключение — вспомогательное редактирование');
+    if (f.deepfake) r.transp.push('50(4): раскрывать, что контент — дипфейк (эксплуатант)');
+    if (f.pubtext) r.transp.push('50(4): раскрывать ИИ-происхождение текста на общественно значимые темы без редакторской проверки (эксплуатант)');
+    return r;
+  }
+  function draw() {
+    const s = state(), r = classify(s);
+    const high = r.high && !r.derog;
+    const cat = r.prohibited.length ? 'prohibited' : high ? 'high' : r.derog ? 'derog' : r.transp.length ? 'transp' : 'minimal';
+    const items = [];
+    if (s.eu === 'no') items.push(['info', 'Связи с ЕС нет: AI Act, скорее всего, не применяется (ст. 2). Ниже — что было бы при выходе на рынок ЕС.']);
+    r.prohibited.forEach(t => items.push(['bad', 'Запрещено — ' + t + '. Выпускать в ЕС нельзя; штраф до 35 млн € или 7% оборота.']));
+    if (high) {
+      items.push(['bad', 'High-risk: ' + r.high + '. Применяется с ' + (s.area === 'product' ? '2 августа 2028' : '2 декабря 2027') + ' (Regulation (EU) 2026/1744).']);
+      if (s.role === 'deployer') {
+        items.push(['warn', 'Эксплуатант (ст. 26): использование по инструкции провайдера, назначенные люди для надзора, мониторинг, логи не меньше 6 месяцев. Госорганы, кредитный скоринг и страхование — оценка воздействия на права (ст. 27).']);
+      } else {
+        items.push(['warn', 'Логирование (ст. 12), хранение не меньше 6 месяцев (ст. 19): append-only журнал с версиями.']);
+        items.push(['warn', 'Human oversight (ст. 14): источники, отклонить результат, остановить систему.']);
+        items.push(['warn', 'Документация (ст. 11, прил. IV), data governance (ст. 10), точность и устойчивость (ст. 15), риски и качество (ст. 9, 17).']);
+        items.push(['warn', 'Мониторинг (ст. 72), серьёзные инциденты — не позднее 15 дней (ст. 73), оценка соответствия и регистрация (ст. 49).']);
+      }
+    }
+    if (r.derog) items.push(['warn', 'Область high-risk (' + r.high + '), но, возможно, работает исключение ст. 6(3): задокументируйте оценку (ст. 6(4)) и зарегистрируйте систему. Профилирование или автоматические решения отменяют исключение.']);
+    r.items.forEach(i => items.push(i));
+    if (r.transp.length) {
+      r.transp.forEach(t => items.push(['info', 'Прозрачность, ст. ' + t + '.']));
+      items.push(['info', 'Ст. 50 применяется со 2 августа 2026; системы генерации, выпущенные раньше, выполняют 50(2) до 2 декабря 2026.']);
+    }
+    if (s.role === 'gpai') items.push(['warn', 'Провайдер GPAI (глава V, с 2 августа 2025): документация, информация для интеграторов, авторское право, описание обучающих данных; модели, выпущенные раньше, — до 2 августа 2027.']);
+    if (cat === 'minimal') items.push(['ok', 'Минимальный риск: специальных требований нет, остаются AI literacy (ст. 4) и добровольные кодексы.']);
+    items.push(['info', 'Не юридическая консультация: применимость к конкретной системе определяет юрист.']);
+    list.innerHTML = '';
+    items.forEach(([c, t]) => { const li = document.createElement('li'); li.className = c; li.textContent = t; list.append(li); });
+
+    // Пирамида
+    svg.innerHTML = '';
+    const L = [
+      ['prohibited', 'Запрещено', 'ст. 5', r.prohibited.length > 0, 'var(--bad)', 'var(--bad-soft)'],
+      ['high', 'Высокий риск', 'ст. 6, прил. I и III', high || r.derog, r.derog && !high ? 'var(--warn)' : 'var(--bad)', r.derog && !high ? 'var(--warn-soft)' : 'var(--bad-soft)'],
+      ['transp', 'Прозрачность', 'ст. 50', r.transp.length > 0, 'var(--accent)', 'var(--accent-soft)'],
+      ['minimal', 'Минимальный', 'ст. 4, кодексы', cat === 'minimal', 'var(--ok)', 'var(--ok-soft)'],
+    ];
+    const top = 10, h = 48, cx = 130;
+    L.forEach((l, i) => {
+      const y = top + i * (h + 4), w0 = 40 + i * 55, w1 = 40 + (i + 1) * 55;
+      const on = l[3];
+      S('path', { d: 'M' + (cx - w0 / 2) + ' ' + y + ' H' + (cx + w0 / 2) + ' L' + (cx + w1 / 2) + ' ' + (y + h) + ' H' + (cx - w1 / 2) + ' Z', fill: on ? l[5] : 'var(--bg-soft)', stroke: on ? l[4] : 'var(--border)', 'stroke-width': on ? 2 : 1 }, svg);
+      S('text', { x: cx, y: y + 22, 'font-size': 12, 'font-weight': 700, 'text-anchor': 'middle', fill: on ? l[4] : 'var(--muted)' }, svg).textContent = l[1];
+      S('text', { x: cx, y: y + 37, 'font-size': 10, 'text-anchor': 'middle', fill: 'var(--muted)' }, svg).textContent = l[2];
+    });
+    if (s.role === 'gpai') S('text', { x: cx, y: 226, 'font-size': 10.5, 'text-anchor': 'middle', 'font-weight': 700, fill: 'var(--violet)' }, svg).textContent = '+ обязательства GPAI-провайдера';
+
+    const NAME = { prohibited: 'запрещённая практика', high: 'высокий риск', derog: 'область высокого риска, возможно исключение ст. 6(3)', transp: 'прозрачность (ст. 50)', minimal: 'минимальный риск' };
+    const ROLE = { provider: 'провайдер AI-системы', deployer: 'эксплуатант (deployer)', gpai: 'провайдер GPAI-модели' };
+    ro.textContent = 'Вероятная категория: ' + NAME[cat] + (cat === 'high' && r.transp.length ? ' + прозрачность' : '') + ' · роль: ' + ROLE[s.role] + (s.eu === 'no' ? ' · вне сферы AI Act, если связи с ЕС нет' : '') + '\nЭвристика курса по состоянию на октябрь 2026, не юридическая консультация.';
+  }
+  box.addEventListener('change', draw);
+  draw();
+})();
+</script>
+</body>
+</html>

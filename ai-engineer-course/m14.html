@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>11 · Подготовка к собеседованию</title>
+<title>14 · Подготовка к собеседованию</title>
 <link rel="stylesheet" href="assets/style.css">
 <style>
 .rdy-wrap { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 20px; align-items: start; }
@@ -34,10 +34,10 @@
 .story-warn li.bad::before { color: var(--bad); } .story-warn li.warn::before { color: var(--warn); } .story-warn li.ok::before { color: var(--ok); }
 </style>
 </head>
-<body data-module="m11">
+<body data-module="m14">
 <main class="content">
   <div class="module-hero">
-    <div class="eyebrow">Модуль 11</div>
+    <div class="eyebrow">Модуль 14</div>
     <h1>Подготовка к собеседованию</h1>
     <p class="lead">Как устроен найм на позицию AI engineer, что спрашивают на каждом этапе, 32 концептуальных вопроса с эталонными ответами, как рассказывать о проектах с цифрами, как сделать take-home, который выделяется, и план последних двух недель.</p>
     <div class="meta-row"><span class="chip">≈ 8 часов + практика</span><span class="chip">Go + Python</span><span class="chip">3 визуализации</span><span class="chip">32 вопроса</span></div>
@@ -48,8 +48,8 @@
   <table>
     <tr><th>Этап</th><th>Длительность</th><th>Что проверяют</th><th>Как готовиться</th></tr>
     <tr><td><b>Скрининг</b> (рекрутер или hiring manager)</td><td>30–45 мин</td><td>Мотивация, релевантный опыт, ожидания, базовая грамотность в терминах: чем RAG отличается от fine-tuning, что такое evals.</td><td>История «почему AI engineer» на 60 секунд, два проекта по 2 минуты, вилка.</td></tr>
-    <tr><td><b>Кодинг</b></td><td>45–90 мин, часто два раунда</td><td>(1) Обычный кодинг: алгоритмы средней сложности или практическая задача (парсер, rate limiter, LRU). (2) LLM-интеграция: написать вызов API, стриминг, tool use, мини-RAG, парсинг structured output, обработку ошибок и ретраи — нередко с разрешённым AI-ассистентом.</td><td>Руками написать без подсказок: клиент с ретраями, цикл tool use, косинусную близость и top-k, чанкер. Это модули 2, 4, 5.</td></tr>
-    <tr><td><b>AI system design</b></td><td>45–60 мин</td><td>Спроектировать LLM-систему: требования, данные, evals, надёжность, безопасность, стоимость.</td><td>Модуль 10: скелет ответа, 5 разборов, расчёты на салфетке.</td></tr>
+    <tr><td><b>Кодинг</b></td><td>45–90 мин, часто два раунда</td><td>(1) Обычный кодинг: алгоритмы средней сложности или практическая задача (парсер, rate limiter, LRU). (2) LLM-интеграция: написать вызов API, стриминг, tool use, мини-RAG, парсинг structured output, обработку ошибок и ретраи — нередко с разрешённым AI-ассистентом.</td><td>Руками написать без подсказок: клиент с ретраями, цикл tool use, косинусную близость и top-k, чанкер. Это модули 2, 5, 6.</td></tr>
+    <tr><td><b>AI system design</b></td><td>45–60 мин</td><td>Спроектировать LLM-систему: требования, данные, evals, надёжность, безопасность, стоимость.</td><td>Модуль 12: скелет ответа, 5 разборов, расчёты на салфетке.</td></tr>
     <tr><td><b>Deep dive по проектам</b></td><td>45–60 мин</td><td>Один-два ваших проекта вглубь: почему такие решения, какие были альтернативы, как измеряли, что сломалось, что сделали бы иначе. Отличает реальный опыт от пересказа туториала.</td><td>Сквозные проекты курса + рассказ по шаблону ниже. Знать свои цифры наизусть.</td></tr>
     <tr><td><b>Поведенческое</b></td><td>30–60 мин</td><td>Ownership, работа с неопределённостью, конфликты, влияние без полномочий, как принимаете решения при неполных данных (для AI это ежедневная реальность).</td><td>6–8 историй в формате STAR, каждая покрывает 2–3 типовых вопроса.</td></tr>
   </table>
@@ -273,7 +273,7 @@ func callWithRetry(ctx context.Context, do func(context.Context) (*http.Response
     <tr><td>2</td><td>Истории</td><td>Два проекта через конструктор; выучить цифры; 6 поведенческих историй в STAR.</td></tr>
     <tr><td>3</td><td>Кодинг LLM</td><td>С нуля без подсказок: клиент с ретраями и стримингом на Go, цикл tool use. Таймер 30 минут на каждое.</td></tr>
     <tr><td>4</td><td>Кодинг обычный</td><td>4–6 задач среднего уровня (хэш-таблицы, графы, интервалы), rate limiter, LRU.</td></tr>
-    <tr><td>5</td><td>System design</td><td>Два кейса из модуля 10 вслух с таймером 45 минут, запись на видео, разбор.</td></tr>
+    <tr><td>5</td><td>System design</td><td>Два кейса из модуля 12 вслух с таймером 45 минут, запись на видео, разбор.</td></tr>
     <tr><td>6</td><td>Слабые темы</td><td>Повторить модули по слабым категориям чек-листа; незнакомые карточки.</td></tr>
     <tr><td>7</td><td>Отдых + лёгкое</td><td>Прочитать 2–3 свежих инженерных поста провайдеров и инженерных блогов; ничего не кодить.</td></tr>
     <tr><td>8</td><td>Мок-интервью</td><td>Полный мок system design с другом или коллегой; обратная связь по структуре.</td></tr>
@@ -290,23 +290,23 @@ func callWithRetry(ctx context.Context, do func(context.Context) (*http.Response
     <h3>Задание 1: два проекта в формате рассказа</h3>
     <p>Соберите в конструкторе рассказы о двух проектах (сквозные проекты курса подходят). Проговорите каждый вслух с таймером, запишите на диктофон, послушайте.</p>
     <p><b>Критерии готовности:</b> конструктор не показывает красных предупреждений; рассказ укладывается в 2–3 минуты; в метриках минимум три числа с «было → стало»; на вопрос «почему не X?» есть ответ для каждого ключевого решения.</p>
-    <label class="check"><input type="checkbox" data-save="m11-t1a"> Проект 1 готов и проговорён</label>
-    <label class="check"><input type="checkbox" data-save="m11-t1b"> Проект 2 готов и проговорён</label>
+    <label class="check"><input type="checkbox" data-save="m14-t1a"> Проект 1 готов и проговорён</label>
+    <label class="check"><input type="checkbox" data-save="m14-t1b"> Проект 2 готов и проговорён</label>
   </div>
   <div class="task">
     <h3>Задание 2: флеш-карточки до 90%</h3>
     <p>Пройдите все карточки, затем режим «незнакомые» до тех пор, пока «знал» не станет ≥ 90%. Для каждого «не знал» вернитесь в соответствующий модуль курса.</p>
-    <label class="check"><input type="checkbox" data-save="m11-t2"> ≥ 90% карточек «знал»</label>
+    <label class="check"><input type="checkbox" data-save="m14-t2"> ≥ 90% карточек «знал»</label>
   </div>
   <div class="task">
     <h3>Задание 3: take-home на время</h3>
     <p>За 5 часов: сервис на Go, который извлекает из писем клиентов (возьмите 50 публичных или синтетических) поля «продукт, проблема, срочность» через structured output; eval на 30 размеченных письмах (точность по полям), сравнение двух моделей, README по структуре выше со стоимостью.</p>
-    <label class="check"><input type="checkbox" data-save="m11-t3"> Сделано в лимит времени, README и eval-таблица есть</label>
+    <label class="check"><input type="checkbox" data-save="m14-t3"> Сделано в лимит времени, README и eval-таблица есть</label>
   </div>
   <div class="task">
     <h3>Задание 4: поведенческие истории</h3>
     <p>Шесть историй в формате STAR: конфликт по техническому решению, провал и выводы, решение при неполных данных, влияние без полномочий, самый сложный баг в проде, как учили других. Каждая — до 2 минут, с результатом в цифрах, где это возможно.</p>
-    <label class="check"><input type="checkbox" data-save="m11-t4"> Шесть историй записаны и проговорены</label>
+    <label class="check"><input type="checkbox" data-save="m14-t4"> Шесть историй записаны и проговорены</label>
   </div>
 
   <h2 id="selfcheck">Самопроверка</h2>
@@ -381,7 +381,7 @@ func callWithRetry(ctx context.Context, do func(context.Context) (*http.Response
       "Объясняю виды кэширования и их риски" ] },
     { id: "design", name: "System design", c: "--bad", items: [
       "Веду 45-минутный разбор по скелету и укладываюсь во время",
-      "Разобрал вслух все 5 кейсов модуля 10",
+      "Разобрал вслух все 5 кейсов модуля 12",
       "Разобрал минимум 2 кейса вне курса",
       "Прошёл мок-интервью с живым человеком" ] },
     { id: "projects", name: "Проекты и рассказ", c: "--teal", items: [
@@ -400,7 +400,7 @@ func callWithRetry(ctx context.Context, do func(context.Context) (*http.Response
     const box = document.createElement("div");
     box.className = "rdy-cat"; box.id = "rdy-" + cat.id;
     box.innerHTML = `<h4><span>${cat.name}</span><small></small></h4><div class="bar"><i style="background:var(${cat.c})"></i></div>` +
-      cat.items.map((t, i) => `<label><input type="checkbox" data-save="m11-rdy-${cat.id}-${i}"> <span>${t}</span></label>`).join("");
+      cat.items.map((t, i) => `<label><input type="checkbox" data-save="m14-rdy-${cat.id}-${i}"> <span>${t}</span></label>`).join("");
     catsEl.append(box);
   });
   function arc(cx, cy, r, a0, a1) {
@@ -448,7 +448,7 @@ func callWithRetry(ctx context.Context, do func(context.Context) (*http.Response
   const cards = [...document.querySelectorAll("details.q[data-card]")].map(d => ({
     q: d.querySelector("summary").textContent.trim(), a: d.querySelector(".a").innerHTML, g: d.dataset.card,
   }));
-  const KEY = "aiec:m11:cards";
+  const KEY = "aiec:m14:cards";
   let marks = store.get(KEY, {}); // q → "y" | "n"
   let mode = "all", queue = [], cur = null, shown = false;
   const $ = id => document.getElementById(id);
@@ -509,7 +509,7 @@ func callWithRetry(ctx context.Context, do func(context.Context) (*http.Response
     err: "Резал по 1 000 символов — ломались таблицы и код, recall был 0.48; структурный чанкинг дал самый большой прирост. Бот цитировал закрытые страницы — добавил фильтр по группам в SQL и тест на утечку в CI.",
     imp: "Переписывание коротких запросов, кэш ответов на топ-50 вопросов, evals на каждый PR, contextual chunking.",
   };
-  const SKEY = "aiec:m11:story";
+  const SKEY = "aiec:m14:story";
   const saved = store.get(SKEY, {});
   Object.entries(F).forEach(([k, id]) => { $(id).value = saved[k] || ""; $(id).addEventListener("input", story); });
   const val = k => $(F[k]).value.trim();

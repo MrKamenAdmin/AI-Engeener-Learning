@@ -5,16 +5,21 @@
     { id: "m00", title: "Что Go-разработчик уже умеет", desc: "Конкурентность, надёжность, observability, БД и тесты — как это переносится в AI engineering." },
     { id: "m01", title: "Как работают LLM", desc: "Токены, BPE, attention, сэмплинг, эмбеддинги, обучение, KV-cache, квантизация, reasoning." },
     { id: "m02", title: "LLM API", desc: "Messages, стриминг SSE, structured output, tool use, prompt caching, batch, мультимодальность." },
-    { id: "m03", title: "Prompt engineering как инженерия", desc: "Инструкции, few-shot, XML, CoT, версионирование, регрессия, prompt injection." },
-    { id: "m04", title: "RAG", desc: "Чанкинг, эмбеддинги, векторные БД, HNSW, гибридный поиск, reranking, метрики, отладка." },
-    { id: "m05", title: "Агенты и MCP", desc: "Агентный цикл, паттерны Anthropic, MCP-сервер на Go, память, мультиагентность, sandbox." },
-    { id: "m06", title: "Evals", desc: "Golden dataset, LLM-as-a-judge, калибровка, evals в CI, онлайн-оценка и дрейф." },
-    { id: "m07", title: "Продакшн", desc: "Ретраи, fallback, rate limits, кэши, латентность, OpenTelemetry, guardrails, self-hosted." },
-    { id: "m08", title: "Fine-tuning и основы ML", desc: "Когда дообучать, LoRA/PEFT, датасеты, overfitting, precision/recall/F1." },
-    { id: "m09", title: "Инструменты", desc: "Python для Go-разработчика, FastAPI, pandas, SDK, LangChain/LlamaIndex/LangGraph, Jupyter." },
-    { id: "m10", title: "AI system design", desc: "Скелет ответа и 5 разборов: поддержка, поиск, text-to-SQL, суммаризация, LLM-gateway." },
-    { id: "m11", title: "Подготовка к собеседованию", desc: "Этапы, эталонные ответы, рассказ о проектах, take-home, чек-лист." },
-    { id: "projects", title: "Сквозные проекты", desc: "План по неделям: RAG на Go + pgvector, eval-набор, агент с MCP, трейсинг, кэш, дашборд." },
+    { id: "m03", title: "Prompt engineering как инженерия", desc: "Инструкции, few-shot, XML, CoT, длинный контекст, версионирование, регрессия, prompt injection." },
+    { id: "m04", title: "Инструменты", desc: "Python для Go-разработчика, FastAPI, pandas, SDK, LangChain/LlamaIndex/LangGraph, Jupyter, coding agents." },
+    { id: "m05", title: "RAG", desc: "Чанкинг, эмбеддинги, векторные БД, HNSW, гибридный поиск, reranking, метрики, agentic RAG, GraphRAG, отладка." },
+    { id: "m06", title: "Агенты и MCP", desc: "Агентный цикл, паттерны Anthropic, context engineering, long-horizon задачи, MCP-сервер на Go, мультиагентность." },
+    { id: "m07", title: "Безопасность и guardrails", desc: "Модель угроз, OWASP Top 10 for LLM 2025, непрямые инъекции, excessive agency, guardrails на Go, red-teaming." },
+    { id: "m08", title: "Evals", desc: "Error analysis, golden dataset, LLM-as-a-judge и κ, bootstrap, A/B, траектории агентов, quality gate в CI." },
+    { id: "m09", title: "Продакшн", desc: "LLM-шлюз, ретраи, fallback, бюджеты, кэши, OpenTelemetry GenAI, SLO, дрейф, фича-флаги." },
+    { id: "m10", title: "Свои модели: инференс и адаптация", desc: "vLLM и serving, батчинг, квантизация, VRAM, экономика self-host; LoRA, DPO, дистилляция, метрики ML." },
+    { id: "m11", title: "Данные и governance", desc: "Ingestion и парсинг, PII, версии датасетов, разметка, data flywheel, логи диалогов, GDPR/152-ФЗ, EU AI Act." },
+    { id: "m12", title: "AI system design", desc: "Скелет ответа и 5 разборов: поддержка, поиск, text-to-SQL, суммаризация, LLM-gateway." },
+    { id: "m13", title: "Senior-практики", desc: "ADR и design review, выбор модели и вендора, TCO, SLO и постмортемы, метрики для бизнеса, стандарты команды." },
+    { id: "m14", title: "Подготовка к собеседованию", desc: "Этапы, эталонные ответы, рассказ о проектах, take-home, behavioral для senior, чек-лист." },
+    { id: "m15", title: "Капстоун", desc: "Итоговый продакшн-агент: RAG, MCP, guardrails, evals в CI, трейсинг, стоимость и защита design doc." },
+    { id: "m16", title: "Мультимодальность и голос", desc: "Факультатив: vision и документы, STT → LLM → TTS против speech-to-speech, бюджет латентности, barge-in." },
+    { id: "projects", title: "Сквозные проекты", desc: "План по неделям: RAG на Go + pgvector, eval-набор, агент с MCP, red-team, трейсинг, кэш, дашборд." },
   ];
   const KEY = "aiec:done";
   const store = {
@@ -137,7 +142,7 @@
     });
   }
 
-  // Чекбоксы в заданиях сохраняются: <input type="checkbox" data-save="m04-t1">
+  // Чекбоксы в заданиях сохраняются: <input type="checkbox" data-save="m05-t1">
   function enhanceChecks() {
     document.querySelectorAll("input[type=checkbox][data-save]").forEach(cb => {
       const k = "aiec:cb:" + cb.dataset.save;

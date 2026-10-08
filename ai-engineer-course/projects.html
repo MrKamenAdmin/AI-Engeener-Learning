@@ -41,11 +41,11 @@ pre.tree { font-size: 13px; line-height: 1.45; }
 
   <table>
     <tr><th>Проект</th><th>Недели</th><th>Модули курса</th><th>Результат</th></tr>
-    <tr><td><a href="#proj-rag">A · RAG на Go + pgvector</a></td><td>1–3, 6</td><td>2, 3, 4</td><td>Сервис <code>/ask</code> со стримингом и цитатами</td></tr>
-    <tr><td><a href="#proj-evals">B · Eval-набор</a></td><td>4–6</td><td>6, 9</td><td>Golden set 50–100 вопросов, отчёт, гейт в CI</td></tr>
-    <tr><td><a href="#proj-mcp">C · Агент и MCP-сервер</a></td><td>7–8</td><td>5</td><td>MCP-сервер на Go, подключённый к Claude Code/Desktop</td></tr>
-    <tr><td><a href="#proj-prod">D · Продакшнизация</a></td><td>9–11</td><td>7</td><td>Трейсы, fallback, кэш, дашборд стоимости</td></tr>
-    <tr><td><a href="#readme">Финиш</a></td><td>12</td><td>10, 11</td><td>README, демо, нагрузочный тест, рассказ для собеседования</td></tr>
+    <tr><td><a href="#proj-rag">A · RAG на Go + pgvector</a></td><td>1–3, 6</td><td>2, 3, 5</td><td>Сервис <code>/ask</code> со стримингом и цитатами</td></tr>
+    <tr><td><a href="#proj-evals">B · Eval-набор</a></td><td>4–6</td><td>4, 8</td><td>Golden set 50–100 вопросов, отчёт, гейт в CI</td></tr>
+    <tr><td><a href="#proj-mcp">C · Агент и MCP-сервер</a></td><td>7–8</td><td>6, 8</td><td>MCP-сервер на Go, подключённый к Claude Code/Desktop</td></tr>
+    <tr><td><a href="#proj-prod">D · Продакшнизация</a></td><td>9–11</td><td>9</td><td>Трейсы, fallback, кэш, дашборд стоимости</td></tr>
+    <tr><td><a href="#readme">Финиш</a></td><td>12</td><td>12, 14</td><td>README, демо, нагрузочный тест, рассказ для собеседования</td></tr>
   </table>
 
   <h2 id="gantt">План по неделям</h2>
@@ -59,7 +59,7 @@ pre.tree { font-size: 13px; line-height: 1.45; }
   </div>
 
   <h2 id="proj-rag">A · RAG по документации на Go + pgvector</h2>
-  <div class="proj-meta"><span class="chip">недели 1–3, 6</span><span class="chip">модули 2, 3, 4</span><span class="chip">Go, PostgreSQL, pgvector</span></div>
+  <div class="proj-meta"><span class="chip">недели 1–3, 6</span><span class="chip">модули 2, 3, 5</span><span class="chip">Go, PostgreSQL, pgvector</span></div>
   <p><b>Цель.</b> Сервис, который индексирует документацию и отвечает на вопросы по ней с цитатами, стримингом и честным «не знаю», если в документации ответа нет. Всё на Go, хранилище — Postgres с pgvector: одна база для чанков, метаданных, полнотекстового индекса и позже кэша.</p>
   <div class="viz">
     <p class="viz-title">Схема проекта A</p>
@@ -225,7 +225,7 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
   </ul>
 
   <h2 id="proj-evals">B · Eval-набор и CI</h2>
-  <div class="proj-meta"><span class="chip">недели 4–6</span><span class="chip">модули 6, 9</span><span class="chip">Python, pandas, GitHub Actions</span></div>
+  <div class="proj-meta"><span class="chip">недели 4–6</span><span class="chip">модули 4, 8</span><span class="chip">Python, pandas, GitHub Actions</span></div>
   <p><b>Цель.</b> Превратить «вроде работает» в числа. Golden set на 50–100 вопросов, метрики retrieval и генерации, LLM-judge, откалиброванный по вашей разметке, отчёт и гейт в CI, который блокирует PR с регрессией. Evals пишутся на Python, потому что там удобнее анализ (pandas, ноутбуки), и обращаются к Go-сервису по HTTP — как настоящий внешний клиент.</p>
   <div class="viz">
     <p class="viz-title">Схема проекта B</p>
@@ -339,7 +339,7 @@ jobs:
   </ul>
 
   <h2 id="proj-mcp">C · Агент с MCP-сервером на Go</h2>
-  <div class="proj-meta"><span class="chip">недели 7–8</span><span class="chip">модуль 5</span><span class="chip">Go, MCP go-sdk, Claude Code/Desktop</span></div>
+  <div class="proj-meta"><span class="chip">недели 7–8</span><span class="chip">модуль 6</span><span class="chip">Go, MCP go-sdk, Claude Code/Desktop</span></div>
   <p><b>Цель.</b> Дать агентам доступ к вашей системе через стандартный протокол. MCP-сервер на Go с инструментами поиска по документации, чтения чанка целиком и чтения из БД (только чтение, allowlist запросов), подключённый к Claude Code и Claude Desktop. Плюс собственный небольшой агентный цикл на Go поверх тех же инструментов — чтобы показать, что вы понимаете, что происходит внутри клиента.</p>
   <div class="viz">
     <p class="viz-title">Схема проекта C</p>
@@ -411,7 +411,7 @@ claude mcp add docrag --env DATABASE_URL=postgres://localhost/docrag -- ./bin/do
 # Отладка без клиента: MCP Inspector показывает инструменты и позволяет вызвать их руками
 npx @modelcontextprotocol/inspector ./bin/docs-mcp</code></pre>
   <p>Для Claude Desktop сервер прописывается в его конфигурационном файле в секции <code>mcpServers</code> (команда, аргументы, переменные окружения); путь к файлу и формат смотрите в документации MCP. Для удалённого доступа тот же сервер отдаётся через Streamable HTTP-хендлер из SDK за вашей аутентификацией.</p>
-  <div class="callout danger"><span class="title">Инструмент чтения из БД</span>Не давайте агенту произвольный SQL, даже «только SELECT». Инструмент <code>db_query</code> принимает имя заранее описанного запроса и параметры (<code>{"name": "docs_updated_since", "args": {"days": 7}}</code>), выполняется под ролью только на чтение с <code>statement_timeout</code>. Если хочется свободного SQL — это разбор 3 из модуля 10 со всеми его защитами.</div>
+  <div class="callout danger"><span class="title">Инструмент чтения из БД</span>Не давайте агенту произвольный SQL, даже «только SELECT». Инструмент <code>db_query</code> принимает имя заранее описанного запроса и параметры (<code>{"name": "docs_updated_since", "args": {"days": 7}}</code>), выполняется под ролью только на чтение с <code>statement_timeout</code>. Если хочется свободного SQL — это разбор 3 из модуля 12 со всеми его защитами.</div>
   <h3>Этапы и критерии готовности</h3>
   <div class="task">
     <div class="stage"><h4>Неделя 7 · MCP-сервер</h4>
@@ -441,7 +441,7 @@ npx @modelcontextprotocol/inspector ./bin/docs-mcp</code></pre>
   </ul>
 
   <h2 id="proj-prod">D · Продакшнизация</h2>
-  <div class="proj-meta"><span class="chip">недели 9–11</span><span class="chip">модуль 7</span><span class="chip">OpenTelemetry, Redis, Grafana/Langfuse</span></div>
+  <div class="proj-meta"><span class="chip">недели 9–11</span><span class="chip">модуль 9</span><span class="chip">OpenTelemetry, Redis, Grafana/Langfuse</span></div>
   <p><b>Цель.</b> Превратить демо в сервис, за который не стыдно на дежурстве: видно каждый шаг каждого запроса, отказ провайдера не роняет продукт, повторяющиеся вопросы не стоят денег, стоимость видна на дашборде в реальном времени.</p>
   <div class="viz">
     <p class="viz-title">Схема проекта D</p>
@@ -554,7 +554,7 @@ Golden set: 96 вопросов (как собран), judge откалибро�
     <div class="card"><h4>Демо</h4><p>Видео на 2 минуты: вопрос → стрим с цитатами → трейс в Tempo/Langfuse → тот же вопрос из Claude Code через MCP → дашборд стоимости. Без монтажа, но с подготовленным сценарием.</p></div>
     <div class="card"><h4>Нагрузочный тест</h4><p>k6 или vegeta против <code>/search</code> и <code>/ask</code> с фейковым провайдером (чтобы не платить): где узкое место — пул соединений, эмбеддер, Postgres?</p></div>
     <div class="card"><h4>Пост</h4><p>Статья на 1 500 слов «что я узнал, строя RAG на Go»: 3 решения, 3 ошибки, таблица метрик. Это ещё и готовый рассказ для собеседования.</p></div>
-    <div class="card"><h4>Рассказ</h4><p>Прогоните проект через конструктор рассказа в <a href="m11.html#stories">модуле 11</a> и через вопросы deep dive из этого раздела.</p></div>
+    <div class="card"><h4>Рассказ</h4><p>Прогоните проект через конструктор рассказа в <a href="m14.html#stories">модуле 14</a> и через вопросы deep dive из этого раздела.</p></div>
   </div>
 
   <h2 id="practice">Итоговое задание</h2>
@@ -566,7 +566,7 @@ Golden set: 96 вопросов (как собран), judge откалибро�
     <label class="check"><input type="checkbox" data-save="projects-f-3"> Демо-видео записано</label>
     <label class="check"><input type="checkbox" data-save="projects-f-4"> Нагрузочный тест проведён, узкое место найдено и описано</label>
     <label class="check"><input type="checkbox" data-save="projects-f-5"> Пост опубликован или готов к публикации</label>
-    <label class="check"><input type="checkbox" data-save="projects-f-6"> Рассказ проговорён вслух, конструктор в модуле 11 не показывает пропусков</label>
+    <label class="check"><input type="checkbox" data-save="projects-f-6"> Рассказ проговорён вслух, конструктор в модуле 14 не показывает пропусков</label>
   </div>
 
   <h2 id="selfcheck">Самопроверка</h2>
@@ -708,41 +708,41 @@ Golden set: 96 вопросов (как собран), judge откалибро�
     { p: "a", name: "A · RAG" }, { p: "b", name: "B · Evals" }, { p: "c", name: "C · MCP" }, { p: "d", name: "D · Прод" }, { p: "x", name: "Финиш" },
   ];
   const WEEKS = [
-    { rows: ["a"], title: "Каркас и ingest", mods: "2 · LLM API, 4 · RAG (чанкинг)",
+    { rows: ["a"], title: "Каркас и ingest", mods: "2 · LLM API, 5 · RAG (чанкинг)",
       tasks: ["Репозиторий, Makefile, docker-compose с pgvector, миграция", "Loader Markdown/HTML с иерархией заголовков", "Структурный чанкер с табличными тестами", "Идемпотентный ingest (upsert, удаление исчезнувших)"],
       dod: "make up && make ingest загружают корпус с нуля; повторный запуск не создаёт дублей." },
-    { rows: ["a"], title: "Эмбеддинги и гибридный поиск", mods: "4 · RAG (эмбеддинги, HNSW, гибрид)",
+    { rows: ["a"], title: "Эмбеддинги и гибридный поиск", mods: "5 · RAG (эмбеддинги, HNSW, гибрид)",
       tasks: ["Клиент эмбеддингов: батчи, ретраи, errgroup + semaphore", "HNSW-индекс, выбор ef_search", "tsvector + RRF в одном SQL", "CLI search и 10 ручных проверок"],
       dod: "Нужный документ в top-5 у 7 из 10 ручных вопросов; поиск p95 < 50 мс." },
     { rows: ["a"], title: "Генерация с цитатами и SSE API", mods: "2 · стриминг, 3 · промпты", milestone: "Первое демо",
       tasks: ["Промпт с документами в XML и цитатами [n]", "POST /ask со стримингом SSE и отменой по context", "Проверка цитат, порог «не знаю»", "Prompt caching системного промпта"],
       dod: "curl -N показывает стрим; каждая цитата валидна; cache_read_input_tokens > 0." },
-    { rows: ["b"], title: "Golden set и retrieval-метрики", mods: "6 · Evals, 9 · Python",
+    { rows: ["b"], title: "Golden set и retrieval-метрики", mods: "4 · Python, 8 · Evals",
       tasks: ["50–100 вопросов: ручные + синтетические с фильтрацией", "Теги типов, ≥ 10% без ответа", "recall@5, MRR, nDCG@10", "Baseline зафиксирован в baseline.json"],
       dod: "Одна команда печатает метрики baseline; набор версионирован в репозитории." },
-    { rows: ["b"], title: "LLM-judge, отчёт, CI", mods: "6 · Evals (judge, калибровка, CI)", milestone: "Evals в CI",
+    { rows: ["b"], title: "LLM-judge, отчёт, CI", mods: "8 · Evals (judge, калибровка, CI)", milestone: "Evals в CI",
       tasks: ["Judge faithfulness/correctness со structured output", "Ручная разметка 30–50 ответов, калибровка", "Markdown-отчёт с диффом и худшими примерами", "GitHub Actions: smoke на PR, полный ночью"],
       dod: "PR с намеренной регрессией падает в CI; согласие судьи с вами ≥ 80%." },
-    { rows: ["a", "b"], title: "Улучшения по evals", mods: "4 · rerank, переписывание запросов; 6 · эксперименты",
+    { rows: ["a", "b"], title: "Улучшения по evals", mods: "5 · rerank, переписывание запросов; 8 · эксперименты",
       tasks: ["Эксперименты: размер чанка, rerank, query rewriting", "Таблица экспериментов с $ и p95", "Оставить только то, что улучшило метрику"],
       dod: "Таблица из ≥ 3 экспериментов в README; лучшая конфигурация стала новым baseline." },
-    { rows: ["c"], title: "MCP-сервер на Go", mods: "5 · Агенты и MCP",
+    { rows: ["c"], title: "MCP-сервер на Go", mods: "6 · Агенты и MCP",
       tasks: ["search_docs, get_chunk, db_query (allowlist)", "Описания инструментов как промпты", "Тесты через in-memory транспорт", "Проверка в MCP Inspector"],
       dod: "Inspector показывает и вызывает все инструменты; ошибки возвращаются как isError." },
-    { rows: ["c"], title: "Клиенты и свой агент", mods: "5 · агентный цикл, 6 · evals агентов", milestone: "Агент + MCP",
+    { rows: ["c"], title: "Клиенты и свой агент", mods: "6 · агентный цикл, 8 · evals агентов", milestone: "Агент + MCP",
       tasks: ["Подключение к Claude Code и Desktop, демо", "Свой цикл tool use на Go с параллельными вызовами", "15–20 агентных задач: success rate, шаги, $", "Streamable HTTP за токеном"],
       dod: "Видео: вопрос из Claude Code через ваш MCP-сервер; метрики агента в README." },
-    { rows: ["d"], title: "Трейсинг OpenTelemetry", mods: "7 · Продакшн (observability)",
+    { rows: ["d"], title: "Трейсинг OpenTelemetry", mods: "9 · Продакшн (observability)",
       tasks: ["Спаны HTTP → embed → search → llm", "Атрибуты gen_ai.*, стоимость, версия промпта", "Collector + Tempo/Jaeger в compose", "trace_id в логах и заголовке ответа"],
       dod: "По одному трейсу видно, какие чанки нашлись, сколько токенов и $ стоил ответ." },
-    { rows: ["d"], title: "Надёжность и fallback", mods: "7 · ретраи, fallback, circuit breaker",
+    { rows: ["d"], title: "Надёжность и fallback", mods: "9 · ретраи, fallback, circuit breaker",
       tasks: ["Таймауты, ретраи с jitter, бюджет ретраев", "Fallback Sonnet → Haiku до первого байта", "Circuit breaker на модель", "Chaos-тест с фейковым провайдером"],
       dod: "При «упавшем» провайдере API отдаёт ответ резервной моделью или источники без генерации; тест зелёный." },
-    { rows: ["d"], title: "Кэш и дашборд стоимости", mods: "7 · кэширование, стоимость", milestone: "Прод-готово",
+    { rows: ["d"], title: "Кэш и дашборд стоимости", mods: "9 · кэширование, стоимость", milestone: "Прод-готово",
       tasks: ["Точный кэш в Redis с версией промпта в ключе", "Семантический кэш, порог по golden set", "Дашборд: $ / ч, hit rate, TTFT p95, доля fallback"],
       dod: "Дашборд показывает стоимость в реальном времени; ноль неверных хитов на golden set." },
-    { rows: ["x"], title: "Упаковка и рассказ", mods: "10 · System design, 11 · Собеседование", milestone: "Портфолио",
-      tasks: ["README с таблицей метрик первым разделом", "Демо-видео 2 минуты", "Нагрузочный тест k6/vegeta", "Пост и рассказ через конструктор модуля 11"],
+    { rows: ["x"], title: "Упаковка и рассказ", mods: "12 · System design, 14 · Собеседование", milestone: "Портфолио",
+      tasks: ["README с таблицей метрик первым разделом", "Демо-видео 2 минуты", "Нагрузочный тест k6/vegeta", "Пост и рассказ через конструктор модуля 14"],
       dod: "Репозиторий публичный, запуск с нуля работает, рассказ на 3 минуты готов." },
   ];
   const svg = document.getElementById("svg-gantt"), info = document.getElementById("wk-info"), btns = document.getElementById("wk-btns");

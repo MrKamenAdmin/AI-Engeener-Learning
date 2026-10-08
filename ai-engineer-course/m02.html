@@ -572,7 +572,7 @@ async def run_tools(tools, impl, messages):
   <ul>
     <li><b>Это совпадение префикса байт</b> в порядке <code>tools → system → messages</code>. Любое изменение в позиции N инвалидирует всё после N.</li>
     <li><b>Breakpoints</b>: <code>cache_control: {type: "ephemeral"}</code> на блоке помечает «закэшируй префикс до этого места». До 4 breakpoint'ов на запрос. Есть и автоматический вариант — top-level <code>cache_control</code>, который ставит маркер на последний кэшируемый блок.</li>
-    <li><b>Экономика</b> (на момент написания): чтение ≈ 0.1× цены input; запись 1.25× (TTL 5 минут) или 2× (TTL 1 час). Запись с 5-минутным TTL окупается уже на первом попадании: 1.25 + 0.1 &lt; 2. TTL продлевается при каждом чтении.</li>
+    <li><b>Экономика</b> (на момент написания): чтение ≈ 0.1× цены input (у Opus 5.5 — 0.05×, у Fable 5.1 — 0.025×; по состоянию на октябрь 2026); запись 1.25× (TTL 5 минут) или 2× (TTL 1 час). Запись с 5-минутным TTL окупается уже на первом попадании: 1.25 + 0.1 &lt; 2. TTL продлевается при каждом чтении.</li>
     <li><b>Латентность</b>: попадание в кэш сокращает TTFT на длинных промптах в разы — prefill 100K токенов не бесплатен.</li>
     <li><b>Минимальный размер префикса</b> зависит от модели (512–4096 токенов). Короче — кэш молча не создаётся, без ошибки: <code>cache_creation_input_tokens: 0</code>.</li>
     <li><b>Проверка</b>: <code>usage.cache_read_input_tokens</code> и <code>usage.cache_creation_input_tokens</code>. Если чтения нулевые при одинаковых запросах — где-то тихий инвалидатор.</li>
@@ -663,7 +663,7 @@ for res in client.messages.batches.results(batch.id):
 </code></pre>
 
   <h2 id="models">Выбор модели и routing</h2>
-  <p>Выбор модели — это компромисс трёх осей: <b>качество</b> на <i>вашей</i> задаче (измеряется evals, модуль 6), <b>цена</b> и <b>латентность</b> (TTFT и токены/с). Цены Anthropic на момент написания (сентябрь 2026), $ за 1M токенов:</p>
+  <p>Выбор модели — это компромисс трёх осей: <b>качество</b> на <i>вашей</i> задаче (измеряется evals, модуль 8), <b>цена</b> и <b>латентность</b> (TTFT и токены/с). Цены Anthropic на момент написания (сентябрь 2026), $ за 1M токенов:</p>
   <table>
     <tr><th>Модель</th><th>ID</th><th class="num">Input</th><th class="num">Output</th><th>Контекст</th><th>Когда</th></tr>
     <tr><td>Claude Fable 5.1</td><td><code>claude-fable-5-1</code></td><td class="num">10</td><td class="num">50</td><td>1M</td><td>Самые сложные задачи: длинные агентные сессии, тяжёлый код, где ошибка дороже токенов</td></tr>
@@ -672,12 +672,13 @@ for res in client.messages.batches.results(batch.id):
     <tr><td>Claude Sonnet 5</td><td><code>claude-sonnet-5</code></td><td class="num">2</td><td class="num">10</td><td>1M</td><td>Рабочая лошадка: большинство продуктовых фич</td></tr>
     <tr><td>Claude Haiku 4.5</td><td><code>claude-haiku-4-5</code></td><td class="num">1</td><td class="num">5</td><td>200K</td><td>Классификация, роутинг, извлечение, высокие объёмы, низкая латентность</td></tr>
   </table>
+  <div class="callout warn"><span class="title">Обновление на октябрь 2026</span>После написания курса в линейке появились Claude Sonnet 5.5 (<code>claude-sonnet-5-5</code>, $2 / $10) и Claude Haiku 5.5 (<code>claude-haiku-5-5</code>, $0.10 / $0.50 для промптов до 100K токенов, дороже — для более длинных). Чтение кэша у Opus 5.5 и Sonnet 5.5 стоит 0.05× цены input, у Fable 5.1 — 0.025×. Для Haiku 4.5 объявлена ориентировочная дата вывода из эксплуатации — не раньше 15 октября 2026. Примеры и калькуляторы курса считают по таблице выше. Перед реальными решениями сверяйтесь с <a href="https://platform.claude.com/docs/en/about-claude/pricing" target="_blank" rel="noopener">прайсом</a> и <a href="https://platform.claude.com/docs/en/about-claude/model-deprecations" target="_blank" rel="noopener">графиком вывода моделей</a>. Смена модели — это релиз с прогоном evals (модуль 8), а не правка строки в конфиге.</div>
   <p>Output в 5 раз дороже input — поэтому экономия чаще всего в <b>длине ответа</b> (формат, лимиты, structured output без «воды»), а не в укорачивании промпта. Ещё один рычаг — <code>effort</code>: на тяжёлой модели <code>low</code> может быть дешевле и быстрее, чем средняя модель на <code>high</code>.</p>
   <h3>Каскады и routing</h3>
   <ul>
     <li><b>Routing</b>: дешёвый классификатор (Haiku или даже не-LLM модель) определяет тип/сложность запроса и отправляет на подходящую модель. Ошибка роутера — главный риск: сложный запрос на слабой модели. Измеряйте качество по сегментам.</li>
     <li><b>Каскад</b>: сначала дешёвая модель; если её ответ не прошёл проверку (валидация схемы, self-check, низкая уверенность, отказ) — эскалация на сильную. Хорошо работает, когда проверка дешевле генерации и есть объективный критерий.</li>
-    <li><b>Fallback по доступности</b>: при 529/5xx — другая модель или другой провайдер/регион (модуль 7). Промпты при этом могут вести себя по-разному — прогоняйте evals на fallback-модели тоже.</li>
+    <li><b>Fallback по доступности</b>: при 529/5xx — другая модель или другой провайдер/регион (модуль 9). Промпты при этом могут вести себя по-разному — прогоняйте evals на fallback-модели тоже.</li>
   </ul>
 
   <div class="viz" id="viz-calc">
@@ -715,6 +716,7 @@ msg := anthropic.NewUserMessage(
 )
 // Картинки — аналогично image-блоком (base64/URL); для повторного использования — Files API.
 </code></pre>
+  <p class="muted">Vision как задача (режимы отказа, VLM против OCR, evals) и голосовые агенты (STT → LLM → TTS против speech-to-speech, бюджет латентности, перебивание) — в факультативном <a href="m16.html#vision">модуле 16</a>; парсинг PDF и таблиц для индексации — в <a href="m11.html">модуле 11</a>.</p>
 
   <h2 id="openai">Сравнение с OpenAI API</h2>
   <p>Концепции одни и те же, отличаются формы. На собесе часто спрашивают «чем отличается», и хороший ответ — про модели данных и управление состоянием, а не про синтаксис. Детали API меняются — сверяйтесь с актуальной документацией.</p>
@@ -727,7 +729,7 @@ msg := anthropic.NewUserMessage(
     <tr><td>Результат инструмента</td><td>Блок <code>tool_result</code> в <b>user</b>-сообщении</td><td>Сообщение с ролью <code>tool</code> и <code>tool_call_id</code></td><td>Item <code>function_call_output</code></td></tr>
     <tr><td>Structured output</td><td><code>output_config.format</code>, <code>strict</code> у tools</td><td><code>response_format: json_schema</code> + <code>strict</code></td><td><code>text.format</code></td></tr>
     <tr><td>Стриминг</td><td>Именованные события (<code>event:</code>) по блокам</td><td>Анонимные <code>data:</code>-чанки, конец — <code>data: [DONE]</code></td><td>Типизированные семантические события</td></tr>
-    <tr><td>Prompt caching</td><td>Явные breakpoints, запись дороже, чтение ≈0.1×</td><td colspan="2">Автоматический по префиксу, скидка на кэшированный input, без платы за запись</td></tr>
+    <tr><td>Prompt caching</td><td>Явные breakpoints, запись дороже, чтение ≈0.1× (Opus 5.5 — 0.05×, Fable 5.1 — 0.025×)</td><td colspan="2">Автоматический по префиксу, скидка на кэшированный input, без платы за запись</td></tr>
     <tr><td>Batch</td><td colspan="3">Асинхронно, до 24 ч, −50% у обоих провайдеров (на момент написания)</td></tr>
   </table>
   <div class="callout tip"><span class="title">Что сказать на собесе</span>Главная концептуальная разница — где живёт состояние. Stateless API проще масштабировать и аудировать, всё под вашим контролем, но вы платите за историю и сами её обрезаете. Серверное состояние (Responses) экономит трафик и код, но это vendor lock-in и вопросы к хранению данных. Для абстракции над провайдерами (LLM-gateway) внутренний формат обычно ближе к блокам Anthropic/items Responses, потому что плоская строка не выражает tool calls и мультимодальность.</div>
@@ -1071,11 +1073,11 @@ except anthropic.APIStatusError as e:
 /* ---------- 3. Prompt caching ---------- */
 (function () {
   const MODELS = [
-    { id: 'claude-fable-5-1', name: 'Fable 5.1', in: 10, out: 50 },
-    { id: 'claude-opus-5-5', name: 'Opus 5.5', in: 4, out: 20 },
-    { id: 'claude-opus-5', name: 'Opus 5', in: 5, out: 25 },
-    { id: 'claude-sonnet-5', name: 'Sonnet 5', in: 2, out: 10 },
-    { id: 'claude-haiku-4-5', name: 'Haiku 4.5', in: 1, out: 5 },
+    { id: 'claude-fable-5-1', name: 'Fable 5.1', in: 10, out: 50, cr: 0.025 },
+    { id: 'claude-opus-5-5', name: 'Opus 5.5', in: 4, out: 20, cr: 0.05 },
+    { id: 'claude-opus-5', name: 'Opus 5', in: 5, out: 25, cr: 0.1 },
+    { id: 'claude-sonnet-5', name: 'Sonnet 5', in: 2, out: 10, cr: 0.1 },
+    { id: 'claude-haiku-4-5', name: 'Haiku 4.5', in: 1, out: 5, cr: 0.1 },
   ];
   const BLOCKS = [
     { name: 'tools', sub: '8 инструментов', tok: 3000 },
@@ -1123,7 +1125,7 @@ except anthropic.APIStatusError as e:
       S('text', { x: x + (bw - 4) / 2, y: 62, 'font-size': 12, 'font-weight': 700, 'text-anchor': 'middle' }, svg).textContent = b.name;
       S('text', { x: x + (bw - 4) / 2, y: 78, 'font-size': 10, 'text-anchor': 'middle', fill: 'var(--muted)' }, svg).textContent = b.sub;
       S('text', { x: x + (bw - 4) / 2, y: 93, 'font-size': 10, 'text-anchor': 'middle', fill: 'var(--muted)' }, svg).textContent = (b.tok / 1000) + 'K ток.';
-      const lab = { read: 'чтение 0.1×', write: 'запись ' + w + '×', plain: 'input 1×' }[st[i]];
+      const lab = { read: 'чтение ' + m.cr + '×', write: 'запись ' + w + '×', plain: 'input 1×' }[st[i]];
       S('text', { x: x + (bw - 4) / 2, y: 118, 'font-size': 11, 'text-anchor': 'middle', fill: strokes[st[i]] === 'var(--border)' ? 'var(--muted)' : strokes[st[i]] }, svg).textContent = changed === i ? '✎ ' + lab : lab;
       x += bw;
     });
@@ -1146,7 +1148,7 @@ except anthropic.APIStatusError as e:
     let read = 0, write = 0, plain = 0;
     BLOCKS.forEach((b, i) => { if (st[i] === 'read') read += b.tok; else if (st[i] === 'write') write += b.tok; else plain += b.tok; });
     const outCost = OUT_TOK * m.out / 1e6;
-    const withC = read * P * 0.1 + write * P * w + plain * P + outCost;
+    const withC = read * P * m.cr + write * P * w + plain * P + outCost;
     const noC = total * P + outCost;
     const diff = (1 - withC / noC) * 100;
     ro.textContent =
@@ -1171,11 +1173,11 @@ except anthropic.APIStatusError as e:
 /* ---------- 4. Калькулятор ---------- */
 (function () {
   const MODELS = [
-    { name: 'Fable 5.1', in: 10, out: 50 },
-    { name: 'Opus 5.5', in: 4, out: 20 },
-    { name: 'Opus 5', in: 5, out: 25 },
-    { name: 'Sonnet 5', in: 2, out: 10 },
-    { name: 'Haiku 4.5', in: 1, out: 5 },
+    { name: 'Fable 5.1', in: 10, out: 50, cr: 0.025 },
+    { name: 'Opus 5.5', in: 4, out: 20, cr: 0.05 },
+    { name: 'Opus 5', in: 5, out: 25, cr: 0.1 },
+    { name: 'Sonnet 5', in: 2, out: 10, cr: 0.1 },
+    { name: 'Haiku 4.5', in: 1, out: 5, cr: 0.1 },
   ];
   const HAIKU = 4;
   const RPD = [100, 300, 1000, 3000, 10000, 30000, 100000, 300000, 1000000];
@@ -1191,7 +1193,7 @@ except anthropic.APIStatusError as e:
   function perReq(m, cfg) {
     const P = m.in / 1e6;
     const cached = cfg.inTok * cfg.share, fresh = cfg.inTok - cached;
-    const inCost = fresh * P + cached * P * (cfg.hit * 0.1 + (1 - cfg.hit) * 1.25);
+    const inCost = fresh * P + cached * P * (cfg.hit * m.cr + (1 - cfg.hit) * 1.25);
     return { inCost, outCost: cfg.outTok * m.out / 1e6 };
   }
   function monthly(m, cfg) {
